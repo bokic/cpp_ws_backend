@@ -56,6 +56,11 @@ void request_ws_jsGrid_customers(std::map<std::string, std::string> header, __at
     int row_count = 0;
     int page_size = 0;
 
+    current_page = atoi(args["page"].data());
+
+    page_size = atoi(args["rows"].data());
+    if (page_size <= 0) throw string("page_size contains invalid value!");
+
     res = sqlite3_open_v2("chinook.db", &db, SQLITE_OPEN_READONLY, nullptr);
     if (res) throw string("Can't open database!");
 
@@ -63,11 +68,6 @@ void request_ws_jsGrid_customers(std::map<std::string, std::string> header, __at
     res = sqlite3_step(stmt);
     row_count = sqlite3_column_int(stmt, 0);
     res = sqlite3_finalize(stmt); stmt = nullptr;
-
-    current_page = atoi(args["page"].data());
-
-    page_size = atoi(args["rows"].data());
-    if (page_size <= 0) throw string("page_size contains invalid value!");
 
     string sql;
     if (args["sidx"].empty()) {
