@@ -14,7 +14,7 @@
 
 using namespace std;
 
-void request_ws_db_tables(std::map<std::string, std::string> header)
+void request_ws_db_tables(map<string, string> header, __attribute__((unused)) list<string> uri_params)
 {
     sqlite3_stmt *stmt = nullptr;
     sqlite3 *db = nullptr;
@@ -45,7 +45,7 @@ void request_ws_db_tables(std::map<std::string, std::string> header)
     json_object_put(json);
 }
 
-void request_ws_jsGrid_customers(std::map<std::string, std::string> header)
+void request_ws_jsGrid_customers(std::map<std::string, std::string> header, __attribute__((unused)) list<string> uri_params)
 {
     sqlite3_stmt *stmt = nullptr;
     sqlite3 *db = nullptr;

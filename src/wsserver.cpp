@@ -2,6 +2,8 @@
 #include "router.h"
 
 #include <sstream>
+#include <string>
+#include <list>
 #include <map>
 
 #include <fcgio.h>
@@ -31,6 +33,7 @@ map<string, string> backend::parse_args(const string &params)
 static void do_request(map<string, string> header)
 {
     const string &path = header["SCRIPT_NAME"];
+    std::cmatch cm;
 
     if (path.empty())
     {
@@ -38,17 +41,22 @@ static void do_request(map<string, string> header)
     }
 
     for(const auto &route: routeMap)
-    {
-        if (path == route.uri)
+    {        
+        if (std::regex_match(path.c_str(), cm, route.uri))
         {
-            void (*work)(map<string, string>) = route.function;
+            void (*work)(map<string, string>, list<string>) = route.function;
+            list<string> uri_params;
 
             if (work == nullptr)
             {
                 throw string("Route function is nullptr");
             }
 
-            work(header);
+            for (unsigned i=1; i < cm.size(); ++i) {
+                uri_params.push_back(cm[i]);
+            }
+
+            work(header, uri_params);
 
             return;
         }

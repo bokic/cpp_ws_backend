@@ -1,8 +1,12 @@
 #pragma once
 
+#include "wsregex.h"
+
 #include <iostream>
 #include <string>
+#include <list>
 #include <map>
+
 
 namespace backend {
 
@@ -30,11 +34,10 @@ private:
     int m_sock_fd = 0;
 };
 
-
 struct route {
-    char const *uri;
+    wsregex uri;
     int method;
-    void (* function)(std::map<std::string, std::string>);
+    void (* function)(std::map<std::string, std::string>, std::list<std::string>);
 };
 
 std::map<std::string, std::string> parse_args(const std::string &params);
