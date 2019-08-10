@@ -20,7 +20,7 @@ void request_ws_db_tables(map<string, string> header, __attribute__((unused)) li
     sqlite3 *db = nullptr;
     int res = 0;
 
-    res = sqlite3_open("chinook.db", &db);
+    res = sqlite3_open_v2("chinook.db", &db, SQLITE_OPEN_READONLY, nullptr);
     if (res) throw string("Can't open database!");
 
     res = sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type ='table' AND name NOT LIKE 'sqlite_%'", -1, &stmt, nullptr);
@@ -56,7 +56,7 @@ void request_ws_jsGrid_customers(std::map<std::string, std::string> header, __at
     int row_count = 0;
     int page_size = 0;
 
-    res = sqlite3_open("chinook.db", &db);
+    res = sqlite3_open_v2("chinook.db", &db, SQLITE_OPEN_READONLY, nullptr);
     if (res) throw string("Can't open database!");
 
     res = sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM customers", -1, &stmt, nullptr);
