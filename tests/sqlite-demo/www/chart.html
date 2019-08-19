@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Chart example</title>
+    <link href="https://www.jqueryscript.net/css/jquerysctipttop.css" rel="stylesheet" type="text/css" />
+    <script src="https://code.jquery.com/jquery-3.4.1.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/3.5.17/d3.min.js"></script>
+    <script src="donut-pie-chart.min.js"></script>
+</head>
+<body>
+    <div class="exp"></div>
+    <script>
+    function onPageLoad() {
+        var data = [
+            {"name" :"JavaScript","hvalue" : 20 },
+            {"name" :"HTML5","hvalue" : 2},
+            {"name" :"CSS3","hvalue" : 25},
+            // assign a color if you'd like to or one would be set for you.
+            {"name" :"Ruby","hvalue" : 5,"color":"#00ff00" }
+        ];
+
+        $(".exp").donutpie();
+
+        $(".exp").donutpie('update', data);
+    }
+
+    window.onload = onPageLoad;
+    </script>
+</body>
+</html>
