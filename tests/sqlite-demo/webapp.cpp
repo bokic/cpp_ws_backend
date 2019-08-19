@@ -1,5 +1,6 @@
-#include "worker.h"
 #include "wsserver.h"
+#include "wsworker.h"
+#include "wsroute.h"
 
 #include <iostream>
 #include <sstream>
@@ -14,7 +15,7 @@
 
 using namespace std;
 
-void request_ws_db_tables(map<string, string> header, __attribute__((unused)) list<string> uri_params)
+void request_ws_db_tables(backend::wsworker *worker, map<string, string> header, __attribute__((unused)) list<string> uri_params)
 {
     sqlite3_stmt *stmt = nullptr;
     sqlite3 *db = nullptr;
@@ -40,18 +41,18 @@ void request_ws_db_tables(map<string, string> header, __attribute__((unused)) li
 
     const char* json_str = json_object_get_string(json);
 
-    cout << header["SERVER_PROTOCOL"] << " 200 OK\r\nContent-type: application/json\r\nContent-Length: " << strlen(json_str) << "\r\n\r\n" << json_str;
+    FCGX_FPrintF(worker->m_request.get()->out, "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", header["SERVER_PROTOCOL"].c_str(), strlen(json_str), json_str);
 
     json_object_put(json);
 }
 
-void request_ws_jsGrid_customers(std::map<std::string, std::string> header, __attribute__((unused)) list<string> uri_params)
+void request_ws_jsGrid_customers(backend::wsworker *worker, std::map<std::string, std::string> header, __attribute__((unused)) list<string> uri_params)
 {
     sqlite3_stmt *stmt = nullptr;
     sqlite3 *db = nullptr;
     int res = 0;
 
-    auto args = backend::parse_args(header["QUERY_STRING"]);
+    auto args = worker->parse_args(header["QUERY_STRING"]);
     int current_page = 0;
     int row_count = 0;
     int page_size = 0;
@@ -116,7 +117,12 @@ void request_ws_jsGrid_customers(std::map<std::string, std::string> header, __at
 
     string content = args["callback"] + "(" + json_str + ")";
 
-    cout << header["SERVER_PROTOCOL"] << " 200 OK\r\nContent-type: text/x-json;charset=utf-8\r\nContent-Length: " << content.length() << "\r\n\r\n" << content;
+    FCGX_FPrintF(worker->m_request.get()->out, "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", header["SERVER_PROTOCOL"].c_str(), strlen(json_str), content.c_str());
 
     json_object_put(json);
 }
+
+static backend::route routeMap[] = {
+    {"/ws/db/tables",        backend::POST, request_ws_db_tables       },
+    {"/ws/jsGrid/customers", backend::POST, request_ws_jsGrid_customers},
+};
