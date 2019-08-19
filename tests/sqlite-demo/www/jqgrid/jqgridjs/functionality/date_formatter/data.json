@@ -1,0 +1,44 @@
+{
+   "rows":[
+      {
+		 "AccessGroupId" : "ac1", 
+         "Integer":"200000.33",
+         "Number":"60000000.36",
+         "Currency":"34.21",
+		 "ExpiryDate" : "2018-03-25 01:01:00.0 CST",
+         "Email":"john.smith@yahoo.com",
+         "Link":"http://www.yahoo.com",
+		 "CheckBox": true
+      },
+	  {
+		 "AccessGroupId" : "ac2", 
+         "Integer":"1600000.99",
+         "Number":"7522233100.21",
+         "Currency":"244.51",
+		 "ExpiryDate" : "2018-03-29 01:01:00.0 CST",
+         "Email":"joe.woe@google.com",
+         "Link":"http://www.google.com",
+		 "CheckBox": true
+      },
+	  {
+		 "AccessGroupId" : "ac3", 
+         "Integer":"430150",
+         "Number":"6644000160",
+         "Currency":"1700",
+		 "ExpiryDate" : "2019-03-25 01:01:00.0 CST",
+         "Email":"julia.bergman@bing.com",
+         "Link":"http://www.bing.com",
+		 "CheckBox": false
+      },
+	  {
+		 "AccessGroupId" : "ac4", 
+         "Integer":"125330",
+         "Number":"20003340.99",
+         "Currency":"4678321",
+		 "ExpiryDate" : "2018-03-12 01:01:00.0 CST",
+         "Email":"roy.corner@msn.com",
+         "Link":"http://www.msn.com",
+		 "CheckBox": true
+      }      
+   ]
+}
