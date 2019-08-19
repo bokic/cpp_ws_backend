@@ -117,7 +117,7 @@ void request_ws_jsGrid_customers(backend::wsworker *worker, std::map<std::string
 
     string content = args["callback"] + "(" + json_str + ")";
 
-    FCGX_FPrintF(worker->m_request.get()->out, "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", header["SERVER_PROTOCOL"].c_str(), strlen(json_str), content.c_str());
+    FCGX_FPrintF(worker->m_request.get()->out, "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", header["SERVER_PROTOCOL"].c_str(), content.length(), content.c_str());
 
     json_object_put(json);
 }
