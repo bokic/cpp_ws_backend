@@ -18,12 +18,12 @@ cd ..
 ./build.sh
 cd Ubuntu_19.04
 
-mkdir -p ${PROJECT_DIR}/opt/sqlite-demo
+mkdir -p ${PROJECT_DIR}/opt/${PROJECT_NAME}
 mkdir -p ${PROJECT_DIR}/DEBIAN
 
 cp DEBIAN/* ${PROJECT_DIR}/DEBIAN
-cp ../sqlite-demo ${PROJECT_DIR}/opt/sqlite-demo
-cp ../chinook.db ${PROJECT_DIR}/opt/sqlite-demo
+cp ../sqlite-demo ${PROJECT_DIR}/opt/${PROJECT_NAME}
+cp ../chinook.db ${PROJECT_DIR}/opt/${PROJECT_NAME}
 
 sed -i -e "s/{VERSION}/${VERSION}/g" ${PROJECT_DIR}/DEBIAN/control
 sed -i -e "s/{ARCH}/${ARCH}/g" ${PROJECT_DIR}/DEBIAN/control
