@@ -9,7 +9,9 @@ class wsserver
 {
 public:
     wsserver();
+    virtual ~wsserver();
     void init(const char *socket_name, int backlog, int workers);
+    void shutdown();
     int run();
 
 private:

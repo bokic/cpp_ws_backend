@@ -52,6 +52,8 @@ void backend::wsthreadpool::start()
         m_workers = MAX_WORKERS;
     }
 
+    m_started = true;
+
     for (unsigned int i = 0; i < m_workers; i++)
     {
         m_thread_pool.push_back(std::thread(&wsthreadpool::worker, this));
@@ -81,7 +83,7 @@ void backend::wsthreadpool::worker()
             m_data_condition.wait(lock);
 
             if ((m_finished)&&(m_work_queue.empty()))
-                return;
+                break;
 
             request = m_work_queue.front();
             m_work_queue.pop();
