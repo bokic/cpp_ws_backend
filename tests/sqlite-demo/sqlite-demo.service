@@ -1,0 +1,10 @@
+[Unit]
+Description=Sqlite demo web-service backend.
+
+[Service]
+Type=simple
+ExecStart=/opt/sqlite-demo/sqlite-demo
+ExecStop=kill -2 $MAINPID
+
+[Install]
+WantedBy=multi-user.target
