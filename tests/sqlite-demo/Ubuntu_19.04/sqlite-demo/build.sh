@@ -28,3 +28,4 @@ sed -i -e "s/{ARCH}/${ARCH}/g" ${PROJECT_DIR}/DEBIAN/control
 dpkg-deb --build ${PROJECT_DIR}
 
 rm -rf ${PROJECT_DIR}
+rm -f ../../sqlite-demo
