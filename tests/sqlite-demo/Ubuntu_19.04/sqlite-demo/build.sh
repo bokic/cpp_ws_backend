@@ -1,13 +1,8 @@
 #!/bin/bash -e
 
-ARCH="$(dpkg --print-architecture)"
 PROJECT_NAME=sqlite-demo
-VER_MAJOR=0
-VER_MINOR=1
-VER_BUILD=1
-
-VERSION=${VER_MAJOR}.${VER_MINOR}-${VER_BUILD}
-
+ARCH="$(dpkg --print-architecture)"
+VERSION=$(git describe --tags)
 PROJECT_DIR=${PROJECT_NAME}_${VERSION}
 
 rm -f ${PROJECT_NAME}_*.deb

@@ -1,12 +1,7 @@
 #!/bin/bash -e
 
 PROJECT_NAME=sqlite-demo-fe
-VER_MAJOR=0
-VER_MINOR=1
-VER_BUILD=1
-
-VERSION=${VER_MAJOR}.${VER_MINOR}-${VER_BUILD}
-
+VERSION=$(git describe --tags)
 PROJECT_DIR=${PROJECT_NAME}_${VERSION}
 
 rm -f ${PROJECT_NAME}_*.deb
