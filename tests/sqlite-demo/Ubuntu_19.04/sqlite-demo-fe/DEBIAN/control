@@ -1,0 +1,8 @@
+Package: sqlite-demo-fe
+Version: {VERSION}
+Section: base
+Priority: optional
+Architecture: all
+Maintainer: Boris Barbulovski <bbarbulovski@gmail.com>
+Description: sqlite-demo frontend.
+ Nothing else to say!!!
