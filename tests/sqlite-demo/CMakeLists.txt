@@ -21,6 +21,7 @@ target_link_libraries(sqlite-demo
                       sqlite3
                       json-c
                       pthread
+                      systemd
 )
 
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -s")

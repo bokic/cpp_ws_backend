@@ -12,8 +12,43 @@
 #include <json-c/json.h>
 #include <memory.h>
 
+#include <systemd/sd-journal.h>
 
 using namespace std;
+
+void request_ws_system_logs(backend::wsworker *worker, map<string, string> header, __attribute__((unused)) list<string> uri_params)
+{
+    sd_journal *journal = nullptr;
+    const char *msg = nullptr;
+    size_t len = 0;
+    int r = 0;
+
+    sd_journal_open(&journal, SD_JOURNAL_CURRENT_USER);
+
+    auto json = json_object_new_object();
+    auto json_data = json_object_new_array();
+    json_object_object_add(json, "data", json_data);
+
+    int c = 1;
+    while((r = sd_journal_next(journal)) > 0)
+    {
+        r = sd_journal_get_data(journal, "MESSAGE", reinterpret_cast<const void **>(&msg), &len);
+
+        json_object_array_add(json_data, json_object_new_string(reinterpret_cast<const char *>(msg + 8)));
+
+        if (c >= 100) break;
+        c++;
+    }
+
+    sd_journal_close(journal);
+    journal = nullptr;
+
+    const char* json_str = json_object_get_string(json);
+
+    FCGX_FPrintF(worker->m_request->out, "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", header["SERVER_PROTOCOL"].c_str(), strlen(json_str), json_str);
+
+    json_object_put(json);
+}
 
 void request_ws_db_tables(backend::wsworker *worker, map<string, string> header, __attribute__((unused)) list<string> uri_params)
 {
@@ -256,6 +291,7 @@ void request_ws_jsGrid_artist_song_type(backend::wsworker *worker, std::map<std:
 }
 
 static backend::route routeMap[] = {
+    {"/ws/system/logs",             backend::POST, request_ws_system_logs              },
     {"/ws/db/tables",               backend::POST, request_ws_db_tables                },
     {"/ws/jsGrid/customers",        backend::POST, request_ws_jsGrid_customers         },
     {"/ws/jsGrid/artists",          backend::POST, request_ws_jsGrid_artists           },
