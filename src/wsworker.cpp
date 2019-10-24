@@ -16,7 +16,7 @@ map<string, string> backend::wsworker::parse_request(std::shared_ptr<FCGX_Reques
 {
     map<string, string> ret;
 
-    for(char **envp = request.get()->envp; *envp; envp++)
+    for(char **envp = request->envp; *envp; envp++)
     {
         string item(*envp);
 
@@ -72,7 +72,7 @@ void backend::wsworker::process(std::shared_ptr<FCGX_Request> request)
             if (contentLen > 0)
             {
                 request_body.resize(static_cast<unsigned int>(contentLen));
-                FCGX_GetStr(&request_body.at(0), contentLen, request.get()->in);
+                FCGX_GetStr(&request_body.at(0), contentLen, request->in);
             }
         }
 

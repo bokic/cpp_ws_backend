@@ -41,7 +41,7 @@ void request_ws_db_tables(backend::wsworker *worker, map<string, string> header,
 
     const char* json_str = json_object_get_string(json);
 
-    FCGX_FPrintF(worker->m_request.get()->out, "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", header["SERVER_PROTOCOL"].c_str(), strlen(json_str), json_str);
+    FCGX_FPrintF(worker->m_request->out, "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", header["SERVER_PROTOCOL"].c_str(), strlen(json_str), json_str);
 
     json_object_put(json);
 }
@@ -116,7 +116,7 @@ void request_ws_jsGrid_customers(backend::wsworker *worker, std::map<std::string
 
     string content = args["callback"] + "(" + json_str + ")";
 
-    FCGX_FPrintF(worker->m_request.get()->out, "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", header["SERVER_PROTOCOL"].c_str(), content.length(), content.c_str());
+    FCGX_FPrintF(worker->m_request->out, "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", header["SERVER_PROTOCOL"].c_str(), content.length(), content.c_str());
 
     json_object_put(json);
 }
@@ -191,7 +191,7 @@ void request_ws_jsGrid_artists(backend::wsworker *worker, std::map<std::string, 
 
     string content = args["callback"] + "(" + json_str + ")";
 
-    FCGX_FPrintF(worker->m_request.get()->out, "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", header["SERVER_PROTOCOL"].c_str(), content.length(), content.c_str());
+    FCGX_FPrintF(worker->m_request->out, "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", header["SERVER_PROTOCOL"].c_str(), content.length(), content.c_str());
 
     json_object_put(json);
 }
@@ -250,7 +250,7 @@ void request_ws_jsGrid_artist_song_type(backend::wsworker *worker, std::map<std:
 
     string content = json;
 
-    FCGX_FPrintF(worker->m_request.get()->out, "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", header["SERVER_PROTOCOL"].c_str(), content.length(), content.c_str());
+    FCGX_FPrintF(worker->m_request->out, "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", header["SERVER_PROTOCOL"].c_str(), content.length(), content.c_str());
 
     json_object_put(json_rows);
 }
