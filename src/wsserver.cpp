@@ -40,6 +40,7 @@ int backend::wsserver::run()
 {
     int ret = 0;
 
+    //m_db_connection_pool.start();
     m_thread_pool.start();
 
     while(1)

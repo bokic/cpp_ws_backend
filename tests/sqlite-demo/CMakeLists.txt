@@ -14,6 +14,7 @@ add_executable(sqlite-demo
                ../../src/wsworker.cpp
                ../../src/wsregex.cpp 
                ../../src/wsthreadpool.cpp
+               ../../src/wsdbconnectionpool.cpp
 )
 
 target_link_libraries(sqlite-demo

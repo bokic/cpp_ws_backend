@@ -1,5 +1,6 @@
 #pragma once
 
+#include "wsdbconnectionpool.h"
 #include "wsthreadpool.h"
 
 
@@ -15,6 +16,7 @@ public:
     int run();
 
 private:
+    backend::wsdbconnectionpool m_db_connection_pool;
     backend::wsthreadpool m_thread_pool;
     int m_sock_fd = 0;
 };
