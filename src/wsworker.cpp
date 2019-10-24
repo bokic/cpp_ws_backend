@@ -111,10 +111,9 @@ void backend::wsworker::process(std::shared_ptr<FCGX_Request> request)
         throw string("Route not found!");
 
     } catch (string &error) {
-        FCGX_FPrintF(request.get()->out, "\r\nInternal error: ");
-        FCGX_FPrintF(request.get()->out, error.c_str());
+        FCGX_FPrintF(request->out, "Status: 500 Internal Server Error\r\n\r\nInternal error: %s", error.c_str());
     } catch (...) {
-        FCGX_FPrintF(request.get()->out, "\r\nUnknown internal error!!!");
+        FCGX_FPrintF(request->out, "Status: 500 Internal Server Error\r\n\r\nUnknown internal error!!!");
     }
 
     FCGX_Finish_r(request.get());
