@@ -1,0 +1,9 @@
+Package: sqlite-demo-config-nginx
+Version: {VERSION}
+Section: base
+Priority: optional
+Architecture: all
+Depends: nginx (>= 1.16.1), sqlite-demo (= {VERSION}), sqlite-demo-fe (= {VERSION})
+Maintainer: Boris Barbulovski <bbarbulovski@gmail.com>
+Description: Nginx configuration for sqlite-demo webapp
+ Nothing else to say!!!
