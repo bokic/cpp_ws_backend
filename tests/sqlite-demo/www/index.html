@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <!-- The jQuery library is a prerequisite for all jqSuite products -->
+    <script type="text/ecmascript" src="js/jquery.min.js"></script> 
+    <!-- We support more than 40 localizations -->
+    <script type="text/ecmascript" src="js/trirand/i18n/grid.locale-en.js"></script>
+    <!-- This is the Javascript file of jqGrid -->   
+    <script type="text/ecmascript" src="js/trirand/src/jquery.jqGrid.js"></script>
+    <!-- This is the localization file of the grid controlling messages, labels, etc.
+    <!-- A link to a jQuery UI ThemeRoller theme, more than 22 built-in and many more custom -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.4/css/bootstrap.min.css"> 
+    <!-- The link to the CSS that the grid needs -->
+    <link rel="stylesheet" type="text/css" media="screen" href="css/trirand/ui.jqgrid-bootstrap.css" />
+    <script>
+        $.jgrid.defaults.width = 1280;
+    </script>
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.4/js/bootstrap.min.js"></script>
+
+    <link href="https://www.jqueryscript.net/css/jquerysctipttop.css" rel="stylesheet" type="text/css" />
+    <!--<script src="https://code.jquery.com/jquery-3.4.1.min.js"></script>-->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/3.5.17/d3.min.js"></script>
+    <script src="donut-pie-chart.min.js"></script>
+
+
+    <meta charset="utf-8" />
+    <title>jqGrid Loading Data - Million Rows from a REST service</title>
+</head>
+<body>
+<div style="margin-left:20px">
+    <table id="jqGrid"></table>
+    <div id="jqGridPager"></div>
+    <div class="exp"></div>
+</div>
+    <script type="text/javascript"> 
+        $(document).ready(function () {
+            $("#jqGrid").jqGrid({
+                url: '/ws/jsGrid/artists',
+                mtype: "GET",
+                styleUI : 'Bootstrap',
+                datatype: "jsonp",
+                colModel: [
+                    { label: 'id', name: 'id', key: true, width: 35 },
+                    { label: 'Artist', name: 'Artist', width: 75 },
+                    { label: 'Albums', name: 'Albums', width: 55 },
+                    { label: 'Tracks', name: 'Tracks', width: 130 }
+                ],
+                viewrecords: true,
+                height: 259,
+                rowNum: 7,
+                pager: "#jqGridPager",
+                onSelectRow: function(id) {
+                    $.post('/ws/jsGrid/artist_song_type?id=' + id,
+                        function(data) {
+                            $(".exp").donutpie('update', data);
+                        });
+                }
+            });
+
+            $(".exp").donutpie();
+        });
+   </script>
+</body>
+</html>
