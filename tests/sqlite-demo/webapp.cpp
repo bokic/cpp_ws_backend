@@ -5,6 +5,7 @@
 #include <iostream>
 #include <sstream>
 #include <vector>
+#include <regex>
 #include <list>
 #include <map>
 #include <sqlite3.h>
@@ -109,7 +110,16 @@ void request_ws_jsGrid_customers(backend::wsworker *worker, std::map<std::string
     if (args["sidx"].empty()) {
         sql = "SELECT * FROM customers LIMIT ? OFFSET ?";
     } else {
-        sql = "SELECT * FROM customers ORDER BY " + args["sidx"] + " " + args["sord"] +  " LIMIT ? OFFSET ?"; // FIXME: Prevent SQL injection.
+        static regex rgx_order(R"(^[_a-z]+[\w]*$)", regex_constants::icase);
+        static regex rgx_order_dir(R"(^asc$|^desc$)", regex_constants::icase);
+
+        string order = args["sidx"];
+        string order_dir = args["sord"];
+
+        if (!regex_search(order, rgx_order)) throw string("Ivalid parameter!");
+        if (!regex_search(order_dir, rgx_order_dir)) throw string("Ivalid parameter!");
+
+        sql = "SELECT * FROM customers ORDER BY " + order + " " + order_dir +  " LIMIT ? OFFSET ?";
     }
 
     res = sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr);
@@ -184,7 +194,16 @@ void request_ws_jsGrid_artists(backend::wsworker *worker, std::map<std::string, 
     if (args["sidx"].empty()) {
         sql = "SELECT artists.ArtistId as 'id', artists.Name as 'Artist', count(DISTINCT albums.AlbumId) as 'Albums', count(DISTINCT tracks.TrackId) as 'Tracks' FROM artists LEFT JOIN albums ON(albums.ArtistId = artists.ArtistId) LEFT JOIN tracks ON(tracks.AlbumId = albums.AlbumId) GROUP BY artists.Name LIMIT ? OFFSET ?";
     } else {
-        sql = "SELECT artists.ArtistId as 'id', artists.Name as 'Artist', count(DISTINCT albums.AlbumId) as 'Albums', count(DISTINCT tracks.TrackId) as 'Tracks' FROM artists LEFT JOIN albums ON(albums.ArtistId = artists.ArtistId) LEFT JOIN tracks ON(tracks.AlbumId = albums.AlbumId) GROUP BY artists.Name ORDER BY " + args["sidx"] + " " + args["sord"] +  " LIMIT ? OFFSET ?"; // FIXME: Prevent SQL injection.
+        static regex rgx_order(R"(^[_a-z]+[\w]*$)", regex_constants::icase);
+        static regex rgx_order_dir(R"(^asc$|^desc$)", regex_constants::icase);
+
+        string order = args["sidx"];
+        string order_dir = args["sord"];
+
+        if (!regex_search(order, rgx_order)) throw string("Ivalid parameter!");
+        if (!regex_search(order_dir, rgx_order_dir)) throw string("Ivalid parameter!");
+
+        sql = "SELECT artists.ArtistId as 'id', artists.Name as 'Artist', count(DISTINCT albums.AlbumId) as 'Albums', count(DISTINCT tracks.TrackId) as 'Tracks' FROM artists LEFT JOIN albums ON(albums.ArtistId = artists.ArtistId) LEFT JOIN tracks ON(tracks.AlbumId = albums.AlbumId) GROUP BY artists.Name ORDER BY " + order + " " + order_dir + " LIMIT ? OFFSET ?";
     }
 
     res = sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr);
