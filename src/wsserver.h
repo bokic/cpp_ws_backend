@@ -15,6 +15,8 @@ public:
     int run();
 
 private:
+    void reuseport(const char *socket_name);
+
     backend::wsthreadpool m_thread_pool;
     int m_sock_fd = 0;
 };
