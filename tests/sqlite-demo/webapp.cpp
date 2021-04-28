@@ -149,7 +149,7 @@ void request_ws_jsGrid_customers(backend::wsworker *worker, std::map<std::string
     }
 
     json_object_object_add(json, "rows", json_rows);
-    json_object_object_add(json, "total", json_object_new_int(row_count % page_size? (row_count / page_size) + 1: row_count / page_size));
+    json_object_object_add(json, "total", json_object_new_int((row_count % page_size)? (row_count / page_size) + 1: row_count / page_size));
     json_object_object_add(json, "page", json_object_new_int(current_page));
     json_object_object_add(json, "records", json_object_new_int(row_count));
 
@@ -233,7 +233,7 @@ void request_ws_jsGrid_artists(backend::wsworker *worker, std::map<std::string, 
     }
 
     json_object_object_add(json, "rows", json_rows);
-    json_object_object_add(json, "total", json_object_new_int(row_count % page_size? (row_count / page_size) + 1: row_count / page_size));
+    json_object_object_add(json, "total", json_object_new_int((row_count % page_size)? (row_count / page_size) + 1: row_count / page_size));
     json_object_object_add(json, "page", json_object_new_int(current_page));
     json_object_object_add(json, "records", json_object_new_int(row_count));
 
