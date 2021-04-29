@@ -1,5 +1,0 @@
-#!/bin/sh
-set -e
-
-rm -f /etc/nginx/sites-enabled/000-sqlite-demo.com
-systemctl reload nginx
