@@ -1,0 +1,36 @@
+# Maintainer: Boris Barbulovski <bbarbulovski@gmail.com>
+pkgname=("sqlite-demo" "sqlite-demo-config-nginx" "sqlite-demo-fe")
+arch=('x86_64' 'i686')
+pkgver=0.1
+pkgrel=0
+url="https://github.com/bokic/cpp_ws_backend"
+license=('GPL')
+makedepends=('cmake' 'ninja' 'gcc' 'fcgi' 'json-c' 'sqlite')
+
+build() {
+  cd "${srcdir}/../.."
+  ./build.sh
+}
+
+package_sqlite-demo() {
+  depends=('fcgi' 'json-c' 'sqlite')
+  pkgdesc="High performance webservice backend written in C++"
+  install -Dm755 "${srcdir}/../../sqlite-demo" "$pkgdir/opt/sqlite-demo/sqlite-demo"
+  install -Dm666 "${srcdir}/../../chinook.db" "$pkgdir/opt/sqlite-demo/chinook.db"
+  install -Dm644 "${srcdir}/../../sqlite-demo.service" "$pkgdir/etc/systemd/system/sqlite-demo.service"
+}
+
+package_sqlite-demo-config-nginx() {
+  arch=('any')
+  depends=('nginx' 'sqlite-demo-fe')
+  pkgdesc="Nginx configuration for sqlite-demo webapp"
+  install -Dm644 "${srcdir}/../../nginx/000-sqlite-demo.com" "$pkgdir/etc/nginx/sites-available"
+}
+
+package_sqlite-demo-fe() {
+  arch=('any')
+  depends=('sqlite-demo')
+  pkgdesc="sqlite-demo webapp frontend."
+  mkdir -p "$pkgdir/opt/sqlite-demo-fe"
+  cp -r ${srcdir}/../../www/* $pkgdir/opt/sqlite-demo-fe
+}
