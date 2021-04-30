@@ -1,5 +1,3 @@
-#!/bin/sh
-set -e
+#!/bin/sh -e
 
-systemctl stop sqlite-demo.service
-systemctl disable sqlite-demo.service
+service sqlite-demo stop
