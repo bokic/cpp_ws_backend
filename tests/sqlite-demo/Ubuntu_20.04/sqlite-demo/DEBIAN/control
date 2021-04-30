@@ -1,0 +1,9 @@
+Package: sqlite-demo
+Version: {VERSION}
+Section: base
+Priority: optional
+Architecture: {ARCH}
+Depends: libjson-c4 (>= 0.13.1), libsqlite3-0 (>= 3.31.1), libfcgi0ldbl (>= 2.4.0)
+Maintainer: Boris Barbulovski <bbarbulovski@gmail.com>
+Description: High performance webservice backend written in C++
+ Nothing else to say!!!

@@ -1,0 +1,5 @@
+#!/bin/sh
+set -e
+
+systemctl enable sqlite-demo.service
+systemctl start sqlite-demo.service
