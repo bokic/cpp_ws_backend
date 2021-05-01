@@ -9,7 +9,7 @@ server {
 
 	server_name sqlite-demo.com;
 
-	root /opt/sqlite-demo-fe;
+	root /srv/sqlite-demo-fe;
 	index index.html;
 
 	location / {
