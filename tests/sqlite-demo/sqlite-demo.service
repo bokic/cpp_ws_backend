@@ -5,7 +5,7 @@ Description=Sqlite demo web-service backend.
 Type=simple
 WorkingDirectory=/opt/sqlite-demo
 ExecStart=/opt/sqlite-demo/sqlite-demo
-ExecStop=kill -2 $MAINPID
+ExecStop=kill -SIGUSR1 $MAINPID
 
 [Install]
 WantedBy=multi-user.target

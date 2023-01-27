@@ -38,7 +38,7 @@ stop_sqlitedemo() {
         #   1 if daemon was already stopped
         #   2 if daemon could not be stopped
         #   other if a failure occurred
-        start-stop-daemon --stop --quiet --name $NAME
+        start-stop-daemon --stop --signal SIGUSR1 --quiet --name $NAME
         RETVAL="$?"
         sleep 1
         return "$RETVAL"
