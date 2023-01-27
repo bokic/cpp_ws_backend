@@ -92,3 +92,8 @@ void backend::wsthreadpool::worker()
         worker.process(request);
     }
 }
+
+unsigned int backend::wsthreadpool::count() const
+{
+    return m_workers;
+}

@@ -21,6 +21,7 @@ public:
     void setWorkers(int workers);
     void start();
     void addWork(std::shared_ptr<FCGX_Request> request);
+    unsigned int count() const;
 
 private:
     void worker();
