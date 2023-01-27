@@ -12,17 +12,6 @@ static constexpr auto DEFAULT_BACKLOG = 100;
 
 static backend::wsserver *g_server = nullptr;
 
-void signal_handler(int sig)
-{
-    if (sig == SIGINT)
-    {
-        if (g_server)
-        {
-            g_server->shutdown();
-        }
-    }
-}
-
 int main(int argc, char *argv[])
 {
     backend::wsserver server;
@@ -30,8 +19,6 @@ int main(int argc, char *argv[])
     int backlog = DEFAULT_BACKLOG;
     int worker_num = 0;
     int opt = 0;
-
-    signal(SIGINT, signal_handler);
 
     while((opt = getopt(argc, argv, "hn:b:")) != -1)
     {
