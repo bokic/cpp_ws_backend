@@ -43,11 +43,7 @@ void backend::wsthreadpool::start()
     if (m_started)
         return;
 
-    if (m_workers == 0)
-    {
-        m_workers = std::thread::hardware_concurrency();
-    }
-    else if (m_workers > MAX_WORKERS)
+    if (m_workers > MAX_WORKERS)
     {
         m_workers = MAX_WORKERS;
     }

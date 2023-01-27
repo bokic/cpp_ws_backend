@@ -1,4 +1,5 @@
 #include "wsserver.h"
+#include "wsworker.h"
 
 #include <sstream>
 #include <string>
@@ -40,22 +41,44 @@ int backend::wsserver::run()
 {
     int ret = 0;
 
-    m_thread_pool.start();
-
-    while(1)
+    if (m_thread_pool.count() == 0)
     {
-        auto request = make_shared<FCGX_Request>();
-
-        if (FCGX_InitRequest(request.get(), m_sock_fd, 0))
+        while(1)
         {
-            ret = 1;
-            break;
+            auto request = make_shared<FCGX_Request>();
+            backend::wsworker worker;
+
+            if (FCGX_InitRequest(request.get(), m_sock_fd, 0))
+            {
+                ret = 1;
+                break;
+            }
+
+            if (FCGX_Accept_r(request.get()))
+                break;
+
+            worker.process(request);
         }
+    }
+    else
+    {
+        m_thread_pool.start();
 
-        if (FCGX_Accept_r(request.get()))
-            break;
+        while(1)
+        {
+            auto request = make_shared<FCGX_Request>();
 
-        m_thread_pool.addWork(request);
+            if (FCGX_InitRequest(request.get(), m_sock_fd, 0))
+            {
+                ret = 1;
+                break;
+            }
+
+            if (FCGX_Accept_r(request.get()))
+                break;
+
+            m_thread_pool.addWork(request);
+        }
     }
 
     return ret;
