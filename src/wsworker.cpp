@@ -7,7 +7,7 @@
 #include <map>
 #include <fcgio.h>
 
-#include "webapp.cpp"
+#include "webapp.h"
 
 
 using namespace std;
