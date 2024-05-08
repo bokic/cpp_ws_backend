@@ -1,11 +1,6 @@
 #include "wsserver.h"
 #include "wsworker.h"
 
-#include <sstream>
-#include <string>
-#include <list>
-#include <map>
-
 #include <fcgio.h>
 
 #include <unistd.h>

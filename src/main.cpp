@@ -1,8 +1,6 @@
 #include "wsserver.h"
 #include <string>
-#include <cstdio>
 #include <unistd.h>
-#include <signal.h>
 
 
 using namespace std;
