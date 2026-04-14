@@ -5,7 +5,7 @@ pkgver=0.1
 pkgrel=0
 url="https://github.com/bokic/cpp_ws_backend"
 license=('GPL')
-makedepends=('cmake' 'ninja' 'gcc' 'fcgi' 'json-c' 'sqlite')
+makedepends=('cmake' 'ninja' 'gcc' 'fcgi' 'json-c' 'sqlite' 'systemd-libs')
 
 build() {
   cd "${srcdir}/../.."
@@ -13,7 +13,7 @@ build() {
 }
 
 package_sqlite-demo() {
-  depends=('fcgi' 'json-c' 'sqlite')
+  depends=('fcgi' 'json-c' 'sqlite' 'systemd-libs')
   pkgdesc="High performance webservice backend written in C++"
   install -Dm755 "${srcdir}/../../sqlite-demo" "$pkgdir/opt/sqlite-demo/sqlite-demo"
   install -Dm666 "${srcdir}/../../chinook.db" "$pkgdir/opt/sqlite-demo/chinook.db"
