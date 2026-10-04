@@ -6,18 +6,17 @@
 #include <list>
 #include <map>
 #include <cctype>
+#include <stdexcept>
 #include <fcgio.h>
 
 #include "wsroute.h"
 
 
-using namespace std;
-
 static constexpr int MAX_CONTENT_LENGTH = 10 * 1024 * 1024; // 10 MB limit to prevent DoS via memory exhaustion
 
-static string url_decode(const string &src)
+static std::string url_decode(const std::string &src)
 {
-    string ret;
+    std::string ret;
     ret.reserve(src.size());
 
     for (size_t i = 0; i < src.size(); ++i)
@@ -46,7 +45,7 @@ static string url_decode(const string &src)
     return ret;
 }
 
-static int method_from_string(const string &method)
+static int method_from_string(const std::string &method)
 {
     if (method == "GET") return backend::GET;
     if (method == "POST") return backend::POST;
@@ -61,42 +60,42 @@ backend::wsworker::wsworker(std::shared_ptr<const router> router)
 {
 }
 
-map<string, string> backend::wsworker::parse_request(std::shared_ptr<FCGX_Request> request)
+std::map<std::string, std::string> backend::wsworker::parse_request(std::shared_ptr<FCGX_Request> request)
 {
-    map<string, string> ret;
+    std::map<std::string, std::string> ret;
 
     for(char **envp = request->envp; *envp; envp++)
     {
-        string item(*envp);
+        std::string item(*envp);
 
         auto i = item.find('=');
         if (i > 0)
         {
-            string key = item.substr(0, i);
-            string val = item.substr(i + 1);
+            std::string key = item.substr(0, i);
+            std::string val = item.substr(i + 1);
 
-            ret.insert(make_pair(key, val));
+            ret.insert(std::make_pair(key, val));
         }
     }
 
     return ret;
 }
 
-map<string, string> backend::wsworker::parse_args(const string &params)
+std::map<std::string, std::string> backend::wsworker::parse_args(const std::string &params)
 {
-    map<string, string> ret;
+    std::map<std::string, std::string> ret;
 
-    istringstream f(params);
-    string item;
-    while (getline(f, item, '&')) {
+    std::istringstream f(params);
+    std::string item;
+    while (std::getline(f, item, '&')) {
         if (item.empty())
             continue;
 
         auto pos = item.find('=');
-        string key;
-        string val;
+        std::string key;
+        std::string val;
 
-        if (pos != string::npos)
+        if (pos != std::string::npos)
         {
             key = url_decode(item.substr(0, pos));
             val = url_decode(item.substr(pos + 1));
@@ -122,7 +121,7 @@ void backend::wsworker::process(std::shared_ptr<FCGX_Request> request)
     m_body.clear();
 
     try {
-        map<string, string> header;
+        std::map<std::string, std::string> header;
 
         header = parse_request(request);
 
@@ -130,7 +129,7 @@ void backend::wsworker::process(std::shared_ptr<FCGX_Request> request)
         {
             int contentLen = 0;
             try {
-                contentLen = stoi(header["CONTENT_LENGTH"]);
+                contentLen = std::stoi(header["CONTENT_LENGTH"]);
             } catch (...) {
                 FCGX_FPrintF(request->out, "Status: 400 Bad Request\r\n\r\nInvalid Content-Length");
                 FCGX_Finish_r(request.get());
@@ -158,12 +157,12 @@ void backend::wsworker::process(std::shared_ptr<FCGX_Request> request)
             }
         }
 
-        const string &path = header["SCRIPT_NAME"];
+        const std::string &path = header["SCRIPT_NAME"];
         std::cmatch cm;
 
         if (path.empty())
         {
-            throw string("System error. SCRIPT_NAME not found!");
+            throw std::runtime_error("System error. SCRIPT_NAME not found!");
         }
 
         int request_method = 0;
@@ -188,11 +187,11 @@ void backend::wsworker::process(std::shared_ptr<FCGX_Request> request)
                     }
 
                     auto work = route.function;
-                    list<string> uri_params;
+                    std::list<std::string> uri_params;
 
                     if (work == nullptr)
                     {
-                        throw string("Route function is nullptr");
+                        throw std::runtime_error("Route function is nullptr");
                     }
 
                     for (unsigned i=1; i < cm.size(); ++i) {
@@ -221,8 +220,6 @@ void backend::wsworker::process(std::shared_ptr<FCGX_Request> request)
 
     } catch (const std::exception &error) {
         FCGX_FPrintF(request->out, "Status: 500 Internal Server Error\r\n\r\nInternal error: %s", error.what());
-    } catch (const string &error) {
-        FCGX_FPrintF(request->out, "Status: 500 Internal Server Error\r\n\r\nInternal error: %s", error.c_str());
     } catch (...) {
         FCGX_FPrintF(request->out, "Status: 500 Internal Server Error\r\n\r\nUnknown internal error!!!");
     }

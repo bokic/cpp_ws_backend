@@ -9,8 +9,6 @@
 
 const int MAX_WORKERS = 512;
 
-using namespace std;
-
 backend::wsthreadpool::~wsthreadpool()
 {
     if (m_started)
@@ -69,7 +67,7 @@ void backend::wsthreadpool::setRouter(std::shared_ptr<const router> router)
     m_router = std::move(router);
 }
 
-void backend::wsthreadpool::addWork(shared_ptr<FCGX_Request> request)
+void backend::wsthreadpool::addWork(std::shared_ptr<FCGX_Request> request)
 {
     {
         std::unique_lock<std::mutex> lock(m_lock);
@@ -85,7 +83,7 @@ void backend::wsthreadpool::worker()
 
     while (true)
     {
-        shared_ptr<FCGX_Request> request;
+        std::shared_ptr<FCGX_Request> request;
 
         {
             std::unique_lock<std::mutex> lock(m_lock);

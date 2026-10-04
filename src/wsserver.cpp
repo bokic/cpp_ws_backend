@@ -6,8 +6,6 @@
 #include <unistd.h>
 
 
-using namespace std;
-
 backend::wsserver::wsserver()
     : m_router(std::make_shared<router>())
 {
@@ -63,7 +61,7 @@ int backend::wsserver::run()
     {
         while(1)
         {
-            auto request = make_shared<FCGX_Request>();
+            auto request = std::make_shared<FCGX_Request>();
             backend::wsworker worker(m_router);
 
             if (FCGX_InitRequest(request.get(), m_sock_fd, 0))
@@ -84,7 +82,7 @@ int backend::wsserver::run()
 
         while(1)
         {
-            auto request = make_shared<FCGX_Request>();
+            auto request = std::make_shared<FCGX_Request>();
 
             if (FCGX_InitRequest(request.get(), m_sock_fd, 0))
             {

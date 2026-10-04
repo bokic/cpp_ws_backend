@@ -11,6 +11,7 @@
 #include <string>
 #include <cstring>
 #include <cstdlib>
+#include <stdexcept>
 #include <unistd.h>
 #include <sqlite3.h>
 #include <fcgio.h>
@@ -18,10 +19,8 @@
 
 #include <systemd/sd-journal.h>
 
-using namespace std;
 
-
-static void wsdatabase_sqlite_write_json(FCGX_Stream *out_stream, const char *server_protocol, const string &callback, const char *db_pathname, const char *sql, int current_page, int page_size)
+static void wsdatabase_sqlite_write_json(FCGX_Stream *out_stream, const char *server_protocol, const std::string &callback, const char *db_pathname, const char *sql, int current_page, int page_size)
 {
     sqlite3_stmt *stmt = nullptr;
     sqlite3 *db = nullptr;
@@ -31,7 +30,7 @@ static void wsdatabase_sqlite_write_json(FCGX_Stream *out_stream, const char *se
     struct json_object *json_rows = nullptr;
     const char* json_str = nullptr;
 
-    string content;
+    std::string content;
     int column_count = -1;
     int row_count = 0;
     int res = 0;
@@ -171,24 +170,24 @@ static void wsdatabase_sqlite_write_json(FCGX_Stream *out_stream, const char *se
 
 exit:
     if (err)
-        throw string(err);
+        throw std::runtime_error(err);
 }
 
-static const string &get_header(const map<string, string> &header, const string &key)
+static const std::string &get_header(const std::map<std::string, std::string> &header, const std::string &key)
 {
-    static const string empty_str;
+    static const std::string empty_str;
     auto it = header.find(key);
     return it != header.end() ? it->second : empty_str;
 }
 
-static void request_ws_system_logs(backend::wsworker *worker, const map<string, string> &header, __attribute__((unused)) const list<string> &uri_params)
+static void request_ws_system_logs(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const std::list<std::string> &uri_params)
 {
     sd_journal *journal = nullptr;
     const char *msg = nullptr;
     size_t len = 0;
 
     sd_journal_open(&journal, SD_JOURNAL_CURRENT_USER);
-    if (journal == nullptr) throw string("Can't open journal!");
+    if (journal == nullptr) throw std::runtime_error("Can't open journal!");
 
     auto json = json_object_new_object();
     auto json_data = json_object_new_array();
@@ -198,7 +197,7 @@ static void request_ws_system_logs(backend::wsworker *worker, const map<string, 
     while(sd_journal_next(journal) > 0)
     {
         int r = sd_journal_get_data(journal, "MESSAGE", reinterpret_cast<const void **>(&msg), &len);
-        if (r) throw string("sd_journal_get_data FAILED!");
+        if (r) throw std::runtime_error("sd_journal_get_data FAILED!");
 
         json_object_array_add(json_data, json_object_new_string(reinterpret_cast<const char *>(msg + 8)));
 
@@ -211,22 +210,22 @@ static void request_ws_system_logs(backend::wsworker *worker, const map<string, 
 
     const char* json_str = json_object_get_string(json);
 
-    FCGX_FPrintF(worker->out(), "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", get_header(header, "SERVER_PROTOCOL").c_str(), strlen(json_str), json_str);
+    FCGX_FPrintF(worker->out(), "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", get_header(header, "SERVER_PROTOCOL").c_str(), std::strlen(json_str), json_str);
 
     json_object_put(json);
 }
 
-static void request_ws_db_tables(backend::wsworker *worker, const map<string, string> &header, __attribute__((unused)) const list<string> &uri_params)
+static void request_ws_db_tables(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const std::list<std::string> &uri_params)
 {
     sqlite3_stmt *stmt = nullptr;
     sqlite3 *db = nullptr;
     int res = 0;
 
     res = sqlite3_open_v2("chinook.db", &db, SQLITE_OPEN_READONLY, nullptr);
-    if (res) throw string("Can't open database!");
+    if (res) throw std::runtime_error("Can't open database!");
 
     res = sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type ='table' AND name NOT LIKE 'sqlite_%'", -1, &stmt, nullptr);
-    if (res) throw string("Can't prepare SQL!");
+    if (res) throw std::runtime_error("Can't prepare SQL!");
 
     auto json = json_object_new_object();
     auto json_data = json_object_new_array();
@@ -238,19 +237,19 @@ static void request_ws_db_tables(backend::wsworker *worker, const map<string, st
     }
 
     res = sqlite3_finalize(stmt);
-    if (res) throw string("Can't finalize SQL!");
+    if (res) throw std::runtime_error("Can't finalize SQL!");
 
     res = sqlite3_close(db);
-    if (res) throw string("Can't close SQL!");
+    if (res) throw std::runtime_error("Can't close SQL!");
 
     const char* json_str = json_object_get_string(json);
 
-    FCGX_FPrintF(worker->out(), "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", get_header(header, "SERVER_PROTOCOL").c_str(), strlen(json_str), json_str);
+    FCGX_FPrintF(worker->out(), "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", get_header(header, "SERVER_PROTOCOL").c_str(), std::strlen(json_str), json_str);
 
     json_object_put(json);
 }
 
-static void request_ws_jsGrid_customers(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const list<string> &uri_params)
+static void request_ws_jsGrid_customers(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const std::list<std::string> &uri_params)
 {
     sqlite3_stmt *stmt = nullptr;
     sqlite3 *db = nullptr;
@@ -261,49 +260,49 @@ static void request_ws_jsGrid_customers(backend::wsworker *worker, const std::ma
     int row_count = 0;
     int page_size = 0;
 
-    current_page = atoi(args["page"].data());
+    current_page = std::atoi(args["page"].data());
 
-    page_size = atoi(args["rows"].data());
-    if (page_size <= 0) throw string("page_size contains invalid value!");
+    page_size = std::atoi(args["rows"].data());
+    if (page_size <= 0) throw std::invalid_argument("page_size contains invalid value!");
 
     res = sqlite3_open_v2("chinook.db", &db, SQLITE_OPEN_READONLY, nullptr);
-    if (res) throw string("Can't open database!");
+    if (res) throw std::runtime_error("Can't open database!");
 
     res = sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM customers", -1, &stmt, nullptr);
-    if (res) throw string("Can't prepare SQL!");
+    if (res) throw std::runtime_error("Can't prepare SQL!");
 
     res = sqlite3_step(stmt);
-    if (res) throw string("Can't step SQL!");
+    if (res) throw std::runtime_error("Can't step SQL!");
 
     row_count = sqlite3_column_int(stmt, 0);
     res = sqlite3_finalize(stmt);
-    if (res) throw string("Can't finalize statement!");
+    if (res) throw std::runtime_error("Can't finalize statement!");
     stmt = nullptr;
 
-    string sql;
+    std::string sql;
     if (args["sidx"].empty()) {
         sql = "SELECT * FROM customers LIMIT ? OFFSET ?";
     } else {
-        static regex rgx_order(R"(^[_a-z]+[\w]*$)", regex_constants::icase);
-        static regex rgx_order_dir(R"(^asc$|^desc$)", regex_constants::icase);
+        static std::regex rgx_order(R"(^[_a-z]+[\w]*$)", std::regex_constants::icase);
+        static std::regex rgx_order_dir(R"(^asc$|^desc$)", std::regex_constants::icase);
 
-        string order = args["sidx"];
-        string order_dir = args["sord"];
+        std::string order = args["sidx"];
+        std::string order_dir = args["sord"];
 
-        if (!regex_search(order, rgx_order)) throw string("Ivalid parameter!");
-        if (!regex_search(order_dir, rgx_order_dir)) throw string("Ivalid parameter!");
+        if (!std::regex_search(order, rgx_order)) throw std::invalid_argument("Invalid parameter!");
+        if (!std::regex_search(order_dir, rgx_order_dir)) throw std::invalid_argument("Invalid parameter!");
 
         sql = "SELECT * FROM customers ORDER BY " + order + " " + order_dir +  " LIMIT ? OFFSET ?";
     }
 
     res = sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr);
-    if (res) throw string("Can't prepare SQL!");
+    if (res) throw std::runtime_error("Can't prepare SQL!");
 
     res = sqlite3_bind_int(stmt, 1, page_size);
-    if (res) throw string("SQL parameter bind fail!");
+    if (res) throw std::runtime_error("SQL parameter bind fail!");
 
     res = sqlite3_bind_int(stmt, 2, (current_page - 1) * page_size);
-    if (res) throw string("SQL parameter bind fail!");
+    if (res) throw std::runtime_error("SQL parameter bind fail!");
 
     auto json = json_object_new_object();
     auto json_rows = json_object_new_array();
@@ -333,21 +332,21 @@ static void request_ws_jsGrid_customers(backend::wsworker *worker, const std::ma
     json_object_object_add(json, "records", json_object_new_int(row_count));
 
     res = sqlite3_finalize(stmt);
-    if (res) throw string("sqlite finalize fail!");
+    if (res) throw std::runtime_error("sqlite finalize fail!");
 
     res = sqlite3_close(db);
-    if (res) throw string("sqlite close fail!");
+    if (res) throw std::runtime_error("sqlite close fail!");
 
     const char* json_str = json_object_get_string(json);
 
-    string content = args["callback"] + "(" + json_str + ")";
+    std::string content = args["callback"] + "(" + json_str + ")";
 
     FCGX_FPrintF(worker->out(), "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", get_header(header, "SERVER_PROTOCOL").c_str(), content.length(), content.c_str());
 
     json_object_put(json);
 }
 
-static void request_ws_jsGrid_artists(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const list<string> &uri_params)
+static void request_ws_jsGrid_artists(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const std::list<std::string> &uri_params)
 {
     sqlite3_stmt *stmt = nullptr;
     sqlite3 *db = nullptr;
@@ -358,22 +357,22 @@ static void request_ws_jsGrid_artists(backend::wsworker *worker, const std::map<
     int row_count = 0;
     int page_size = 0;
 
-    current_page = atoi(args["page"].data());
-    page_size = atoi(args["rows"].data());
-    if (page_size <= 0) throw string("page_size contains invalid value!");
+    current_page = std::atoi(args["page"].data());
+    page_size = std::atoi(args["rows"].data());
+    if (page_size <= 0) throw std::invalid_argument("page_size contains invalid value!");
 
-    string sql;
+    std::string sql;
     if (args["sidx"].empty()) {
         sql = "SELECT artists.ArtistId as 'id', artists.Name as 'Artist', count(DISTINCT albums.AlbumId) as 'Albums', count(DISTINCT tracks.TrackId) as 'Tracks' FROM artists LEFT JOIN albums ON(albums.ArtistId = artists.ArtistId) LEFT JOIN tracks ON(tracks.AlbumId = albums.AlbumId) GROUP BY artists.Name LIMIT ? OFFSET ?";
     } else {
-        static regex rgx_order(R"(^[_a-z]+[\w]*$)", regex_constants::icase);
-        static regex rgx_order_dir(R"(^asc$|^desc$)", regex_constants::icase);
+        static std::regex rgx_order(R"(^[_a-z]+[\w]*$)", std::regex_constants::icase);
+        static std::regex rgx_order_dir(R"(^asc$|^desc$)", std::regex_constants::icase);
 
-        string order = args["sidx"];
-        string order_dir = args["sord"];
+        std::string order = args["sidx"];
+        std::string order_dir = args["sord"];
 
-        if (!regex_search(order, rgx_order)) throw string("Ivalid parameter!");
-        if (!regex_search(order_dir, rgx_order_dir)) throw string("Ivalid parameter!");
+        if (!std::regex_search(order, rgx_order)) throw std::invalid_argument("Invalid parameter!");
+        if (!std::regex_search(order_dir, rgx_order_dir)) throw std::invalid_argument("Invalid parameter!");
 
         sql = "SELECT artists.ArtistId as 'id', artists.Name as 'Artist', count(DISTINCT albums.AlbumId) as 'Albums', count(DISTINCT tracks.TrackId) as 'Tracks' FROM artists LEFT JOIN albums ON(albums.ArtistId = artists.ArtistId) LEFT JOIN tracks ON(tracks.AlbumId = albums.AlbumId) GROUP BY artists.Name ORDER BY " + order + " " + order_dir + " LIMIT ? OFFSET ?";
     }
@@ -381,7 +380,7 @@ static void request_ws_jsGrid_artists(backend::wsworker *worker, const std::map<
     wsdatabase_sqlite_write_json(worker->out(), get_header(header, "SERVER_PROTOCOL").c_str(), args["callback"], "chinook.db", sql.c_str(), current_page, page_size);
 }
 
-static void request_ws_jsGrid_artist_song_type(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const list<string> &uri_params)
+static void request_ws_jsGrid_artist_song_type(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const std::list<std::string> &uri_params)
 {
     sqlite3_stmt *stmt = nullptr;
     sqlite3 *db = nullptr;
@@ -390,18 +389,18 @@ static void request_ws_jsGrid_artist_song_type(backend::wsworker *worker, const 
     auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
     int id = 0;
 
-    id = atoi(args["id"].data());
-    if (id <= 0) throw string("Invalid id.");
+    id = std::atoi(args["id"].data());
+    if (id <= 0) throw std::invalid_argument("Invalid id.");
 
     res = sqlite3_open_v2("chinook.db", &db, SQLITE_OPEN_READONLY, nullptr);
-    if (res) throw string("Can't open database!");
+    if (res) throw std::runtime_error("Can't open database!");
 
-    string sql = "SELECT genres.Name as 'name', count(DISTINCT tracks.TrackId) as 'hvalue' FROM genres INNER JOIN tracks ON(tracks.GenreId = genres.GenreId) INNER JOIN albums ON(albums.AlbumId = tracks.AlbumId) WHERE albums.ArtistId = ? GROUP BY genres.Name ORDER BY `hvalue` DESC";
+    std::string sql = "SELECT genres.Name as 'name', count(DISTINCT tracks.TrackId) as 'hvalue' FROM genres INNER JOIN tracks ON(tracks.GenreId = genres.GenreId) INNER JOIN albums ON(albums.AlbumId = tracks.AlbumId) WHERE albums.ArtistId = ? GROUP BY genres.Name ORDER BY `hvalue` DESC";
     res = sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr);
-    if (res) throw string("sqlite prepare fail!");
+    if (res) throw std::runtime_error("sqlite prepare fail!");
 
     res = sqlite3_bind_int(stmt, 1, id);
-    if (res) throw string("SQL parameter bind fail!");
+    if (res) throw std::runtime_error("SQL parameter bind fail!");
 
     auto json_rows = json_object_new_array();
     int column_count = -1;
@@ -431,14 +430,14 @@ static void request_ws_jsGrid_artist_song_type(backend::wsworker *worker, const 
     }
 
     res = sqlite3_finalize(stmt);
-    if (res) throw string("sqlite finalize fail!");
+    if (res) throw std::runtime_error("sqlite finalize fail!");
 
     res = sqlite3_close(db);
-    if (res) throw string("sqlite close fail!");
+    if (res) throw std::runtime_error("sqlite close fail!");
 
     const char* json = json_object_get_string(json_rows);
 
-    string content = json;
+    std::string content = json;
 
     FCGX_FPrintF(worker->out(), "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", get_header(header, "SERVER_PROTOCOL").c_str(), content.length(), content.c_str());
 
@@ -461,7 +460,7 @@ int main(int argc, char *argv[])
         {"/ws/jsGrid/artist_song_type", backend::POST, request_ws_jsGrid_artist_song_type  },
     });
 
-    string socket_name = DEFAULT_SOCKET_NAME;
+    std::string socket_name = DEFAULT_SOCKET_NAME;
     int backlog = DEFAULT_BACKLOG;
     int worker_num = 0;
     int opt = 0;
@@ -474,16 +473,16 @@ int main(int argc, char *argv[])
             socket_name = optarg;
             break;
         case 'b':
-            backlog = atoi(optarg);
+            backlog = std::atoi(optarg);
             break;
         case 'w':
-            worker_num = atoi(optarg);
+            worker_num = std::atoi(optarg);
             break;
         case 'h':
-            cerr << "Usage: " << argv[0] << " [-n socket name] [-b backlog] [-w number of workers]" << endl;
+            std::cerr << "Usage: " << argv[0] << " [-n socket name] [-b backlog] [-w number of workers]" << std::endl;
             return 0;
         default:
-            cerr << "Usage: " << argv[0] << " [-n socket name] [-b backlog] [-w number of workers]" << endl;
+            std::cerr << "Usage: " << argv[0] << " [-n socket name] [-b backlog] [-w number of workers]" << std::endl;
             return 1;
         }
     }
