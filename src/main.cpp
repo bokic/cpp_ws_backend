@@ -1,4 +1,5 @@
 #include "wsserver.h"
+#include <iostream>
 #include <string>
 #include <unistd.h>
 
@@ -18,7 +19,7 @@ int main(int argc, char *argv[])
     int worker_num = 0;
     int opt = 0;
 
-    while((opt = getopt(argc, argv, "hn:b:")) != -1)
+    while((opt = getopt(argc, argv, "hn:b:w:")) != -1)
     {
         switch(opt)
         {
@@ -34,6 +35,9 @@ int main(int argc, char *argv[])
         case 'h':
             cerr << "Usage: " << argv[0] << " [-n socket name] [-b backlog] [-w number of workers]" << endl;
             return 0;
+        default:
+            cerr << "Usage: " << argv[0] << " [-n socket name] [-b backlog] [-w number of workers]" << endl;
+            return 1;
         }
     }
 
