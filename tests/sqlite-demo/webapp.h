@@ -170,7 +170,14 @@ exit:
         throw string(err);
 }
 
-void request_ws_system_logs(backend::wsworker *worker, map<string, string> header, __attribute__((unused)) list<string> uri_params)
+static const string &get_header(const map<string, string> &header, const string &key)
+{
+    static const string empty_str;
+    auto it = header.find(key);
+    return it != header.end() ? it->second : empty_str;
+}
+
+void request_ws_system_logs(backend::wsworker *worker, const map<string, string> &header, __attribute__((unused)) const list<string> &uri_params)
 {
     sd_journal *journal = nullptr;
     const char *msg = nullptr;
@@ -200,12 +207,12 @@ void request_ws_system_logs(backend::wsworker *worker, map<string, string> heade
 
     const char* json_str = json_object_get_string(json);
 
-    FCGX_FPrintF(worker->out(), "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", header["SERVER_PROTOCOL"].c_str(), strlen(json_str), json_str);
+    FCGX_FPrintF(worker->out(), "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", get_header(header, "SERVER_PROTOCOL").c_str(), strlen(json_str), json_str);
 
     json_object_put(json);
 }
 
-void request_ws_db_tables(backend::wsworker *worker, map<string, string> header, __attribute__((unused)) list<string> uri_params)
+void request_ws_db_tables(backend::wsworker *worker, const map<string, string> &header, __attribute__((unused)) const list<string> &uri_params)
 {
     sqlite3_stmt *stmt = nullptr;
     sqlite3 *db = nullptr;
@@ -234,18 +241,18 @@ void request_ws_db_tables(backend::wsworker *worker, map<string, string> header,
 
     const char* json_str = json_object_get_string(json);
 
-    FCGX_FPrintF(worker->out(), "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", header["SERVER_PROTOCOL"].c_str(), strlen(json_str), json_str);
+    FCGX_FPrintF(worker->out(), "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", get_header(header, "SERVER_PROTOCOL").c_str(), strlen(json_str), json_str);
 
     json_object_put(json);
 }
 
-void request_ws_jsGrid_customers(backend::wsworker *worker, std::map<std::string, std::string> header, __attribute__((unused)) list<string> uri_params)
+void request_ws_jsGrid_customers(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const list<string> &uri_params)
 {
     sqlite3_stmt *stmt = nullptr;
     sqlite3 *db = nullptr;
     int res = 0;
 
-    auto args = worker->parse_args(header["QUERY_STRING"]);
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
     int current_page = 0;
     int row_count = 0;
     int page_size = 0;
@@ -331,18 +338,18 @@ void request_ws_jsGrid_customers(backend::wsworker *worker, std::map<std::string
 
     string content = args["callback"] + "(" + json_str + ")";
 
-    FCGX_FPrintF(worker->out(), "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", header["SERVER_PROTOCOL"].c_str(), content.length(), content.c_str());
+    FCGX_FPrintF(worker->out(), "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", get_header(header, "SERVER_PROTOCOL").c_str(), content.length(), content.c_str());
 
     json_object_put(json);
 }
 
-void request_ws_jsGrid_artists(backend::wsworker *worker, std::map<std::string, std::string> header, __attribute__((unused)) list<string> uri_params)
+void request_ws_jsGrid_artists(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const list<string> &uri_params)
 {
     sqlite3_stmt *stmt = nullptr;
     sqlite3 *db = nullptr;
     int res = 0;
 
-    auto args = worker->parse_args(header["QUERY_STRING"]);
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
     int current_page = 0;
     int row_count = 0;
     int page_size = 0;
@@ -367,16 +374,16 @@ void request_ws_jsGrid_artists(backend::wsworker *worker, std::map<std::string, 
         sql = "SELECT artists.ArtistId as 'id', artists.Name as 'Artist', count(DISTINCT albums.AlbumId) as 'Albums', count(DISTINCT tracks.TrackId) as 'Tracks' FROM artists LEFT JOIN albums ON(albums.ArtistId = artists.ArtistId) LEFT JOIN tracks ON(tracks.AlbumId = albums.AlbumId) GROUP BY artists.Name ORDER BY " + order + " " + order_dir + " LIMIT ? OFFSET ?";
     }
 
-    wsdatabase_sqlite_write_json(worker->out(), header["SERVER_PROTOCOL"].c_str(), args["callback"], "chinook.db", sql.c_str(), current_page, page_size);
+    wsdatabase_sqlite_write_json(worker->out(), get_header(header, "SERVER_PROTOCOL").c_str(), args["callback"], "chinook.db", sql.c_str(), current_page, page_size);
 }
 
-void request_ws_jsGrid_artist_song_type(backend::wsworker *worker, std::map<std::string, std::string> header, __attribute__((unused)) list<string> uri_params)
+void request_ws_jsGrid_artist_song_type(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const list<string> &uri_params)
 {
     sqlite3_stmt *stmt = nullptr;
     sqlite3 *db = nullptr;
     int res = 0;
 
-    auto args = worker->parse_args(header["QUERY_STRING"]);
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
     int id = 0;
 
     id = atoi(args["id"].data());
@@ -429,7 +436,7 @@ void request_ws_jsGrid_artist_song_type(backend::wsworker *worker, std::map<std:
 
     string content = json;
 
-    FCGX_FPrintF(worker->out(), "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", header["SERVER_PROTOCOL"].c_str(), content.length(), content.c_str());
+    FCGX_FPrintF(worker->out(), "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", get_header(header, "SERVER_PROTOCOL").c_str(), content.length(), content.c_str());
 
     json_object_put(json_rows);
 }

@@ -19,7 +19,7 @@ enum methodType
 struct route {
     wsregex uri;
     int method;
-    void (* function)(wsworker *worker, std::map<std::string, std::string>, std::list<std::string>);
+    void (* function)(wsworker *worker, const std::map<std::string, std::string> &header, const std::list<std::string> &uri_params);
 };
 
 };

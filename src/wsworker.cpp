@@ -181,7 +181,7 @@ void backend::wsworker::process(std::shared_ptr<FCGX_Request> request)
                     continue;
                 }
 
-                void (*work)(wsworker *worker, map<string, string>, list<string>) = route.function;
+                auto work = route.function;
                 list<string> uri_params;
 
                 if (work == nullptr)
