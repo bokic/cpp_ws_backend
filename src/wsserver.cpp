@@ -25,9 +25,11 @@ void backend::wsserver::init(const char *socket_name, int backlog, int workers)
 
 void backend::wsserver::shutdown()
 {
-    if (m_sock_fd)
+    FCGX_ShutdownPending();
+    int fd = m_sock_fd.exchange(0);
+    if (fd > 0)
     {
-        close(m_sock_fd);
+        close(fd);
     }
 }
 

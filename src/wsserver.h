@@ -5,6 +5,7 @@
 #include <memory>
 #include <initializer_list>
 #include <cstddef>
+#include <atomic>
 
 
 namespace backend {
@@ -31,7 +32,7 @@ public:
 private:
     std::shared_ptr<router> m_router;
     backend::wsthreadpool m_thread_pool;
-    int m_sock_fd = 0;
+    std::atomic<int> m_sock_fd{0};
 };
 
 };

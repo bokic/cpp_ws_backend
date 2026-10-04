@@ -18,6 +18,8 @@
 #include <json-c/json.h>
 
 #include <systemd/sd-journal.h>
+#include <csignal>
+#include <atomic>
 
 
 static void wsdatabase_sqlite_write_json(FCGX_Stream *out_stream, const char *server_protocol, const std::string &callback, const char *db_pathname, const char *sql, int current_page, int page_size)
@@ -447,11 +449,31 @@ static void request_ws_jsGrid_artist_song_type(backend::wsworker *worker, const 
 static constexpr auto DEFAULT_SOCKET_NAME = ":9000";
 static constexpr auto DEFAULT_BACKLOG = 100;
 
-static backend::wsserver *g_server = nullptr;
+static std::atomic<backend::wsserver*> g_server{nullptr};
+
+static void signal_handler(int sig)
+{
+    (void)sig;
+    backend::wsserver *server = g_server.load();
+    if (server)
+    {
+        server->shutdown();
+    }
+}
 
 int main(int argc, char *argv[])
 {
     backend::wsserver server;
+    g_server.store(&server);
+
+    struct sigaction sa;
+    std::memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = signal_handler;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGINT, &sa, nullptr);
+    sigaction(SIGTERM, &sa, nullptr);
+    sigaction(SIGUSR1, &sa, nullptr);
+
     server.add_routes({
         {"/ws/system/logs",             backend::POST, request_ws_system_logs              },
         {"/ws/db/tables",               backend::POST, request_ws_db_tables                },
@@ -489,7 +511,7 @@ int main(int argc, char *argv[])
 
     server.init(socket_name.c_str(), backlog, worker_num);
 
-    g_server = &server;
-
-    return server.run();
+    int ret = server.run();
+    g_server.store(nullptr);
+    return ret;
 }
