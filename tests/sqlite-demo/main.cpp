@@ -31,7 +31,7 @@ static bool is_valid_callback(const std::string &callback)
     return std::regex_match(callback, valid_cb_regex);
 }
 
-static void wsdatabase_sqlite_write_json(FCGX_Stream *out_stream, const char *server_protocol, const std::string &callback, const char *db_pathname, const char *sql, int current_page, int page_size)
+static void wsdatabase_sqlite_write_json(FCGX_Stream *out_stream, const char *server_protocol, const std::string &callback, const char *db_pathname, const char *count_sql, const char *sql, int current_page, int page_size)
 {
     if (!callback.empty() && !is_valid_callback(callback)) {
         throw std::invalid_argument("Invalid callback parameter");
@@ -57,14 +57,14 @@ static void wsdatabase_sqlite_write_json(FCGX_Stream *out_stream, const char *se
             goto exit;
         }
 
-        res = sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr);
+        res = sqlite3_prepare_v2(db, count_sql, -1, &stmt, nullptr);
         if (res) {
             err = "Preparing row count SQL statement FAILED!";
             goto exit;
         }
 
         res = sqlite3_step(stmt);
-        if (res) {
+        if (res != SQLITE_ROW) {
             err = "Stepping into first record for getting row count FAILED!";
             goto exit;
         }
@@ -301,7 +301,7 @@ static void request_ws_jsGrid_customers(backend::wsworker *worker, const std::ma
     if (res) throw std::runtime_error("Can't prepare SQL!");
 
     res = sqlite3_step(stmt);
-    if (res) throw std::runtime_error("Can't step SQL!");
+    if (res != SQLITE_ROW) throw std::runtime_error("Can't step SQL!");
 
     row_count = sqlite3_column_int(stmt, 0);
     res = sqlite3_finalize(stmt);
@@ -382,17 +382,9 @@ static void request_ws_jsGrid_customers(backend::wsworker *worker, const std::ma
 
 static void request_ws_jsGrid_artists(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const std::list<std::string> &uri_params)
 {
-    sqlite3_stmt *stmt = nullptr;
-    sqlite3 *db = nullptr;
-    int res = 0;
-
     auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
-    int current_page = 0;
-    int row_count = 0;
-    int page_size = 0;
-
-    current_page = std::atoi(args["page"].data());
-    page_size = std::atoi(args["rows"].data());
+    int current_page = std::atoi(args["page"].data());
+    int page_size = std::atoi(args["rows"].data());
     if (page_size <= 0) throw std::invalid_argument("page_size contains invalid value!");
 
     std::string sql;
@@ -411,7 +403,8 @@ static void request_ws_jsGrid_artists(backend::wsworker *worker, const std::map<
         sql = "SELECT artists.ArtistId as 'id', artists.Name as 'Artist', count(DISTINCT albums.AlbumId) as 'Albums', count(DISTINCT tracks.TrackId) as 'Tracks' FROM artists LEFT JOIN albums ON(albums.ArtistId = artists.ArtistId) LEFT JOIN tracks ON(tracks.AlbumId = albums.AlbumId) GROUP BY artists.Name ORDER BY " + order + " " + order_dir + " LIMIT ? OFFSET ?";
     }
 
-    wsdatabase_sqlite_write_json(worker->out(), get_header(header, "SERVER_PROTOCOL").c_str(), args["callback"], "chinook.db", sql.c_str(), current_page, page_size);
+    const char *count_sql = "SELECT count(*) FROM artists";
+    wsdatabase_sqlite_write_json(worker->out(), get_header(header, "SERVER_PROTOCOL").c_str(), args["callback"], "chinook.db", count_sql, sql.c_str(), current_page, page_size);
 }
 
 static void request_ws_jsGrid_artist_song_type(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const std::list<std::string> &uri_params)
