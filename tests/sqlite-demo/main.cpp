@@ -22,8 +22,21 @@
 #include <atomic>
 
 
+static bool is_valid_callback(const std::string &callback)
+{
+    if (callback.empty() || callback.size() > 128) {
+        return false;
+    }
+    static const std::regex valid_cb_regex(R"(^[a-zA-Z_$][a-zA-Z0-9_$]*(\.[a-zA-Z_$][a-zA-Z0-9_$]*)*$)");
+    return std::regex_match(callback, valid_cb_regex);
+}
+
 static void wsdatabase_sqlite_write_json(FCGX_Stream *out_stream, const char *server_protocol, const std::string &callback, const char *db_pathname, const char *sql, int current_page, int page_size)
 {
+    if (!callback.empty() && !is_valid_callback(callback)) {
+        throw std::invalid_argument("Invalid callback parameter");
+    }
+
     sqlite3_stmt *stmt = nullptr;
     sqlite3 *db = nullptr;
     const char *err = nullptr;
@@ -161,9 +174,18 @@ static void wsdatabase_sqlite_write_json(FCGX_Stream *out_stream, const char *se
             goto exit;
         }
 
-        content = callback + "(" + json_str + ")";
+        std::string content;
+        if (!callback.empty()) {
+            if (!is_valid_callback(callback)) {
+                err = "Invalid callback parameter";
+                goto exit;
+            }
+            content = callback + "(" + json_str + ")";
+        } else {
+            content = json_str;
+        }
 
-        FCGX_FPrintF(out_stream, "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", server_protocol, content.length(), content.c_str());
+        FCGX_FPrintF(out_stream, "%s 200 OK\r\nContent-type: application/json\r\nX-Content-Type-Options: nosniff\r\nContent-Length: %d\r\n\r\n%s", server_protocol, content.length(), content.c_str());
 
         json_object_put(json);
     } catch (...) {
@@ -258,6 +280,11 @@ static void request_ws_jsGrid_customers(backend::wsworker *worker, const std::ma
     int res = 0;
 
     auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+    const auto &callback = args["callback"];
+    if (!callback.empty() && !is_valid_callback(callback)) {
+        throw std::invalid_argument("Invalid callback parameter");
+    }
+
     int current_page = 0;
     int row_count = 0;
     int page_size = 0;
@@ -341,9 +368,14 @@ static void request_ws_jsGrid_customers(backend::wsworker *worker, const std::ma
 
     const char* json_str = json_object_get_string(json);
 
-    std::string content = args["callback"] + "(" + json_str + ")";
+    std::string content;
+    if (!callback.empty()) {
+        content = callback + "(" + json_str + ")";
+    } else {
+        content = json_str;
+    }
 
-    FCGX_FPrintF(worker->out(), "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", get_header(header, "SERVER_PROTOCOL").c_str(), content.length(), content.c_str());
+    FCGX_FPrintF(worker->out(), "%s 200 OK\r\nContent-type: application/json\r\nX-Content-Type-Options: nosniff\r\nContent-Length: %d\r\n\r\n%s", get_header(header, "SERVER_PROTOCOL").c_str(), content.length(), content.c_str());
 
     json_object_put(json);
 }
