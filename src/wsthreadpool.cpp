@@ -64,6 +64,11 @@ void backend::wsthreadpool::start()
     }
 }
 
+void backend::wsthreadpool::setRouter(std::shared_ptr<const router> router)
+{
+    m_router = std::move(router);
+}
+
 void backend::wsthreadpool::addWork(shared_ptr<FCGX_Request> request)
 {
     {
@@ -76,7 +81,7 @@ void backend::wsthreadpool::addWork(shared_ptr<FCGX_Request> request)
 
 void backend::wsthreadpool::worker()
 {
-    backend::wsworker worker;
+    backend::wsworker worker(m_router);
 
     while (true)
     {

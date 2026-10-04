@@ -1,3 +1,4 @@
+#include "wsserver.h"
 #include "wsworker.h"
 #include "wsroute.h"
 
@@ -7,17 +8,20 @@
 #include <regex>
 #include <list>
 #include <map>
+#include <string>
+#include <cstring>
+#include <cstdlib>
+#include <unistd.h>
 #include <sqlite3.h>
 #include <fcgio.h>
 #include <json-c/json.h>
-#include <memory.h>
 
 #include <systemd/sd-journal.h>
 
 using namespace std;
 
 
-void wsdatabase_sqlite_write_json(FCGX_Stream *out_stream, const char *server_protocol, const string &callback, const char *db_pathname, const char *sql, int current_page, int page_size)
+static void wsdatabase_sqlite_write_json(FCGX_Stream *out_stream, const char *server_protocol, const string &callback, const char *db_pathname, const char *sql, int current_page, int page_size)
 {
     sqlite3_stmt *stmt = nullptr;
     sqlite3 *db = nullptr;
@@ -177,7 +181,7 @@ static const string &get_header(const map<string, string> &header, const string 
     return it != header.end() ? it->second : empty_str;
 }
 
-void request_ws_system_logs(backend::wsworker *worker, const map<string, string> &header, __attribute__((unused)) const list<string> &uri_params)
+static void request_ws_system_logs(backend::wsworker *worker, const map<string, string> &header, __attribute__((unused)) const list<string> &uri_params)
 {
     sd_journal *journal = nullptr;
     const char *msg = nullptr;
@@ -212,7 +216,7 @@ void request_ws_system_logs(backend::wsworker *worker, const map<string, string>
     json_object_put(json);
 }
 
-void request_ws_db_tables(backend::wsworker *worker, const map<string, string> &header, __attribute__((unused)) const list<string> &uri_params)
+static void request_ws_db_tables(backend::wsworker *worker, const map<string, string> &header, __attribute__((unused)) const list<string> &uri_params)
 {
     sqlite3_stmt *stmt = nullptr;
     sqlite3 *db = nullptr;
@@ -246,7 +250,7 @@ void request_ws_db_tables(backend::wsworker *worker, const map<string, string> &
     json_object_put(json);
 }
 
-void request_ws_jsGrid_customers(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const list<string> &uri_params)
+static void request_ws_jsGrid_customers(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const list<string> &uri_params)
 {
     sqlite3_stmt *stmt = nullptr;
     sqlite3 *db = nullptr;
@@ -343,7 +347,7 @@ void request_ws_jsGrid_customers(backend::wsworker *worker, const std::map<std::
     json_object_put(json);
 }
 
-void request_ws_jsGrid_artists(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const list<string> &uri_params)
+static void request_ws_jsGrid_artists(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const list<string> &uri_params)
 {
     sqlite3_stmt *stmt = nullptr;
     sqlite3 *db = nullptr;
@@ -377,7 +381,7 @@ void request_ws_jsGrid_artists(backend::wsworker *worker, const std::map<std::st
     wsdatabase_sqlite_write_json(worker->out(), get_header(header, "SERVER_PROTOCOL").c_str(), args["callback"], "chinook.db", sql.c_str(), current_page, page_size);
 }
 
-void request_ws_jsGrid_artist_song_type(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const list<string> &uri_params)
+static void request_ws_jsGrid_artist_song_type(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const list<string> &uri_params)
 {
     sqlite3_stmt *stmt = nullptr;
     sqlite3 *db = nullptr;
@@ -441,10 +445,52 @@ void request_ws_jsGrid_artist_song_type(backend::wsworker *worker, const std::ma
     json_object_put(json_rows);
 }
 
-static backend::route routeMap[] = {
-    {"/ws/system/logs",             backend::POST, request_ws_system_logs              },
-    {"/ws/db/tables",               backend::POST, request_ws_db_tables                },
-    {"/ws/jsGrid/customers",        backend::GET,  request_ws_jsGrid_customers         },
-    {"/ws/jsGrid/artists",          backend::GET,  request_ws_jsGrid_artists           },
-    {"/ws/jsGrid/artist_song_type", backend::POST, request_ws_jsGrid_artist_song_type  },
-};
+static constexpr auto DEFAULT_SOCKET_NAME = ":9000";
+static constexpr auto DEFAULT_BACKLOG = 100;
+
+static backend::wsserver *g_server = nullptr;
+
+int main(int argc, char *argv[])
+{
+    backend::wsserver server;
+    server.add_routes({
+        {"/ws/system/logs",             backend::POST, request_ws_system_logs              },
+        {"/ws/db/tables",               backend::POST, request_ws_db_tables                },
+        {"/ws/jsGrid/customers",        backend::GET,  request_ws_jsGrid_customers         },
+        {"/ws/jsGrid/artists",          backend::GET,  request_ws_jsGrid_artists           },
+        {"/ws/jsGrid/artist_song_type", backend::POST, request_ws_jsGrid_artist_song_type  },
+    });
+
+    string socket_name = DEFAULT_SOCKET_NAME;
+    int backlog = DEFAULT_BACKLOG;
+    int worker_num = 0;
+    int opt = 0;
+
+    while((opt = getopt(argc, argv, "hn:b:w:")) != -1)
+    {
+        switch(opt)
+        {
+        case 'n':
+            socket_name = optarg;
+            break;
+        case 'b':
+            backlog = atoi(optarg);
+            break;
+        case 'w':
+            worker_num = atoi(optarg);
+            break;
+        case 'h':
+            cerr << "Usage: " << argv[0] << " [-n socket name] [-b backlog] [-w number of workers]" << endl;
+            return 0;
+        default:
+            cerr << "Usage: " << argv[0] << " [-n socket name] [-b backlog] [-w number of workers]" << endl;
+            return 1;
+        }
+    }
+
+    server.init(socket_name.c_str(), backlog, worker_num);
+
+    g_server = &server;
+
+    return server.run();
+}

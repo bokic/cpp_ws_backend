@@ -9,7 +9,6 @@
 #include <fcgio.h>
 
 #include "wsroute.h"
-#include "webapp.h"
 
 
 using namespace std;
@@ -55,6 +54,11 @@ static int method_from_string(const string &method)
     if (method == "PATCH") return backend::PATCH;
     if (method == "DELETE") return backend::DELETE;
     return 0;
+}
+
+backend::wsworker::wsworker(std::shared_ptr<const router> router)
+    : m_router(std::move(router))
+{
 }
 
 map<string, string> backend::wsworker::parse_request(std::shared_ptr<FCGX_Request> request)
@@ -170,34 +174,37 @@ void backend::wsworker::process(std::shared_ptr<FCGX_Request> request)
 
         bool uri_matched = false;
 
-        for(const auto &route: routeMap)
+        if (m_router)
         {
-            if (std::regex_match(path.c_str(), cm, route.uri))
+            for(const auto &route: m_router->routes())
             {
-                uri_matched = true;
-
-                if ((route.method & request_method) == 0)
+                if (std::regex_match(path.c_str(), cm, route.uri))
                 {
-                    continue;
+                    uri_matched = true;
+
+                    if ((route.method & request_method) == 0)
+                    {
+                        continue;
+                    }
+
+                    auto work = route.function;
+                    list<string> uri_params;
+
+                    if (work == nullptr)
+                    {
+                        throw string("Route function is nullptr");
+                    }
+
+                    for (unsigned i=1; i < cm.size(); ++i) {
+                        uri_params.push_back(cm[i]);
+                    }
+
+                    work(this, header, uri_params);
+
+                    FCGX_Finish_r(request.get());
+
+                    return;
                 }
-
-                auto work = route.function;
-                list<string> uri_params;
-
-                if (work == nullptr)
-                {
-                    throw string("Route function is nullptr");
-                }
-
-                for (unsigned i=1; i < cm.size(); ++i) {
-                    uri_params.push_back(cm[i]);
-                }
-
-                work(this, header, uri_params);
-
-                FCGX_Finish_r(request.get());
-
-                return;
             }
         }
 

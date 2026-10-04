@@ -1,6 +1,10 @@
 #pragma once
 
 #include "wsthreadpool.h"
+#include "wsroute.h"
+#include <memory>
+#include <initializer_list>
+#include <cstddef>
 
 
 namespace backend {
@@ -14,7 +18,18 @@ public:
     void shutdown();
     int run();
 
+    void add_route(const route &r);
+    void add_routes(const route *routes, size_t count);
+    template <size_t N>
+    void add_routes(const route (&routes)[N]) {
+        add_routes(routes, N);
+    }
+    void add_routes(std::initializer_list<route> routes);
+
+    std::shared_ptr<const router> get_router() const;
+
 private:
+    std::shared_ptr<router> m_router;
     backend::wsthreadpool m_thread_pool;
     int m_sock_fd = 0;
 };

@@ -17,8 +17,7 @@ include_directories(
 )
 
 add_executable(sqlite-demo
-    webapp.h
-    ../../src/main.cpp
+    main.cpp
     ../../src/wsserver.cpp          ../../src/wsserver.h
     ../../src/wsworker.cpp          ../../src/wsworker.h
     ../../src/wsregex.cpp           ../../src/wsregex.h
