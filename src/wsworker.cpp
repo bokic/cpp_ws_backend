@@ -7,12 +7,23 @@
 #include <map>
 #include <fcgio.h>
 
+#include "wsroute.h"
 #include "webapp.h"
 
 
 using namespace std;
 
 static constexpr int MAX_CONTENT_LENGTH = 10 * 1024 * 1024; // 10 MB limit to prevent DoS via memory exhaustion
+
+static int method_from_string(const string &method)
+{
+    if (method == "GET") return backend::GET;
+    if (method == "POST") return backend::POST;
+    if (method == "PUT") return backend::PUT;
+    if (method == "PATCH") return backend::PATCH;
+    if (method == "DELETE") return backend::DELETE;
+    return 0;
+}
 
 map<string, string> backend::wsworker::parse_request(std::shared_ptr<FCGX_Request> request)
 {
@@ -104,10 +115,25 @@ void backend::wsworker::process(std::shared_ptr<FCGX_Request> request)
             throw string("System error. SCRIPT_NAME not found!");
         }
 
+        int request_method = 0;
+        if (header.count("REQUEST_METHOD") > 0)
+        {
+            request_method = method_from_string(header["REQUEST_METHOD"]);
+        }
+
+        bool uri_matched = false;
+
         for(const auto &route: routeMap)
         {
             if (std::regex_match(path.c_str(), cm, route.uri))
             {
+                uri_matched = true;
+
+                if ((route.method & request_method) == 0)
+                {
+                    continue;
+                }
+
                 void (*work)(wsworker *worker, map<string, string>, list<string>) = route.function;
                 list<string> uri_params;
 
@@ -126,6 +152,13 @@ void backend::wsworker::process(std::shared_ptr<FCGX_Request> request)
 
                 return;
             }
+        }
+
+        if (uri_matched)
+        {
+            FCGX_FPrintF(request->out, "Status: 405 Method Not Allowed\r\n\r\nMethod Not Allowed");
+            FCGX_Finish_r(request.get());
+            return;
         }
 
         throw string("Route not found!");

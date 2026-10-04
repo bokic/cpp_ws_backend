@@ -437,7 +437,7 @@ void request_ws_jsGrid_artist_song_type(backend::wsworker *worker, std::map<std:
 static backend::route routeMap[] = {
     {"/ws/system/logs",             backend::POST, request_ws_system_logs              },
     {"/ws/db/tables",               backend::POST, request_ws_db_tables                },
-    {"/ws/jsGrid/customers",        backend::POST, request_ws_jsGrid_customers         },
-    {"/ws/jsGrid/artists",          backend::POST, request_ws_jsGrid_artists           },
+    {"/ws/jsGrid/customers",        backend::GET,  request_ws_jsGrid_customers         },
+    {"/ws/jsGrid/artists",          backend::GET,  request_ws_jsGrid_artists           },
     {"/ws/jsGrid/artist_song_type", backend::POST, request_ws_jsGrid_artist_song_type  },
 };
