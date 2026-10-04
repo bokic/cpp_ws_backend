@@ -12,6 +12,8 @@
 
 using namespace std;
 
+static constexpr int MAX_CONTENT_LENGTH = 10 * 1024 * 1024; // 10 MB limit to prevent DoS via memory exhaustion
+
 map<string, string> backend::wsworker::parse_request(std::shared_ptr<FCGX_Request> request)
 {
     map<string, string> ret;
@@ -67,7 +69,25 @@ void backend::wsworker::process(std::shared_ptr<FCGX_Request> request)
             int contentLen = 0;
             try {
                 contentLen = stoi(header["CONTENT_LENGTH"]);
-            } catch (...) {}
+            } catch (...) {
+                FCGX_FPrintF(request->out, "Status: 400 Bad Request\r\n\r\nInvalid Content-Length");
+                FCGX_Finish_r(request.get());
+                return;
+            }
+
+            if (contentLen < 0)
+            {
+                FCGX_FPrintF(request->out, "Status: 400 Bad Request\r\n\r\nInvalid Content-Length");
+                FCGX_Finish_r(request.get());
+                return;
+            }
+
+            if (contentLen > MAX_CONTENT_LENGTH)
+            {
+                FCGX_FPrintF(request->out, "Status: 413 Payload Too Large\r\n\r\nPayload Too Large");
+                FCGX_Finish_r(request.get());
+                return;
+            }
 
             if (contentLen > 0)
             {
