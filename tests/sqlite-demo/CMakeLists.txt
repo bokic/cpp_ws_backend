@@ -1,33 +1,12 @@
-cmake_minimum_required(VERSION 3.16)
+add_executable(sqlite-demo main.cpp)
 
-project(sqlite-demo LANGUAGES CXX)
-
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
-set(CMAKE_CXX_VISIBILITY_PRESET hidden)
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -s")
-set(CMAKE_CXX_FLAGS_MINSIZEREL "${CMAKE_CXX_FLAGS_MINSIZEREL} -s")
-
-include_directories(
-    ../../src
-    .
+set_target_properties(sqlite-demo PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
 )
 
-add_executable(sqlite-demo
-    main.cpp
-    ../../src/wsserver.cpp          ../../src/wsserver.h
-    ../../src/wsworker.cpp          ../../src/wsworker.h
-    ../../src/wsregex.cpp           ../../src/wsregex.h
-    ../../src/wsthreadpool.cpp      ../../src/wsthreadpool.h
-)
-
-target_link_libraries(sqlite-demo
-    fcgi
+target_link_libraries(sqlite-demo PRIVATE
+    ws_backend
     sqlite3
     json-c
-    pthread
     systemd
 )

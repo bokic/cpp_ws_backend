@@ -4,3 +4,4 @@ build-*-Release
 build-*-Debug
 *.pro.user
 *.deb
+build/
