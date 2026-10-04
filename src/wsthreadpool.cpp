@@ -84,7 +84,9 @@ void backend::wsthreadpool::worker()
 
         {
             std::unique_lock<std::mutex> lock(m_lock);
-            m_data_condition.wait(lock);
+            m_data_condition.wait(lock, [this] {
+                return m_finished || !m_work_queue.empty();
+            });
 
             if ((m_finished)&&(m_work_queue.empty()))
                 break;
