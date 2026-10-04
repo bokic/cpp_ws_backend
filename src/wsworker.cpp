@@ -5,6 +5,7 @@
 #include <regex>
 #include <list>
 #include <map>
+#include <cctype>
 #include <fcgio.h>
 
 #include "wsroute.h"
@@ -14,6 +15,37 @@
 using namespace std;
 
 static constexpr int MAX_CONTENT_LENGTH = 10 * 1024 * 1024; // 10 MB limit to prevent DoS via memory exhaustion
+
+static string url_decode(const string &src)
+{
+    string ret;
+    ret.reserve(src.size());
+
+    for (size_t i = 0; i < src.size(); ++i)
+    {
+        if (src[i] == '+')
+        {
+            ret += ' ';
+        }
+        else if (src[i] == '%' && i + 2 < src.size() && isxdigit(src[i + 1]) && isxdigit(src[i + 2]))
+        {
+            auto hex_to_int = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                return 0;
+            };
+            char decoded = static_cast<char>((hex_to_int(src[i + 1]) << 4) | hex_to_int(src[i + 2]));
+            ret += decoded;
+            i += 2;
+        }
+        else
+        {
+            ret += src[i];
+        }
+    }
+    return ret;
+}
 
 static int method_from_string(const string &method)
 {
@@ -53,13 +85,28 @@ map<string, string> backend::wsworker::parse_args(const string &params)
     istringstream f(params);
     string item;
     while (getline(f, item, '&')) {
+        if (item.empty())
+            continue;
 
         auto pos = item.find('=');
+        string key;
+        string val;
 
-        const auto &key = item.substr(0, pos);
-        const auto &val = item.substr(pos + 1);
+        if (pos != string::npos)
+        {
+            key = url_decode(item.substr(0, pos));
+            val = url_decode(item.substr(pos + 1));
+        }
+        else
+        {
+            key = url_decode(item);
+            val = "";
+        }
 
-        ret.insert(make_pair<string, string>(key.data(), val.data()));
+        if (!key.empty())
+        {
+            ret[key] = val;
+        }
     }
 
     return ret;
