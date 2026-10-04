@@ -21,6 +21,14 @@ backend::wsthreadpool::~wsthreadpool()
         }
 
         m_data_condition.notify_all();
+
+        for (auto &t : m_thread_pool)
+        {
+            if (t.joinable())
+            {
+                t.join();
+            }
+        }
     }
 }
 
