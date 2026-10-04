@@ -17,7 +17,6 @@
 #include <fcgio.h>
 #include <json-c/json.h>
 
-#include <systemd/sd-journal.h>
 #include <csignal>
 #include <atomic>
 
@@ -202,41 +201,6 @@ static const std::string &get_header(const std::map<std::string, std::string> &h
     static const std::string empty_str;
     auto it = header.find(key);
     return it != header.end() ? it->second : empty_str;
-}
-
-static void request_ws_system_logs(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const std::list<std::string> &uri_params)
-{
-    sd_journal *journal = nullptr;
-    const char *msg = nullptr;
-    size_t len = 0;
-
-    sd_journal_open(&journal, SD_JOURNAL_CURRENT_USER);
-    if (journal == nullptr) throw std::runtime_error("Can't open journal!");
-
-    auto json = json_object_new_object();
-    auto json_data = json_object_new_array();
-    json_object_object_add(json, "data", json_data);
-
-    int c = 1;
-    while(sd_journal_next(journal) > 0)
-    {
-        int r = sd_journal_get_data(journal, "MESSAGE", reinterpret_cast<const void **>(&msg), &len);
-        if (r) throw std::runtime_error("sd_journal_get_data FAILED!");
-
-        json_object_array_add(json_data, json_object_new_string(reinterpret_cast<const char *>(msg + 8)));
-
-        if (c >= 100) break;
-        c++;
-    }
-
-    sd_journal_close(journal);
-    journal = nullptr;
-
-    const char* json_str = json_object_get_string(json);
-
-    FCGX_FPrintF(worker->out(), "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", get_header(header, "SERVER_PROTOCOL").c_str(), std::strlen(json_str), json_str);
-
-    json_object_put(json);
 }
 
 static void request_ws_db_tables(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const std::list<std::string> &uri_params)
@@ -500,7 +464,6 @@ int main(int argc, char *argv[])
     sigaction(SIGUSR1, &sa, nullptr);
 
     server.add_routes({
-        {"/ws/system/logs",             backend::POST, request_ws_system_logs              },
         {"/ws/db/tables",               backend::POST, request_ws_db_tables                },
         {"/ws/jsGrid/customers",        backend::GET,  request_ws_jsGrid_customers         },
         {"/ws/jsGrid/artists",          backend::GET,  request_ws_jsGrid_artists           },

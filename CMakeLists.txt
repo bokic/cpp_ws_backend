@@ -54,4 +54,5 @@ install(FILES
 
 if(BUILD_TESTS)
     add_subdirectory(tests/sqlite-demo)
+    add_subdirectory(tests/journal-demo)
 endif()

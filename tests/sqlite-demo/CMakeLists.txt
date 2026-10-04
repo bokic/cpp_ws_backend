@@ -8,5 +8,4 @@ target_link_libraries(sqlite-demo PRIVATE
     ws_backend
     sqlite3
     json-c
-    systemd
 )
