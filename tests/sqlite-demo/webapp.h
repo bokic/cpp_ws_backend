@@ -200,7 +200,7 @@ void request_ws_system_logs(backend::wsworker *worker, map<string, string> heade
 
     const char* json_str = json_object_get_string(json);
 
-    FCGX_FPrintF(worker->m_request->out, "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", header["SERVER_PROTOCOL"].c_str(), strlen(json_str), json_str);
+    FCGX_FPrintF(worker->out(), "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", header["SERVER_PROTOCOL"].c_str(), strlen(json_str), json_str);
 
     json_object_put(json);
 }
@@ -234,7 +234,7 @@ void request_ws_db_tables(backend::wsworker *worker, map<string, string> header,
 
     const char* json_str = json_object_get_string(json);
 
-    FCGX_FPrintF(worker->m_request->out, "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", header["SERVER_PROTOCOL"].c_str(), strlen(json_str), json_str);
+    FCGX_FPrintF(worker->out(), "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", header["SERVER_PROTOCOL"].c_str(), strlen(json_str), json_str);
 
     json_object_put(json);
 }
@@ -331,7 +331,7 @@ void request_ws_jsGrid_customers(backend::wsworker *worker, std::map<std::string
 
     string content = args["callback"] + "(" + json_str + ")";
 
-    FCGX_FPrintF(worker->m_request->out, "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", header["SERVER_PROTOCOL"].c_str(), content.length(), content.c_str());
+    FCGX_FPrintF(worker->out(), "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", header["SERVER_PROTOCOL"].c_str(), content.length(), content.c_str());
 
     json_object_put(json);
 }
@@ -367,7 +367,7 @@ void request_ws_jsGrid_artists(backend::wsworker *worker, std::map<std::string, 
         sql = "SELECT artists.ArtistId as 'id', artists.Name as 'Artist', count(DISTINCT albums.AlbumId) as 'Albums', count(DISTINCT tracks.TrackId) as 'Tracks' FROM artists LEFT JOIN albums ON(albums.ArtistId = artists.ArtistId) LEFT JOIN tracks ON(tracks.AlbumId = albums.AlbumId) GROUP BY artists.Name ORDER BY " + order + " " + order_dir + " LIMIT ? OFFSET ?";
     }
 
-    wsdatabase_sqlite_write_json(worker->m_request->out, header["SERVER_PROTOCOL"].c_str(), args["callback"], "chinook.db", sql.c_str(), current_page, page_size);
+    wsdatabase_sqlite_write_json(worker->out(), header["SERVER_PROTOCOL"].c_str(), args["callback"], "chinook.db", sql.c_str(), current_page, page_size);
 }
 
 void request_ws_jsGrid_artist_song_type(backend::wsworker *worker, std::map<std::string, std::string> header, __attribute__((unused)) list<string> uri_params)
@@ -429,7 +429,7 @@ void request_ws_jsGrid_artist_song_type(backend::wsworker *worker, std::map<std:
 
     string content = json;
 
-    FCGX_FPrintF(worker->m_request->out, "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", header["SERVER_PROTOCOL"].c_str(), content.length(), content.c_str());
+    FCGX_FPrintF(worker->out(), "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s", header["SERVER_PROTOCOL"].c_str(), content.length(), content.c_str());
 
     json_object_put(json_rows);
 }

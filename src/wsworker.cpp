@@ -68,10 +68,10 @@ map<string, string> backend::wsworker::parse_args(const string &params)
 void backend::wsworker::process(std::shared_ptr<FCGX_Request> request)
 {
     m_request = request;
+    m_body.clear();
 
     try {
         map<string, string> header;
-        string request_body;
 
         header = parse_request(request);
 
@@ -102,8 +102,8 @@ void backend::wsworker::process(std::shared_ptr<FCGX_Request> request)
 
             if (contentLen > 0)
             {
-                request_body.resize(static_cast<unsigned int>(contentLen));
-                FCGX_GetStr(&request_body.at(0), contentLen, request->in);
+                m_body.resize(static_cast<unsigned int>(contentLen));
+                FCGX_GetStr(&m_body.at(0), contentLen, request->in);
             }
         }
 
