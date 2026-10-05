@@ -1,11 +1,14 @@
 #pragma once
 
 #include "wsworker.h"
-#include "wsregex.h"
+#include <regex>
+#include <string_view>
+#include <functional>
 #include <list>
 #include <vector>
 #include <initializer_list>
 #include <cstddef>
+#include <utility>
 
 
 namespace backend {
@@ -19,18 +22,27 @@ enum methodType
     DELETE = 1 << 4,
 };
 
+using route_handler = std::function<void(wsworker *worker, const std::map<std::string, std::string> &header, const std::list<std::string> &uri_params)>;
+
 struct route {
-    wsregex uri;
+    std::regex uri;
     int method;
-    void (* function)(wsworker *worker, const std::map<std::string, std::string> &header, const std::list<std::string> &uri_params);
+    route_handler function;
+
+    route(std::string_view pattern, int method, route_handler handler,
+          std::regex_constants::syntax_option_type flags = std::regex_constants::ECMAScript)
+        : uri(pattern.data(), pattern.size(), flags), method(method), function(std::move(handler)) {}
+
+    route(std::regex uri, int method, route_handler handler)
+        : uri(std::move(uri)), method(method), function(std::move(handler)) {}
 };
 
 class router {
 public:
     router() = default;
 
-    void add_route(const route &r) {
-        m_routes.push_back(r);
+    void add_route(route r) {
+        m_routes.push_back(std::move(r));
     }
 
     void add_routes(const route *routes, size_t count) {

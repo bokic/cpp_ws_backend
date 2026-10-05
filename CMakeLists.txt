@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 
 project(cpp_ws_backend VERSION 0.1.0 LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
@@ -15,8 +15,6 @@ option(BUILD_TESTS "Build demo applications and tests" ON)
 find_package(Threads REQUIRED)
 
 add_library(ws_backend STATIC
-    src/wsregex.cpp
-    src/wsregex.h
     src/wsroute.h
     src/wsserver.cpp
     src/wsserver.h
@@ -44,7 +42,6 @@ install(TARGETS ws_backend
 )
 
 install(FILES
-    src/wsregex.h
     src/wsroute.h
     src/wsserver.h
     src/wsthreadpool.h
