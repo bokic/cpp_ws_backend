@@ -14,6 +14,11 @@ class wsworker
 {
 public:
     wsworker(std::shared_ptr<const router> router = nullptr);
+    ~wsworker() = default;
+    wsworker(const wsworker &) = default;
+    wsworker &operator=(const wsworker &) = default;
+    wsworker(wsworker &&) noexcept = default;
+    wsworker &operator=(wsworker &&) noexcept = default;
 
     std::map<std::string, std::string> parse_request(std::shared_ptr<FCGX_Request> request);
     std::map<std::string, std::string> parse_args(const std::string &params);

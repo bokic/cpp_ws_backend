@@ -35,11 +35,22 @@ struct route {
 
     route(std::regex uri, int method, route_handler handler)
         : uri(std::move(uri)), method(method), function(std::move(handler)) {}
+
+    ~route() = default;
+    route(const route &) = default;
+    route &operator=(const route &) = default;
+    route(route &&) noexcept = default;
+    route &operator=(route &&) noexcept = default;
 };
 
 class router {
 public:
     router() = default;
+    ~router() = default;
+    router(const router &) = default;
+    router &operator=(const router &) = default;
+    router(router &&) noexcept = default;
+    router &operator=(router &&) noexcept = default;
 
     void add_route(route r) {
         m_routes.push_back(std::move(r));

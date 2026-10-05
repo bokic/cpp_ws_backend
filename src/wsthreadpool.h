@@ -18,7 +18,12 @@ class router;
 class wsthreadpool
 {
 public:
+    wsthreadpool() = default;
     ~wsthreadpool();
+    wsthreadpool(const wsthreadpool &) = delete;
+    wsthreadpool &operator=(const wsthreadpool &) = delete;
+    wsthreadpool(wsthreadpool &&) = delete;
+    wsthreadpool &operator=(wsthreadpool &&) = delete;
     void setWorkers(int workers);
     void setRouter(std::shared_ptr<const router> router);
     void start();

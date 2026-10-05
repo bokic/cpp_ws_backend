@@ -15,6 +15,10 @@ class wsserver
 public:
     wsserver();
     virtual ~wsserver();
+    wsserver(const wsserver &) = delete;
+    wsserver &operator=(const wsserver &) = delete;
+    wsserver(wsserver &&) = delete;
+    wsserver &operator=(wsserver &&) = delete;
     void init(const char *socket_name, int backlog, int workers);
     void shutdown();
     int run();
