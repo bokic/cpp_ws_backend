@@ -10,7 +10,7 @@ set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -s")
 set(CMAKE_CXX_FLAGS_MINSIZEREL "${CMAKE_CXX_FLAGS_MINSIZEREL} -s")
 
-option(BUILD_TESTS "Build demo applications and tests" ON)
+option(BUILD_DEMOS "Build demo applications" ON)
 
 find_package(Threads REQUIRED)
 
@@ -49,7 +49,7 @@ install(FILES
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/backend
 )
 
-if(BUILD_TESTS)
-    add_subdirectory(tests/sqlite-demo)
-    add_subdirectory(tests/journal-demo)
+if(BUILD_DEMOS)
+    add_subdirectory(demos/sqlite-demo)
+    add_subdirectory(demos/journal-demo)
 endif()

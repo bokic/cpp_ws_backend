@@ -14,7 +14,7 @@ git clone https://github.com/bokic/cpp_ws_backend.git
 ```
 Build the project
 ```sh
-cd cpp_ws_backend/tests/sqlite-demo/Ubuntu_20.04
+cd cpp_ws_backend/demos/sqlite-demo/Ubuntu_20.04
 ./build-all.sh
 ```
 ### Installation

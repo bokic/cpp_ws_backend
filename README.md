@@ -14,14 +14,8 @@ cpp_ws_backend uses a number of open source projects:
 * [sqlite] - Local database library
 * [json-c] - JSON library.
 
-And of course cpp_ws_backend itself is open source with a [public repository][cpp_ws_backend] on GitHub.
-### Demo
-Demo application available at [tests/sqlite-demo][cpp_ws_backend_demo] subfolder.
-
-### Todos
-  - Database connection pooling
-  - Database abstraction layer
-  - One line SQL to JSON
+### Demos
+Demo applications are available in [DEMOS.md](DEMOS.md).
 
 License
 ----
