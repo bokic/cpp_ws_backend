@@ -1,0 +1,37 @@
+<div class="app-layout">
+  @if (api.currentUser(); as user) {
+    <header class="top-navbar">
+      <div class="nav-left">
+        <a routerLink="/board" class="brand-link">
+          <span class="brand-icon">JL</span>
+          <span class="brand-text">{{ api.setupStatus()?.instance_name || 'JiraLike' }}</span>
+        </a>
+
+        <nav class="nav-links">
+          <a routerLink="/board" routerLinkActive="active">Kanban Board</a>
+          <a routerLink="/gantt" routerLinkActive="active">Gantt &amp; States</a>
+          <a routerLink="/workflows" routerLinkActive="active">Backlog &amp; Workflows</a>
+          <a routerLink="/create" routerLinkActive="active" class="nav-create-btn">+ Create Item</a>
+        </nav>
+      </div>
+
+      <div class="nav-right">
+        <span class="schema-badge" title="SQLite Schema Version">
+          DB Schema v{{ api.setupStatus()?.schema_version || 3 }}
+        </span>
+        <div class="user-pill">
+          <span class="avatar-sm" [style.background]="user.avatar_color">
+            {{ user.display_name.slice(0, 2).toUpperCase() }}
+          </span>
+          <span class="user-name">{{ user.display_name }}</span>
+          <span class="user-role">({{ user.role }})</span>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm" (click)="signOut()">Logout</button>
+      </div>
+    </header>
+  }
+
+  <main class="main-viewport">
+    <router-outlet />
+  </main>
+</div>

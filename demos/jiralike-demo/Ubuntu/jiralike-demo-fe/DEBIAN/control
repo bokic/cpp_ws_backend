@@ -1,0 +1,8 @@
+Package: jiralike-demo-fe
+Version: 0.1
+Section: web
+Priority: optional
+Architecture: all
+Depends: jiralike-demo
+Maintainer: Boris Barbulovski <bbarbulovski@gmail.com>
+Description: Jira-like Angular SPA frontend bundle

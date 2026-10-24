@@ -1,0 +1,16 @@
+services:
+  jiralike-demo:
+    build:
+      context: ../../..
+      dockerfile: demos/jiralike-demo/docker/Dockerfile
+    container_name: jiralike-demo
+    ports:
+      - "8082:80"
+    volumes:
+      - jiralike_db:/var/lib/jiralike-demo/db
+      - jiralike_blobs:/var/lib/jiralike-demo/blobs
+    restart: unless-stopped
+
+volumes:
+  jiralike_db:
+  jiralike_blobs:

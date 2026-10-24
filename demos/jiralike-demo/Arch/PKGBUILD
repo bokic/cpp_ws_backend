@@ -1,0 +1,41 @@
+# Maintainer: Boris Barbulovski <bbarbulovski@gmail.com>
+pkgname=("jiralike-demo" "jiralike-demo-config-nginx" "jiralike-demo-fe")
+arch=('x86_64' 'i686')
+pkgver=0.1
+pkgrel=1
+url="https://github.com/bokic/cpp_ws_backend"
+license=('LGPL3')
+makedepends=('cmake' 'ninja' 'gcc' 'fcgi' 'json-c' 'sqlite' 'nodejs' 'npm')
+
+build() {
+  cd "${srcdir}/../../.."
+  ./build.sh
+  cd "${srcdir}/../../web"
+  npm install
+  npm run build
+}
+
+package_jiralike-demo() {
+  depends=('fcgi' 'json-c' 'sqlite')
+  pkgdesc="Jira-like project management FastCGI backend written in C++23 with automatic SQLite migrations"
+  install -Dm755 "${srcdir}/../../jiralike-demo" "$pkgdir/opt/jiralike-demo/jiralike-demo"
+  install -Dm644 "${srcdir}/../../jiralike-demo.service" "$pkgdir/etc/systemd/system/jiralike-demo.service"
+  mkdir -p "$pkgdir/opt/jiralike-demo/db/migrations"
+  cp -r "${srcdir}/../../db/migrations/"*.sql "$pkgdir/opt/jiralike-demo/db/migrations/"
+  mkdir -p "$pkgdir/var/lib/jiralike-demo/db" "$pkgdir/var/lib/jiralike-demo/blobs"
+}
+
+package_jiralike-demo-config-nginx() {
+  arch=('any')
+  depends=('nginx' 'jiralike-demo-fe')
+  pkgdesc="Nginx configuration for jiralike-demo Angular SPA and FastCGI backend"
+  install -Dm644 "${srcdir}/../../nginx/000-jiralike-demo.com" "$pkgdir/etc/nginx/sites-available/000-jiralike-demo.com"
+}
+
+package_jiralike-demo-fe() {
+  arch=('any')
+  depends=('jiralike-demo')
+  pkgdesc="jiralike-demo Angular Single-Page Application frontend"
+  mkdir -p "$pkgdir/opt/jiralike-demo-fe"
+  cp -r "${srcdir}/../../web/dist/web/browser/"* "$pkgdir/opt/jiralike-demo-fe/"
+}

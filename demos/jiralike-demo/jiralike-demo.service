@@ -1,0 +1,13 @@
+[Unit]
+Description=JiraLike demo web-service FastCGI backend
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/jiralike-demo
+ExecStart=/opt/jiralike-demo/jiralike-demo -n 127.0.0.1:9002 -w 4 -d /var/lib/jiralike-demo/db/jiralike.db -u /var/lib/jiralike-demo/blobs
+ExecStop=/bin/kill -SIGUSR1 $MAINPID
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

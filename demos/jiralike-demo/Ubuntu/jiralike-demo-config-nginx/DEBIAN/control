@@ -1,0 +1,8 @@
+Package: jiralike-demo-config-nginx
+Version: 0.1
+Section: web
+Priority: optional
+Architecture: all
+Depends: nginx, jiralike-demo-fe
+Maintainer: Boris Barbulovski <bbarbulovski@gmail.com>
+Description: Nginx virtual host configuration for jiralike-demo

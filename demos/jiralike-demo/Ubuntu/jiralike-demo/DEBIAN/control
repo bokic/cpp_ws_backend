@@ -1,0 +1,8 @@
+Package: jiralike-demo
+Version: 0.1
+Section: web
+Priority: optional
+Architecture: amd64
+Depends: libfcgi0ldbl, libsqlite3-0, libjson-c5
+Maintainer: Boris Barbulovski <bbarbulovski@gmail.com>
+Description: Jira-like FastCGI C++23 backend with SQLite schema migrations and blob storage

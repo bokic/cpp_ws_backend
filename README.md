@@ -123,6 +123,7 @@ int main()
 ## Demo Applications
 
 Complete runnable demo projects are provided in the [`demos/`](demos) directory:
+- **[Jira-Like Demo](demos/jiralike-demo)**: Full-stack Agile project & issue tracking application using SQLite (with automatic schema versioning & migrations), `blobs/` attachment storage, and an Angular Single-Page Application (SPA) frontend with Kanban & Gantt drag-and-drop state boards.
 - **[SQLite Demo](demos/sqlite-demo)**: Full database-backed web application using SQLite (`chinook.db`), `json-c`, and jqGrid frontend.
 - **[System Journal Demo](demos/journal-demo)**: FastCGI service exposing systemd logs via `sd_journal` as JSON.
 
