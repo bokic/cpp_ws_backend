@@ -1,4 +1,12 @@
-export type WorkItemType = 'Epic' | 'Story' | 'Task' | 'Subtask' | 'Bug' | 'Issue';
+export type WorkItemType =
+  | 'Epic'
+  | 'New Feature'
+  | 'Improvement'
+  | 'Story'
+  | 'Task'
+  | 'Subtask'
+  | 'Bug'
+  | 'Issue';
 
 export type WorkflowState =
   | 'Backlog'
@@ -13,6 +21,8 @@ export type PriorityType = 'Lowest' | 'Low' | 'Medium' | 'High' | 'Highest' | 'C
 
 export const WORK_ITEM_TYPES: WorkItemType[] = [
   'Epic',
+  'New Feature',
+  'Improvement',
   'Story',
   'Task',
   'Subtask',

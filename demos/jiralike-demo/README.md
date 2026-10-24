@@ -21,10 +21,12 @@ A full-stack, Jira-inspired Agile project and issue tracking demo application po
 
 ### 2. Work Item Hierarchy & Types
 Support for standard Jira-like work elements with parent-child and linking relationships:
-- **Epic**: Large bodies of work that can be broken down into stories and tasks.
+- **Epic**: Large bodies of work that can be broken down into stories, features, and tasks.
+- **New Feature**: A new product capability or major functionality being introduced.
+- **Improvement**: An enhancement or optimization to an existing feature or workflow.
 - **Story**: User-centric feature specifications and requirements.
 - **Task**: General engineering or operational work items.
-- **Subtask**: Granular child items belonging to a parent Story, Task, or Issue.
+- **Subtask**: Granular child items belonging to a parent Story, New Feature, Improvement, Task, or Issue.
 - **Bug**: Defect reports with severity, reproduction steps, and affected version metadata.
 - **Issue**: General project issues, impediments, or change requests.
 

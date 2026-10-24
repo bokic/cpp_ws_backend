@@ -681,6 +681,8 @@ input:focus, select:focus, textarea:focus {
   background: #0052cc;
 }
 .type-badge[data-type="Epic"], .type-dot[data-type="Epic"] { background: #6554c0; }
+.type-badge[data-type="New Feature"], .type-dot[data-type="New Feature"] { background: #36b37e; }
+.type-badge[data-type="Improvement"], .type-dot[data-type="Improvement"] { background: #2684ff; }
 .type-badge[data-type="Story"], .type-dot[data-type="Story"] { background: #00875a; }
 .type-badge[data-type="Task"], .type-dot[data-type="Task"] { background: #0052cc; }
 .type-badge[data-type="Subtask"], .type-dot[data-type="Subtask"] { background: #00b8d9; }

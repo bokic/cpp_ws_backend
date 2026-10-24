@@ -302,13 +302,17 @@ export class CreateItemComponent implements OnInit {
   typeDescription(t: WorkItemType): string {
     switch (t) {
       case 'Epic':
-        return 'Large initiative spanning stories';
+        return 'Large initiative spanning multiple sprints';
+      case 'New Feature':
+        return 'Brand-new product capability or functionality';
+      case 'Improvement':
+        return 'Enhancement or optimization of existing feature';
       case 'Story':
         return 'User-facing feature or requirement';
       case 'Task':
         return 'Engineering or operational work';
       case 'Subtask':
-        return 'Child step under a Story or Task';
+        return 'Child step under a parent item';
       case 'Bug':
         return 'Software defect or regression';
       case 'Issue':

@@ -137,6 +137,7 @@ function forwardFastCGI(req, res, bodyBuf) {
   });
 
   sock.on('close', () => {
+    if (res.headersSent) return;
     const fullOut = Buffer.concat(stdoutChunks);
     const sepIdx = fullOut.indexOf('\r\n\r\n');
     if (sepIdx === -1) {

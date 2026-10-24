@@ -363,6 +363,22 @@ static void seed_demo_workspace(db::sqlite_db &conn, int admin_id, int project_i
         "2026-11-06", "2026-11-15", "", "", "analytics,sprint"
     );
 
+    create_item(
+        "New Feature", "In Progress", "High",
+        "Real-time Kanban & Gantt filter presets",
+        "Add ability to filter work items by New Feature and Improvement types across Kanban and Gantt boards.",
+        epic2, sprint1_id, marcus_id, sarah_id, 5, 55,
+        "2026-10-24", "2026-11-01", "", "", "feature,board,ux"
+    );
+
+    create_item(
+        "Improvement", "To Do", "Medium",
+        "Optimize SQLite WAL checkpointing and prepared statement caching",
+        "Enhance C++23 FastCGI SQLite connection settings for faster concurrent read/write throughput.",
+        epic1, sprint1_id, admin_id, admin_id, 3, 25,
+        "2026-10-26", "2026-11-03", "", "", "improvement,performance,sqlite"
+    );
+
     // Update project's issue_seq
     auto upd_proj = conn.prepare("UPDATE projects SET issue_seq = ? WHERE id = ?;");
     upd_proj.bind_int(1, seq);
