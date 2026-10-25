@@ -64,7 +64,7 @@ import {
             [class.active]="selectedType() === ''"
             (click)="selectedType.set('')"
           >
-            All Types ({{ items().length }})
+            All Types ({{ itemsMatchingOtherFilters().length }})
           </button>
           @for (t of itemTypes; track t) {
             <button
@@ -74,7 +74,7 @@ import {
               (click)="selectedType.set(t)"
             >
               <span class="type-dot" [attr.data-type]="t"></span>
-              {{ t }}
+              {{ t }} ({{ countByType(t) }})
             </button>
           }
         </div>
@@ -248,15 +248,13 @@ export class BoardComponent implements OnInit {
   readonly dragOverState = signal<WorkflowState | null>(null);
   readonly toastMsg = signal('');
 
-  readonly filteredItems = computed(() => {
+  readonly itemsMatchingOtherFilters = computed(() => {
     const q = this.searchQuery().trim().toLowerCase();
-    const t = this.selectedType();
     const c = this.selectedCategory();
     const a = this.selectedAssignee();
     const s = this.selectedSprint();
 
     return this.items().filter((item) => {
-      if (t && item.type !== t) return false;
       if (c && item.category !== c) return false;
       if (a && String(item.assignee_id || '') !== String(a)) return false;
       if (s && String(item.sprint_id || '') !== String(s)) return false;
@@ -267,6 +265,16 @@ export class BoardComponent implements OnInit {
       return true;
     });
   });
+
+  readonly filteredItems = computed(() => {
+    const t = this.selectedType();
+    const base = this.itemsMatchingOtherFilters();
+    return t ? base.filter((item) => item.type === t) : base;
+  });
+
+  countByType(type: WorkItemType): number {
+    return this.itemsMatchingOtherFilters().filter((item) => item.type === type).length;
+  }
 
   async ngOnInit(): Promise<void> {
     try {
