@@ -196,8 +196,8 @@ static void seed_demo_workspace(db::sqlite_db &conn, int admin_id, int project_i
 
     // Create Sprints
     auto ins_sprint = conn.prepare(R"SQL(
-        INSERT INTO sprints (project_id, name, goal, status, start_date, end_date)
-        VALUES (?, ?, ?, ?, ?, ?);
+        INSERT INTO sprints (project_id, name, goal, status, start_date, end_date, is_current)
+        VALUES (?, ?, ?, ?, ?, ?, ?);
     )SQL");
     ins_sprint.bind_int(1, project_id);
     ins_sprint.bind_text(2, "Sprint 1 - Core Architecture & Board");
@@ -205,6 +205,7 @@ static void seed_demo_workspace(db::sqlite_db &conn, int admin_id, int project_i
     ins_sprint.bind_text(4, "active");
     ins_sprint.bind_text(5, "2026-10-15");
     ins_sprint.bind_text(6, "2026-11-05");
+    ins_sprint.bind_int(7, 1);
     ins_sprint.step_done();
     int sprint1_id = static_cast<int>(conn.last_insert_rowid());
 
@@ -215,16 +216,17 @@ static void seed_demo_workspace(db::sqlite_db &conn, int admin_id, int project_i
     ins_sprint.bind_text(4, "planned");
     ins_sprint.bind_text(5, "2026-11-06");
     ins_sprint.bind_text(6, "2026-11-20");
+    ins_sprint.bind_int(7, 0);
     ins_sprint.step_done();
     int sprint2_id = static_cast<int>(conn.last_insert_rowid());
 
     int seq = 0;
     auto ins_item = conn.prepare(R"SQL(
         INSERT INTO work_items (
-            project_id, key, type, status, priority, title, description,
+            project_id, key, type, category, status, priority, title, description,
             parent_id, sprint_id, assignee_id, reporter_id, story_points,
             progress, start_date, due_date, severity, steps_to_reproduce, labels, board_order
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
     )SQL");
 
     auto ins_hist = conn.prepare(R"SQL(
@@ -232,7 +234,7 @@ static void seed_demo_workspace(db::sqlite_db &conn, int admin_id, int project_i
         VALUES (?, ?, ?, ?, ?);
     )SQL");
 
-    auto create_item = [&](const char *type, const char *status, const char *priority,
+    auto create_item = [&](const char *type, const char *category, const char *status, const char *priority,
                            const char *title, const char *desc, int parent_id, int sprint_id,
                            int assignee_id, int reporter_id, int points, int progress,
                            const char *start_date, const char *due_date,
@@ -243,22 +245,23 @@ static void seed_demo_workspace(db::sqlite_db &conn, int admin_id, int project_i
         ins_item.bind_int(1, project_id);
         ins_item.bind_text(2, item_key);
         ins_item.bind_text(3, type);
-        ins_item.bind_text(4, status);
-        ins_item.bind_text(5, priority);
-        ins_item.bind_text(6, title);
-        ins_item.bind_text(7, desc);
-        ins_item.bind_optional_int(8, parent_id);
-        ins_item.bind_optional_int(9, sprint_id);
-        ins_item.bind_optional_int(10, assignee_id);
-        ins_item.bind_optional_int(11, reporter_id);
-        ins_item.bind_int(12, points);
-        ins_item.bind_int(13, progress);
-        ins_item.bind_text(14, start_date);
-        ins_item.bind_text(15, due_date);
-        ins_item.bind_text(16, severity);
-        ins_item.bind_text(17, steps);
-        ins_item.bind_text(18, labels);
-        ins_item.bind_int(19, seq * 10);
+        ins_item.bind_text(4, category);
+        ins_item.bind_text(5, status);
+        ins_item.bind_text(6, priority);
+        ins_item.bind_text(7, title);
+        ins_item.bind_text(8, desc);
+        ins_item.bind_optional_int(9, parent_id);
+        ins_item.bind_optional_int(10, sprint_id);
+        ins_item.bind_optional_int(11, assignee_id);
+        ins_item.bind_optional_int(12, reporter_id);
+        ins_item.bind_int(13, points);
+        ins_item.bind_int(14, progress);
+        ins_item.bind_text(15, start_date);
+        ins_item.bind_text(16, due_date);
+        ins_item.bind_text(17, severity);
+        ins_item.bind_text(18, steps);
+        ins_item.bind_text(19, labels);
+        ins_item.bind_int(20, seq * 10);
         ins_item.step_done();
         int item_id = static_cast<int>(conn.last_insert_rowid());
 
@@ -274,7 +277,7 @@ static void seed_demo_workspace(db::sqlite_db &conn, int admin_id, int project_i
     };
 
     int epic1 = create_item(
-        "Epic", "In Progress", "Highest",
+        "Epic", "New Feature", "In Progress", "Highest",
         "FastCGI Backend & SQLite Schema Migration Engine",
         "Design and implement automatic schema version detection and atomic SQL upgrade execution on startup, plus blob storage for attachments.",
         0, sprint1_id, admin_id, sarah_id, 13, 75,
@@ -282,7 +285,7 @@ static void seed_demo_workspace(db::sqlite_db &conn, int admin_id, int project_i
     );
 
     int epic2 = create_item(
-        "Epic", "In Progress", "High",
+        "Epic", "New Feature", "In Progress", "High",
         "Interactive Angular Kanban & Gantt Workspace",
         "Single-page application with drag-and-drop state columns, Gantt timeline visualization, issue creation workflows, and attachment previews.",
         0, sprint1_id, marcus_id, sarah_id, 21, 60,
@@ -290,7 +293,7 @@ static void seed_demo_workspace(db::sqlite_db &conn, int admin_id, int project_i
     );
 
     int story1 = create_item(
-        "Story", "Done", "Highest",
+        "Story", "New Feature", "Done", "Highest",
         "Startup SQLite version check and sequential migration runner",
         "As an administrator, when the backend starts, it should inspect schema_version and run pending migration scripts up to the latest schema version.",
         epic1, sprint1_id, admin_id, sarah_id, 5, 100,
@@ -298,7 +301,7 @@ static void seed_demo_workspace(db::sqlite_db &conn, int admin_id, int project_i
     );
 
     int story2 = create_item(
-        "Story", "In Review", "High",
+        "Story", "New Feature", "In Review", "High",
         "Blob storage upload & streaming API for issue attachments",
         "Allow users to attach screenshots, logs, and documents to any work item, persisted safely in the blobs/ directory.",
         epic1, sprint1_id, marcus_id, admin_id, 5, 85,
@@ -306,7 +309,7 @@ static void seed_demo_workspace(db::sqlite_db &conn, int admin_id, int project_i
     );
 
     create_item(
-        "Subtask", "Done", "Medium",
+        "Subtask", "Improvement", "Done", "Medium",
         "Sanitize uploaded filenames and generate unique content prefixes",
         "Prevent directory traversal and filename collisions in blobs/ directory.",
         story2, sprint1_id, marcus_id, marcus_id, 2, 100,
@@ -314,7 +317,7 @@ static void seed_demo_workspace(db::sqlite_db &conn, int admin_id, int project_i
     );
 
     create_item(
-        "Subtask", "In Progress", "Medium",
+        "Subtask", "New Feature", "In Progress", "Medium",
         "Add attachment gallery and one-click download in Issue Detail view",
         "Display file size, MIME badge, uploader name, and download link.",
         story2, sprint1_id, elena_id, marcus_id, 3, 60,
@@ -322,7 +325,7 @@ static void seed_demo_workspace(db::sqlite_db &conn, int admin_id, int project_i
     );
 
     int story3 = create_item(
-        "Story", "In Progress", "Highest",
+        "Story", "New Feature", "In Progress", "Highest",
         "Kanban & Gantt board with drag-and-drop state transitions",
         "Users can view items grouped by state and drag cards across columns or timeline rows to transition their workflow state.",
         epic2, sprint1_id, marcus_id, sarah_id, 8, 65,
@@ -330,7 +333,7 @@ static void seed_demo_workspace(db::sqlite_db &conn, int admin_id, int project_i
     );
 
     create_item(
-        "Task", "QA / Testing", "High",
+        "Task", "Improvement", "QA / Testing", "High",
         "Package application for Docker, Ubuntu .deb, and Arch Linux AUR",
         "Provide multi-stage Dockerfile, Debian package scripts, and Arch PKGBUILD preserving SQLite database across upgrades.",
         epic1, sprint1_id, admin_id, sarah_id, 5, 90,
@@ -338,17 +341,17 @@ static void seed_demo_workspace(db::sqlite_db &conn, int admin_id, int project_i
     );
 
     int bug1 = create_item(
-        "Bug", "To Do", "Critical",
+        "Task", "Bug", "To Do", "Critical",
         "Gantt timeline bar overlaps when due_date is earlier than start_date",
         "When a user manually enters an inverted date range on an issue, the timeline bar width calculation should clamp to a minimum 1-day span.",
         epic2, sprint1_id, elena_id, elena_id, 3, 15,
         "2026-10-25", "2026-10-28", "Major",
-        "1. Open Create Item page\n2. Select type 'Task'\n3. Set Start Date to 2026-10-30 and Due Date to 2026-10-25\n4. Open Gantt view and observe bar width.",
+        "1. Open Create Item page\n2. Select type 'Task' and category 'Bug'\n3. Set Start Date to 2026-10-30 and Due Date to 2026-10-25\n4. Open Gantt view and observe bar width.",
         "gantt,ui-bug"
     );
 
     int issue1 = create_item(
-        "Issue", "Blocked", "High",
+        "Task", "Issue", "Blocked", "High",
         "Define production Nginx rate-limiting policy for /api/blobs uploads",
         "Waiting on DevOps security review to finalize client_max_body_size and burst limits.",
         epic1, sprint1_id, sarah_id, admin_id, 2, 20,
@@ -356,7 +359,7 @@ static void seed_demo_workspace(db::sqlite_db &conn, int admin_id, int project_i
     );
 
     create_item(
-        "Story", "Backlog", "Medium",
+        "Story", "New Feature", "Backlog", "Medium",
         "Add Sprint burndown and cumulative flow analytics",
         "Track remaining story points per day across active sprints.",
         epic2, sprint2_id, sarah_id, sarah_id, 8, 0,
@@ -364,15 +367,15 @@ static void seed_demo_workspace(db::sqlite_db &conn, int admin_id, int project_i
     );
 
     create_item(
-        "New Feature", "In Progress", "High",
+        "Story", "New Feature", "In Progress", "High",
         "Real-time Kanban & Gantt filter presets",
-        "Add ability to filter work items by New Feature and Improvement types across Kanban and Gantt boards.",
+        "Add ability to filter work items by Hierarchy Type and Category across Kanban and Gantt boards.",
         epic2, sprint1_id, marcus_id, sarah_id, 5, 55,
         "2026-10-24", "2026-11-01", "", "", "feature,board,ux"
     );
 
     create_item(
-        "Improvement", "To Do", "Medium",
+        "Task", "Improvement", "To Do", "Medium",
         "Optimize SQLite WAL checkpointing and prepared statement caching",
         "Enhance C++23 FastCGI SQLite connection settings for faster concurrent read/write throughput.",
         epic1, sprint1_id, admin_id, admin_id, 3, 25,
@@ -463,7 +466,7 @@ static void handle_setup_init(backend::wsworker *worker,
         }
     }
 
-    std::string instance_name = body.get_string("instance_name", "JiraLike Agile Workspace");
+    std::string instance_name = body.get_string("instance_name", "JiraLike");
     std::string admin_username = body.get_string("admin_username", "admin");
     std::string admin_email = body.get_string("admin_email", "admin@jiralike.local");
     std::string admin_display_name = body.get_string("admin_display_name", "System Administrator");
@@ -797,13 +800,17 @@ static void handle_sprints(backend::wsworker *worker,
         int project_id = std::atoi(args["project_id"].c_str());
 
         std::string sql = R"SQL(
-            SELECT s.id, s.project_id, s.name, s.goal, s.status, s.start_date, s.end_date, s.created_at
+            SELECT s.id, s.project_id, s.name, s.goal, s.status, s.start_date, s.end_date, s.created_at,
+                   s.is_current,
+                   (SELECT COUNT(*) FROM work_items w WHERE w.sprint_id = s.id) AS item_count,
+                   (SELECT COUNT(*) FROM work_items w WHERE w.sprint_id = s.id AND w.status = 'Done') AS done_count,
+                   (SELECT COALESCE(SUM(w.story_points), 0) FROM work_items w WHERE w.sprint_id = s.id) AS total_points
             FROM sprints s
         )SQL";
         if (project_id > 0) {
             sql += " WHERE s.project_id = ? ";
         }
-        sql += " ORDER BY s.id ASC;";
+        sql += " ORDER BY s.is_current DESC, s.id ASC;";
 
         auto stmt = conn.prepare(sql);
         if (project_id > 0) stmt.bind_int(1, project_id);
@@ -819,6 +826,10 @@ static void handle_sprints(backend::wsworker *worker,
             s.add_str("start_date", stmt.column_str(5));
             s.add_str("end_date", stmt.column_str(6));
             s.add_str("created_at", stmt.column_str(7));
+            s.add_bool("is_current", stmt.column_int(8) != 0);
+            s.add_int("item_count", stmt.column_int(9));
+            s.add_int("done_count", stmt.column_int(10));
+            s.add_int("total_points", stmt.column_int(11));
             arr.add(std::move(s));
         }
         send_json(worker, header, "200 OK", arr);
@@ -828,6 +839,10 @@ static void handle_sprints(backend::wsworker *worker,
     auto u_auth = get_authenticated_user(conn, worker, header);
     if (!u_auth.authenticated) {
         send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+    if (u_auth.role != "Admin") {
+        send_error(worker, header, "403 Forbidden", "Only Administrators can create or edit sprints");
         return;
     }
 
@@ -843,33 +858,193 @@ static void handle_sprints(backend::wsworker *worker,
     std::string status = body.get_string("status", "planned");
     std::string start_date = body.get_string("start_date");
     std::string end_date = body.get_string("end_date");
+    bool is_current = body.get_bool("is_current", false);
+    if (is_current) {
+        status = "active";
+    }
 
     if (name.empty()) {
         send_error(worker, header, "400 Bad Request", "Sprint name is required");
         return;
     }
 
-    auto ins = conn.prepare(R"SQL(
-        INSERT INTO sprints (project_id, name, goal, status, start_date, end_date)
-        VALUES (?, ?, ?, ?, ?, ?);
-    )SQL");
-    ins.bind_int(1, project_id);
-    ins.bind_text(2, name);
-    ins.bind_text(3, goal);
-    ins.bind_text(4, status);
-    ins.bind_text(5, start_date);
-    ins.bind_text(6, end_date);
-    ins.step_done();
+    conn.exec("BEGIN IMMEDIATE;");
+    int new_id = 0;
+    try {
+        if (is_current) {
+            auto clr = conn.prepare("UPDATE sprints SET is_current = 0 WHERE project_id = ?;");
+            clr.bind_int(1, project_id);
+            clr.step_done();
+        }
+
+        auto ins = conn.prepare(R"SQL(
+            INSERT INTO sprints (project_id, name, goal, status, start_date, end_date, is_current)
+            VALUES (?, ?, ?, ?, ?, ?, ?);
+        )SQL");
+        ins.bind_int(1, project_id);
+        ins.bind_text(2, name);
+        ins.bind_text(3, goal);
+        ins.bind_text(4, status);
+        ins.bind_text(5, start_date);
+        ins.bind_text(6, end_date);
+        ins.bind_int(7, is_current ? 1 : 0);
+        ins.step_done();
+        new_id = static_cast<int>(conn.last_insert_rowid());
+        conn.exec("COMMIT;");
+    } catch (const std::exception &ex) {
+        try { conn.exec("ROLLBACK;"); } catch (...) {}
+        send_error(worker, header, "500 Internal Server Error", ex.what());
+        return;
+    }
 
     auto res = json::json_value::make_object();
-    res.add_int("id", static_cast<int>(conn.last_insert_rowid()));
+    res.add_int("id", new_id);
     res.add_int("project_id", project_id);
     res.add_str("name", name);
     res.add_str("goal", goal);
     res.add_str("status", status);
     res.add_str("start_date", start_date);
     res.add_str("end_date", end_date);
+    res.add_bool("is_current", is_current);
+    res.add_int("item_count", 0);
+    res.add_int("done_count", 0);
+    res.add_int("total_points", 0);
     send_json(worker, header, "201 Created", res);
+}
+
+// PUT / DELETE /api/sprints/([0-9]+)
+static void handle_sprint_detail(backend::wsworker *worker,
+                                 const std::map<std::string, std::string> &header,
+                                 const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing sprint ID");
+        return;
+    }
+    int sprint_id = std::atoi(uri_params.front().c_str());
+
+    db::sqlite_db conn(g_db_path);
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+    if (u_auth.role != "Admin") {
+        send_error(worker, header, "403 Forbidden", "Only Administrators can modify sprints");
+        return;
+    }
+
+    std::string method = get_header(header, "REQUEST_METHOD");
+    if (method == "DELETE") {
+        auto del = conn.prepare("DELETE FROM sprints WHERE id = ?;");
+        del.bind_int(1, sprint_id);
+        del.step_done();
+        auto res = json::json_value::make_object();
+        res.add_bool("deleted", true);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    int project_id = body.get_int("project_id", 1);
+    std::string name = body.get_string("name");
+    std::string goal = body.get_string("goal");
+    std::string status = body.get_string("status", "planned");
+    std::string start_date = body.get_string("start_date");
+    std::string end_date = body.get_string("end_date");
+    bool is_current = body.get_bool("is_current", false);
+    if (is_current) {
+        status = "active";
+    }
+
+    if (name.empty()) {
+        send_error(worker, header, "400 Bad Request", "Sprint name is required");
+        return;
+    }
+
+    conn.exec("BEGIN IMMEDIATE;");
+    try {
+        if (is_current) {
+            auto clr = conn.prepare("UPDATE sprints SET is_current = 0 WHERE project_id = ?;");
+            clr.bind_int(1, project_id);
+            clr.step_done();
+        }
+        auto upd = conn.prepare(R"SQL(
+            UPDATE sprints
+            SET name = ?, goal = ?, status = ?, start_date = ?, end_date = ?, is_current = ?
+            WHERE id = ?;
+        )SQL");
+        upd.bind_text(1, name);
+        upd.bind_text(2, goal);
+        upd.bind_text(3, status);
+        upd.bind_text(4, start_date);
+        upd.bind_text(5, end_date);
+        upd.bind_int(6, is_current ? 1 : 0);
+        upd.bind_int(7, sprint_id);
+        upd.step_done();
+        conn.exec("COMMIT;");
+    } catch (const std::exception &ex) {
+        try { conn.exec("ROLLBACK;"); } catch (...) {}
+        send_error(worker, header, "500 Internal Server Error", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", sprint_id);
+    res.add_int("project_id", project_id);
+    res.add_str("name", name);
+    res.add_str("goal", goal);
+    res.add_str("status", status);
+    res.add_str("start_date", start_date);
+    res.add_str("end_date", end_date);
+    res.add_bool("is_current", is_current);
+    send_json(worker, header, "200 OK", res);
+}
+
+// POST /api/sprints/([0-9]+)/current
+static void handle_sprint_set_current(backend::wsworker *worker,
+                                      const std::map<std::string, std::string> &header,
+                                      const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing sprint ID");
+        return;
+    }
+    int sprint_id = std::atoi(uri_params.front().c_str());
+
+    db::sqlite_db conn(g_db_path);
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+    if (u_auth.role != "Admin") {
+        send_error(worker, header, "403 Forbidden", "Only Administrators can set the Current Sprint");
+        return;
+    }
+
+    conn.exec("BEGIN IMMEDIATE;");
+    try {
+        auto clr = conn.prepare("UPDATE sprints SET is_current = 0;");
+        clr.step_done();
+
+        auto setc = conn.prepare("UPDATE sprints SET is_current = 1, status = 'active' WHERE id = ?;");
+        setc.bind_int(1, sprint_id);
+        setc.step_done();
+        conn.exec("COMMIT;");
+    } catch (const std::exception &ex) {
+        try { conn.exec("ROLLBACK;"); } catch (...) {}
+        send_error(worker, header, "500 Internal Server Error", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_bool("ok", true);
+    res.add_int("current_sprint_id", sprint_id);
+    send_json(worker, header, "200 OK", res);
 }
 
 static json::json_value row_to_work_item_json(db::sqlite_stmt &stmt) {
@@ -905,6 +1080,7 @@ static json::json_value row_to_work_item_json(db::sqlite_stmt &stmt) {
     item.add_int("subtask_count", stmt.column_int(28));
     item.add_int("comment_count", stmt.column_int(29));
     item.add_int("attachment_count", stmt.column_int(30));
+    item.add_str("category", stmt.column_str(31));
     return item;
 }
 
@@ -921,7 +1097,8 @@ static const char *BASE_WORK_ITEM_SELECT = R"SQL(
         COALESCE(sp.name, ''),
         (SELECT COUNT(*) FROM work_items sub WHERE sub.parent_id = w.id),
         (SELECT COUNT(*) FROM comments c WHERE c.work_item_id = w.id),
-        (SELECT COUNT(*) FROM attachments a WHERE a.work_item_id = w.id)
+        (SELECT COUNT(*) FROM attachments a WHERE a.work_item_id = w.id),
+        w.category
     FROM work_items w
     LEFT JOIN users ua ON ua.id = w.assignee_id
     LEFT JOIN users ur ON ur.id = w.reporter_id
@@ -952,6 +1129,10 @@ static void handle_items(backend::wsworker *worker,
         if (!args["type"].empty()) {
             sql += " AND w.type = ? ";
             bind_vals.push_back(args["type"]);
+        }
+        if (!args["category"].empty()) {
+            sql += " AND w.category = ? ";
+            bind_vals.push_back(args["category"]);
         }
         if (!args["assignee_id"].empty()) {
             sql += " AND w.assignee_id = ? ";
@@ -1003,6 +1184,7 @@ static void handle_items(backend::wsworker *worker,
 
     int project_id = body.get_int("project_id", 1);
     std::string type = body.get_string("type", "Task");
+    std::string category = body.get_string("category", "New Feature");
     std::string status = body.get_string("status", "To Do");
     std::string priority = body.get_string("priority", "Medium");
     std::string title = body.get_string("title");
@@ -1047,30 +1229,31 @@ static void handle_items(backend::wsworker *worker,
         std::string item_key = proj_key + "-" + std::to_string(next_seq);
         auto ins = conn.prepare(R"SQL(
             INSERT INTO work_items (
-                project_id, key, type, status, priority, title, description,
+                project_id, key, type, category, status, priority, title, description,
                 parent_id, sprint_id, assignee_id, reporter_id, story_points,
                 progress, start_date, due_date, severity, steps_to_reproduce, labels, board_order
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         )SQL");
         ins.bind_int(1, project_id);
         ins.bind_text(2, item_key);
         ins.bind_text(3, type);
-        ins.bind_text(4, status);
-        ins.bind_text(5, priority);
-        ins.bind_text(6, title);
-        ins.bind_text(7, description);
-        ins.bind_optional_int(8, parent_id);
-        ins.bind_optional_int(9, sprint_id);
-        ins.bind_optional_int(10, assignee_id);
-        ins.bind_optional_int(11, reporter_id);
-        ins.bind_int(12, story_points);
-        ins.bind_int(13, progress);
-        ins.bind_text(14, start_date);
-        ins.bind_text(15, due_date);
-        ins.bind_text(16, severity);
-        ins.bind_text(17, steps);
-        ins.bind_text(18, labels);
-        ins.bind_int(19, next_seq * 10);
+        ins.bind_text(4, category);
+        ins.bind_text(5, status);
+        ins.bind_text(6, priority);
+        ins.bind_text(7, title);
+        ins.bind_text(8, description);
+        ins.bind_optional_int(9, parent_id);
+        ins.bind_optional_int(10, sprint_id);
+        ins.bind_optional_int(11, assignee_id);
+        ins.bind_optional_int(12, reporter_id);
+        ins.bind_int(13, story_points);
+        ins.bind_int(14, progress);
+        ins.bind_text(15, start_date);
+        ins.bind_text(16, due_date);
+        ins.bind_text(17, severity);
+        ins.bind_text(18, steps);
+        ins.bind_text(19, labels);
+        ins.bind_int(20, next_seq * 10);
         ins.step_done();
         new_item_id = static_cast<int>(conn.last_insert_rowid());
 
@@ -1099,16 +1282,41 @@ static void handle_items(backend::wsworker *worker,
     }
 }
 
-// GET / PUT / DELETE /api/items/([0-9]+)
+// Resolve either a numeric item ID ("9") or a work item key ("JIRA-9") to its integer ID
+static int resolve_work_item_id(db::sqlite_db &conn, const std::string &id_or_key) {
+    if (id_or_key.empty()) return 0;
+    bool all_digits = true;
+    for (unsigned char c : id_or_key) {
+        if (!std::isdigit(c)) {
+            all_digits = false;
+            break;
+        }
+    }
+    if (all_digits) {
+        return std::atoi(id_or_key.c_str());
+    }
+    auto stmt = conn.prepare("SELECT id FROM work_items WHERE UPPER(key) = UPPER(?);");
+    stmt.bind_text(1, id_or_key);
+    if (stmt.step() == SQLITE_ROW) {
+        return stmt.column_int(0);
+    }
+    return 0;
+}
+
+// GET / PUT / DELETE /api/items/([A-Za-z0-9_-]+)
 static void handle_item_detail(backend::wsworker *worker,
                                const std::map<std::string, std::string> &header,
                                const std::list<std::string> &uri_params) {
     if (uri_params.empty()) {
-        send_error(worker, header, "400 Bad Request", "Missing item ID");
+        send_error(worker, header, "400 Bad Request", "Missing item ID or key");
         return;
     }
-    int item_id = std::atoi(uri_params.front().c_str());
     db::sqlite_db conn(g_db_path);
+    int item_id = resolve_work_item_id(conn, uri_params.front());
+    if (item_id <= 0) {
+        send_error(worker, header, "404 Not Found", "Work item not found");
+        return;
+    }
     std::string method = get_header(header, "REQUEST_METHOD");
 
     if (method == "GET") {
@@ -1286,6 +1494,7 @@ static void handle_item_detail(backend::wsworker *worker,
     }
 
     std::string type = body.get_string("type", "Task");
+    std::string category = body.get_string("category", "New Feature");
     std::string status = body.get_string("status", old_status);
     std::string priority = body.get_string("priority", "Medium");
     std::string title = body.get_string("title");
@@ -1303,28 +1512,29 @@ static void handle_item_detail(backend::wsworker *worker,
 
     auto upd = conn.prepare(R"SQL(
         UPDATE work_items
-        SET type = ?, status = ?, priority = ?, title = ?, description = ?,
+        SET type = ?, category = ?, status = ?, priority = ?, title = ?, description = ?,
             parent_id = ?, sprint_id = ?, assignee_id = ?, story_points = ?,
             progress = ?, start_date = ?, due_date = ?, severity = ?,
             steps_to_reproduce = ?, labels = ?, updated_at = datetime('now')
         WHERE id = ?;
     )SQL");
     upd.bind_text(1, type);
-    upd.bind_text(2, status);
-    upd.bind_text(3, priority);
-    upd.bind_text(4, title);
-    upd.bind_text(5, description);
-    upd.bind_optional_int(6, parent_id);
-    upd.bind_optional_int(7, sprint_id);
-    upd.bind_optional_int(8, assignee_id);
-    upd.bind_int(9, story_points);
-    upd.bind_int(10, progress);
-    upd.bind_text(11, start_date);
-    upd.bind_text(12, due_date);
-    upd.bind_text(13, severity);
-    upd.bind_text(14, steps);
-    upd.bind_text(15, labels);
-    upd.bind_int(16, item_id);
+    upd.bind_text(2, category);
+    upd.bind_text(3, status);
+    upd.bind_text(4, priority);
+    upd.bind_text(5, title);
+    upd.bind_text(6, description);
+    upd.bind_optional_int(7, parent_id);
+    upd.bind_optional_int(8, sprint_id);
+    upd.bind_optional_int(9, assignee_id);
+    upd.bind_int(10, story_points);
+    upd.bind_int(11, progress);
+    upd.bind_text(12, start_date);
+    upd.bind_text(13, due_date);
+    upd.bind_text(14, severity);
+    upd.bind_text(15, steps);
+    upd.bind_text(16, labels);
+    upd.bind_int(17, item_id);
     upd.step_done();
 
     if (status != old_status) {
@@ -1348,17 +1558,20 @@ static void handle_item_detail(backend::wsworker *worker,
     }
 }
 
-// PATCH /api/items/([0-9]+)/state
+// PATCH /api/items/([A-Za-z0-9_-]+)/state
 static void handle_item_state_transition(backend::wsworker *worker,
                                          const std::map<std::string, std::string> &header,
                                          const std::list<std::string> &uri_params) {
     if (uri_params.empty()) {
-        send_error(worker, header, "400 Bad Request", "Missing item ID");
+        send_error(worker, header, "400 Bad Request", "Missing item ID or key");
         return;
     }
-    int item_id = std::atoi(uri_params.front().c_str());
-
     db::sqlite_db conn(g_db_path);
+    int item_id = resolve_work_item_id(conn, uri_params.front());
+    if (item_id <= 0) {
+        send_error(worker, header, "404 Not Found", "Work item not found");
+        return;
+    }
     auto u_auth = get_authenticated_user(conn, worker, header);
     if (!u_auth.authenticated) {
         send_error(worker, header, "401 Unauthorized", "Authentication required");
@@ -1439,17 +1652,20 @@ static void handle_item_state_transition(backend::wsworker *worker,
     }
 }
 
-// POST /api/items/([0-9]+)/comments
+// POST /api/items/([A-Za-z0-9_-]+)/comments
 static void handle_item_comments(backend::wsworker *worker,
                                  const std::map<std::string, std::string> &header,
                                  const std::list<std::string> &uri_params) {
     if (uri_params.empty()) {
-        send_error(worker, header, "400 Bad Request", "Missing item ID");
+        send_error(worker, header, "400 Bad Request", "Missing item ID or key");
         return;
     }
-    int item_id = std::atoi(uri_params.front().c_str());
-
     db::sqlite_db conn(g_db_path);
+    int item_id = resolve_work_item_id(conn, uri_params.front());
+    if (item_id <= 0) {
+        send_error(worker, header, "404 Not Found", "Work item not found");
+        return;
+    }
     auto u_auth = get_authenticated_user(conn, worker, header);
     if (!u_auth.authenticated) {
         send_error(worker, header, "401 Unauthorized", "Authentication required");
@@ -1485,17 +1701,20 @@ static void handle_item_comments(backend::wsworker *worker,
     send_json(worker, header, "201 Created", res);
 }
 
-// POST /api/items/([0-9]+)/links
+// POST /api/items/([A-Za-z0-9_-]+)/links
 static void handle_item_links(backend::wsworker *worker,
                               const std::map<std::string, std::string> &header,
                               const std::list<std::string> &uri_params) {
     if (uri_params.empty()) {
-        send_error(worker, header, "400 Bad Request", "Missing item ID");
+        send_error(worker, header, "400 Bad Request", "Missing item ID or key");
         return;
     }
-    int source_id = std::atoi(uri_params.front().c_str());
-
     db::sqlite_db conn(g_db_path);
+    int source_id = resolve_work_item_id(conn, uri_params.front());
+    if (source_id <= 0) {
+        send_error(worker, header, "404 Not Found", "Work item not found");
+        return;
+    }
     auto u_auth = get_authenticated_user(conn, worker, header);
     if (!u_auth.authenticated) {
         send_error(worker, header, "401 Unauthorized", "Authentication required");
@@ -1529,6 +1748,40 @@ static void handle_item_links(backend::wsworker *worker,
     send_json(worker, header, "201 Created", res);
 }
 
+// GET /api/links
+static void handle_all_links(backend::wsworker *worker,
+                             const std::map<std::string, std::string> &header,
+                             const std::list<std::string> &) {
+    db::sqlite_db conn(g_db_path);
+    auto stmt = conn.prepare(R"SQL(
+        SELECT l.id, l.source_item_id, l.target_item_id, l.link_type,
+               ws.key, ws.title, ws.status, ws.type,
+               wt.key, wt.title, wt.status, wt.type
+        FROM work_item_links l
+        INNER JOIN work_items ws ON ws.id = l.source_item_id
+        INNER JOIN work_items wt ON wt.id = l.target_item_id
+        ORDER BY l.id ASC;
+    )SQL");
+    auto arr = json::json_value::make_array();
+    while (stmt.step() == SQLITE_ROW) {
+        auto lk = json::json_value::make_object();
+        lk.add_int("id", stmt.column_int(0));
+        lk.add_int("source_item_id", stmt.column_int(1));
+        lk.add_int("target_item_id", stmt.column_int(2));
+        lk.add_str("link_type", stmt.column_str(3));
+        lk.add_str("source_key", stmt.column_str(4));
+        lk.add_str("source_title", stmt.column_str(5));
+        lk.add_str("source_status", stmt.column_str(6));
+        lk.add_str("source_type", stmt.column_str(7));
+        lk.add_str("target_key", stmt.column_str(8));
+        lk.add_str("target_title", stmt.column_str(9));
+        lk.add_str("target_status", stmt.column_str(10));
+        lk.add_str("target_type", stmt.column_str(11));
+        arr.add(std::move(lk));
+    }
+    send_json(worker, header, "200 OK", arr);
+}
+
 // DELETE /api/links/([0-9]+)
 static void handle_delete_link(backend::wsworker *worker,
                                const std::map<std::string, std::string> &header,
@@ -1554,17 +1807,20 @@ static void handle_delete_link(backend::wsworker *worker,
     send_json(worker, header, "200 OK", res);
 }
 
-// POST /api/items/([0-9]+)/attachments
+// POST /api/items/([A-Za-z0-9_-]+)/attachments
 static void handle_item_attachments(backend::wsworker *worker,
                                     const std::map<std::string, std::string> &header,
                                     const std::list<std::string> &uri_params) {
     if (uri_params.empty()) {
-        send_error(worker, header, "400 Bad Request", "Missing item ID");
+        send_error(worker, header, "400 Bad Request", "Missing item ID or key");
         return;
     }
-    int item_id = std::atoi(uri_params.front().c_str());
-
     db::sqlite_db conn(g_db_path);
+    int item_id = resolve_work_item_id(conn, uri_params.front());
+    if (item_id <= 0) {
+        send_error(worker, header, "404 Not Found", "Work item not found");
+        return;
+    }
     auto u_auth = get_authenticated_user(conn, worker, header);
     if (!u_auth.authenticated) {
         send_error(worker, header, "401 Unauthorized", "Authentication required");
@@ -1802,13 +2058,16 @@ int main(int argc, char *argv[]) {
         {"^/api/users$",                            backend::GET | backend::POST,   handle_users                },
         {"^/api/projects$",                         backend::GET | backend::POST,   handle_projects             },
         {"^/api/sprints$",                          backend::GET | backend::POST,   handle_sprints              },
-        {"^/api/items$",                            backend::GET | backend::POST,   handle_items                },
-        {"^/api/items/([0-9]+)$",                   backend::GET | backend::PUT | backend::DELETE, handle_item_detail },
-        {"^/api/items/([0-9]+)/state$",             backend::PATCH | backend::POST, handle_item_state_transition},
-        {"^/api/items/([0-9]+)/comments$",          backend::POST,                  handle_item_comments        },
-        {"^/api/items/([0-9]+)/links$",             backend::POST,                  handle_item_links           },
-        {"^/api/links/([0-9]+)$",                   backend::DELETE,                handle_delete_link          },
-        {"^/api/items/([0-9]+)/attachments$",       backend::POST,                  handle_item_attachments     },
+        {"^/api/sprints/([0-9]+)$",                 backend::PUT | backend::DELETE, handle_sprint_detail        },
+        {"^/api/sprints/([0-9]+)/current$",         backend::POST,                  handle_sprint_set_current   },
+        {"^/api/items$",                                backend::GET | backend::POST,   handle_items                },
+        {"^/api/items/([A-Za-z0-9_-]+)$",               backend::GET | backend::PUT | backend::DELETE, handle_item_detail },
+        {"^/api/items/([A-Za-z0-9_-]+)/state$",         backend::PATCH | backend::POST, handle_item_state_transition},
+        {"^/api/items/([A-Za-z0-9_-]+)/comments$",      backend::POST,                  handle_item_comments        },
+        {"^/api/items/([A-Za-z0-9_-]+)/links$",         backend::POST,                  handle_item_links           },
+        {"^/api/links$",                                backend::GET,                   handle_all_links            },
+        {"^/api/links/([0-9]+)$",                       backend::DELETE,                handle_delete_link          },
+        {"^/api/items/([A-Za-z0-9_-]+)/attachments$",   backend::POST,                  handle_item_attachments     },
         {"^/api/blobs/([a-zA-Z0-9._-]+)$",          backend::GET,                   handle_blob_download        },
         {"^/api/attachments/([0-9]+)$",             backend::DELETE,                handle_delete_attachment    },
     });

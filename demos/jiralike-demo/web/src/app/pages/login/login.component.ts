@@ -27,20 +27,24 @@ import { ApiService } from '../../services/api.service';
 
         <form (ngSubmit)="submitLogin()" class="setup-form">
           <div class="form-group">
-            <label>Username or Email</label>
+            <label for="login-username">Username or Email</label>
             <input
               type="text"
+              id="login-username"
               name="username"
+              autocomplete="username"
               [(ngModel)]="username"
               required
               placeholder="admin"
             />
           </div>
           <div class="form-group">
-            <label>Password</label>
+            <label for="login-password">Password</label>
             <input
               type="password"
+              id="login-password"
               name="password"
+              autocomplete="current-password"
               [(ngModel)]="password"
               required
               placeholder="••••••••"

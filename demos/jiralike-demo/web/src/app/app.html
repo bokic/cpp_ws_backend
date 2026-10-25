@@ -4,20 +4,29 @@
       <div class="nav-left">
         <a routerLink="/board" class="brand-link">
           <span class="brand-icon">JL</span>
-          <span class="brand-text">{{ api.setupStatus()?.instance_name || 'JiraLike' }}</span>
+          <span class="brand-text">JiraLike</span>
         </a>
 
         <nav class="nav-links">
           <a routerLink="/board" routerLinkActive="active">Kanban Board</a>
-          <a routerLink="/gantt" routerLinkActive="active">Gantt &amp; States</a>
+          <a routerLink="/gantt" routerLinkActive="active">Gantt</a>
+          <a routerLink="/states" routerLinkActive="active">States</a>
           <a routerLink="/workflows" routerLinkActive="active">Backlog &amp; Workflows</a>
+          @if (user.role === 'Admin') {
+            <a routerLink="/sprints" routerLinkActive="active">Sprint Editor</a>
+          }
           <a routerLink="/create" routerLinkActive="active" class="nav-create-btn">+ Create Item</a>
         </nav>
       </div>
 
       <div class="nav-right">
+        @if (api.currentSprint(); as curSprint) {
+          <span class="schema-badge" title="Active Current Sprint">
+            ★ {{ curSprint.name }}
+          </span>
+        }
         <span class="schema-badge" title="SQLite Schema Version">
-          DB Schema v{{ api.setupStatus()?.schema_version || 3 }}
+          DB Schema v{{ api.setupStatus()?.schema_version || 5 }}
         </span>
         <div class="user-pill">
           <span class="avatar-sm" [style.background]="user.avatar_color">

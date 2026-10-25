@@ -1,4 +1,4 @@
-import { Injectable, signal } from '@angular/core';
+import { Injectable, computed, signal } from '@angular/core';
 import {
   AttachmentItem,
   CommentItem,
@@ -26,6 +26,14 @@ export class ApiService {
   readonly activeProject = signal<Project | null>(null);
   readonly users = signal<User[]>([]);
   readonly sprints = signal<Sprint[]>([]);
+  readonly currentSprint = computed<Sprint | null>(() => {
+    const list = this.sprints();
+    return (
+      list.find((s) => s.is_current) ||
+      list.find((s) => s.status === 'active') ||
+      (list.length > 0 ? list[0] : null)
+    );
+  });
 
   private loadStoredUser(): User | null {
     try {
@@ -200,6 +208,7 @@ export class ApiService {
     status: string;
     start_date: string;
     end_date: string;
+    is_current?: boolean;
   }): Promise<Sprint> {
     const s = await this.request<Sprint>('/api/sprints', {
       method: 'POST',
@@ -208,6 +217,42 @@ export class ApiService {
     const list = await this.getSprints();
     this.sprints.set(list);
     return s;
+  }
+
+  async updateSprint(
+    id: number,
+    payload: {
+      project_id: number;
+      name: string;
+      goal: string;
+      status: string;
+      start_date: string;
+      end_date: string;
+      is_current: boolean;
+    }
+  ): Promise<Sprint> {
+    const s = await this.request<Sprint>(`/api/sprints/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    const list = await this.getSprints();
+    this.sprints.set(list);
+    return s;
+  }
+
+  async setCurrentSprint(id: number): Promise<void> {
+    await this.request(`/api/sprints/${id}/current`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    const list = await this.getSprints();
+    this.sprints.set(list);
+  }
+
+  async deleteSprint(id: number): Promise<void> {
+    await this.request(`/api/sprints/${id}`, { method: 'DELETE' });
+    const list = await this.getSprints();
+    this.sprints.set(list);
   }
 
   async getItems(filters: Record<string, string | number | undefined> = {}): Promise<WorkItem[]> {
@@ -221,8 +266,8 @@ export class ApiService {
     return this.request<WorkItem[]>(`/api/items${qs}`);
   }
 
-  async getItemDetail(id: number): Promise<WorkItemDetail> {
-    return this.request<WorkItemDetail>(`/api/items/${id}`);
+  async getItemDetail(idOrKey: string | number): Promise<WorkItemDetail> {
+    return this.request<WorkItemDetail>(`/api/items/${encodeURIComponent(String(idOrKey))}`);
   }
 
   async createItem(payload: Partial<WorkItem>): Promise<WorkItem> {
@@ -232,15 +277,15 @@ export class ApiService {
     });
   }
 
-  async updateItem(id: number, payload: Partial<WorkItem>): Promise<WorkItem> {
-    return this.request<WorkItem>(`/api/items/${id}`, {
+  async updateItem(idOrKey: string | number, payload: Partial<WorkItem>): Promise<WorkItem> {
+    return this.request<WorkItem>(`/api/items/${encodeURIComponent(String(idOrKey))}`, {
       method: 'PUT',
       body: JSON.stringify(payload),
     });
   }
 
   async transitionItemState(
-    id: number,
+    idOrKey: string | number,
     status: WorkflowState,
     extra: {
       progress?: number;
@@ -250,35 +295,49 @@ export class ApiService {
       comment?: string;
     } = {}
   ): Promise<WorkItem> {
-    return this.request<WorkItem>(`/api/items/${id}/state`, {
+    return this.request<WorkItem>(`/api/items/${encodeURIComponent(String(idOrKey))}/state`, {
       method: 'PATCH',
       body: JSON.stringify({ status, ...extra }),
     });
   }
 
-  async deleteItem(id: number): Promise<void> {
-    await this.request(`/api/items/${id}`, { method: 'DELETE' });
+  async deleteItem(idOrKey: string | number): Promise<void> {
+    await this.request(`/api/items/${encodeURIComponent(String(idOrKey))}`, { method: 'DELETE' });
   }
 
-  async addComment(itemId: number, body: string): Promise<CommentItem> {
-    return this.request<CommentItem>(`/api/items/${itemId}/comments`, {
-      method: 'POST',
-      body: JSON.stringify({ body }),
-    });
+  async addComment(itemIdOrKey: string | number, body: string): Promise<CommentItem> {
+    return this.request<CommentItem>(
+      `/api/items/${encodeURIComponent(String(itemIdOrKey))}/comments`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ body }),
+      }
+    );
   }
 
-  async addLink(itemId: number, targetItemId: number, linkType: string): Promise<WorkItemLink> {
-    return this.request<WorkItemLink>(`/api/items/${itemId}/links`, {
-      method: 'POST',
-      body: JSON.stringify({ target_item_id: targetItemId, link_type: linkType }),
-    });
+  async getAllLinks(): Promise<WorkItemLink[]> {
+    return this.request<WorkItemLink[]>('/api/links');
+  }
+
+  async addLink(
+    itemIdOrKey: string | number,
+    targetItemId: number,
+    linkType: string
+  ): Promise<WorkItemLink> {
+    return this.request<WorkItemLink>(
+      `/api/items/${encodeURIComponent(String(itemIdOrKey))}/links`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ target_item_id: targetItemId, link_type: linkType }),
+      }
+    );
   }
 
   async deleteLink(linkId: number): Promise<void> {
     await this.request(`/api/links/${linkId}`, { method: 'DELETE' });
   }
 
-  async uploadAttachment(itemId: number, file: File): Promise<AttachmentItem> {
+  async uploadAttachment(itemIdOrKey: string | number, file: File): Promise<AttachmentItem> {
     const base64 = await new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(String(reader.result || ''));
@@ -286,14 +345,17 @@ export class ApiService {
       reader.readAsDataURL(file);
     });
 
-    return this.request<AttachmentItem>(`/api/items/${itemId}/attachments`, {
-      method: 'POST',
-      body: JSON.stringify({
-        filename: file.name,
-        mime_type: file.type || 'application/octet-stream',
-        content_base64: base64,
-      }),
-    });
+    return this.request<AttachmentItem>(
+      `/api/items/${encodeURIComponent(String(itemIdOrKey))}/attachments`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          filename: file.name,
+          mime_type: file.type || 'application/octet-stream',
+          content_base64: base64,
+        }),
+      }
+    );
   }
 
   async deleteAttachment(attachmentId: number): Promise<void> {

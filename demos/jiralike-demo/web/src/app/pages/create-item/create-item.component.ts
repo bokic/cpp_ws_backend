@@ -7,8 +7,10 @@ import {
   PRIORITIES,
   PriorityType,
   WORKFLOW_STATES,
+  WORK_ITEM_CATEGORIES,
   WORK_ITEM_TYPES,
   WorkItem,
+  WorkItemCategory,
   WorkItemType,
   WorkflowState,
 } from '../../models/jira.models';
@@ -36,9 +38,9 @@ import {
       }
 
       <form (ngSubmit)="submitCreate()" class="card-panel form-panel">
-        <!-- Work Item Type Selector Pills -->
+        <!-- 1. Work Element Type (Hierarchy) Selector Pills -->
         <div class="form-group">
-          <label>Work Element Type</label>
+          <label>1. Work Element Type (Hierarchy Level)</label>
           <div class="type-selector-grid">
             @for (t of itemTypes; track t) {
               <button
@@ -58,10 +60,32 @@ import {
           </div>
         </div>
 
+        <!-- 2. Work Category Selector Pills -->
+        <div class="form-group">
+          <label>2. Work Category (Nature of Work)</label>
+          <div class="type-selector-grid">
+            @for (cat of itemCategories; track cat) {
+              <button
+                type="button"
+                class="type-choice-btn"
+                [class.selected]="form.category === cat"
+                [attr.data-cat]="cat"
+                (click)="form.category = cat"
+              >
+                <span class="cat-dot" [attr.data-cat]="cat"></span>
+                <div>
+                  <strong>{{ cat }}</strong>
+                  <small>{{ categoryDescription(cat) }}</small>
+                </div>
+              </button>
+            }
+          </div>
+        </div>
+
         <div class="grid-3">
           <div class="form-group">
-            <label>Project</label>
-            <select name="project_id" [(ngModel)]="form.project_id">
+            <label for="create-project-id">Project</label>
+            <select id="create-project-id" name="project_id" [(ngModel)]="form.project_id">
               @for (p of api.projects(); track p.id) {
                 <option [ngValue]="p.id">{{ p.key }} — {{ p.name }}</option>
               }
@@ -69,8 +93,8 @@ import {
           </div>
 
           <div class="form-group">
-            <label>Initial Workflow State</label>
-            <select name="status" [(ngModel)]="form.status">
+            <label for="create-status">Initial Workflow State</label>
+            <select id="create-status" name="status" [(ngModel)]="form.status">
               @for (s of states; track s) {
                 <option [value]="s">{{ s }}</option>
               }
@@ -78,8 +102,8 @@ import {
           </div>
 
           <div class="form-group">
-            <label>Priority</label>
-            <select name="priority" [(ngModel)]="form.priority">
+            <label for="create-priority">Priority</label>
+            <select id="create-priority" name="priority" [(ngModel)]="form.priority">
               @for (pr of priorities; track pr) {
                 <option [value]="pr">{{ pr }}</option>
               }
@@ -88,10 +112,12 @@ import {
         </div>
 
         <div class="form-group">
-          <label>Title / Summary *</label>
+          <label for="create-title">Title / Summary *</label>
           <input
             type="text"
+            id="create-title"
             name="title"
+            autocomplete="off"
             [(ngModel)]="form.title"
             required
             placeholder="e.g., Implement OAuth2 token refresh or Fix Kanban card overflow"
@@ -99,8 +125,9 @@ import {
         </div>
 
         <div class="form-group">
-          <label>Description</label>
+          <label for="create-description">Description</label>
           <textarea
+            id="create-description"
             name="description"
             [(ngModel)]="form.description"
             rows="4"
@@ -108,13 +135,13 @@ import {
           ></textarea>
         </div>
 
-        @if (form.type === 'Bug') {
+        @if (form.category === 'Bug') {
           <div class="bug-fields-box">
             <h4>Bug Report Details</h4>
             <div class="grid-2">
               <div class="form-group">
-                <label>Defect Severity</label>
-                <select name="severity" [(ngModel)]="form.severity">
+                <label for="create-severity">Defect Severity</label>
+                <select id="create-severity" name="severity" [(ngModel)]="form.severity">
                   <option value="Minor">Minor</option>
                   <option value="Major">Major</option>
                   <option value="Critical">Critical</option>
@@ -122,8 +149,9 @@ import {
                 </select>
               </div>
               <div class="form-group">
-                <label>Steps to Reproduce</label>
+                <label for="create-steps">Steps to Reproduce</label>
                 <textarea
+                  id="create-steps"
                   name="steps_to_reproduce"
                   [(ngModel)]="form.steps_to_reproduce"
                   rows="3"
@@ -136,10 +164,10 @@ import {
 
         <div class="grid-3">
           <div class="form-group">
-            <label>
+            <label for="create-parent-id">
               {{ form.type === 'Subtask' ? 'Parent Story / Task / Issue *' : 'Parent Epic / Work Item (Optional)' }}
             </label>
-            <select name="parent_id" [(ngModel)]="form.parent_id">
+            <select id="create-parent-id" name="parent_id" [(ngModel)]="form.parent_id">
               <option [ngValue]="0">— None —</option>
               @for (it of existingItems(); track it.id) {
                 <option [ngValue]="it.id">[{{ it.type }}] {{ it.key }}: {{ it.title }}</option>
@@ -148,8 +176,8 @@ import {
           </div>
 
           <div class="form-group">
-            <label>Assignee</label>
-            <select name="assignee_id" [(ngModel)]="form.assignee_id">
+            <label for="create-assignee-id">Assignee</label>
+            <select id="create-assignee-id" name="assignee_id" [(ngModel)]="form.assignee_id">
               <option [ngValue]="0">— Unassigned —</option>
               @for (u of api.users(); track u.id) {
                 <option [ngValue]="u.id">{{ u.display_name }} ({{ u.role }})</option>
@@ -158,11 +186,13 @@ import {
           </div>
 
           <div class="form-group">
-            <label>Sprint</label>
-            <select name="sprint_id" [(ngModel)]="form.sprint_id">
+            <label for="create-sprint-id">Sprint (Defaults to Current Sprint)</label>
+            <select id="create-sprint-id" name="sprint_id" [(ngModel)]="form.sprint_id">
               <option [ngValue]="0">— Backlog (No Sprint) —</option>
               @for (sp of api.sprints(); track sp.id) {
-                <option [ngValue]="sp.id">{{ sp.name }} ({{ sp.status }})</option>
+                <option [ngValue]="sp.id">
+                  {{ sp.is_current ? '★ Current Sprint: ' + sp.name : sp.name + ' (' + sp.status + ')' }}
+                </option>
               }
             </select>
           </div>
@@ -170,25 +200,34 @@ import {
 
         <div class="grid-4">
           <div class="form-group">
-            <label>Story Points</label>
-            <input type="number" name="story_points" min="0" max="100" [(ngModel)]="form.story_points" />
+            <label for="create-story-points">Story Points</label>
+            <input
+              type="number"
+              id="create-story-points"
+              name="story_points"
+              min="0"
+              max="100"
+              [(ngModel)]="form.story_points"
+            />
           </div>
 
           <div class="form-group">
-            <label>Start Date (Gantt)</label>
-            <input type="date" name="start_date" [(ngModel)]="form.start_date" />
+            <label for="create-start-date">Start Date (Gantt)</label>
+            <input type="date" id="create-start-date" name="start_date" [(ngModel)]="form.start_date" />
           </div>
 
           <div class="form-group">
-            <label>Due Date (Gantt)</label>
-            <input type="date" name="due_date" [(ngModel)]="form.due_date" />
+            <label for="create-due-date">Due Date (Gantt)</label>
+            <input type="date" id="create-due-date" name="due_date" [(ngModel)]="form.due_date" />
           </div>
 
           <div class="form-group">
-            <label>Labels (comma-separated)</label>
+            <label for="create-labels">Labels (comma-separated)</label>
             <input
               type="text"
+              id="create-labels"
               name="labels"
+              autocomplete="off"
               [(ngModel)]="form.labels"
               placeholder="backend, sqlite, urgent"
             />
@@ -197,13 +236,14 @@ import {
 
         <!-- File Attachments Upload to blobs/ -->
         <div class="form-group">
-          <label>Attachments (Uploaded to <code>blobs/</code> directory)</label>
+          <label for="create-file-input">Attachments (Uploaded to <code>blobs/</code> directory)</label>
           <div class="upload-dropzone">
             <input
               type="file"
+              id="create-file-input"
+              name="attachments"
               multiple
               (change)="onFilesSelected($event)"
-              id="create-file-input"
             />
             @if (selectedFiles().length > 0) {
               <div class="selected-files-list">
@@ -234,6 +274,7 @@ export class CreateItemComponent implements OnInit {
   private readonly route = inject(ActivatedRoute);
 
   readonly itemTypes = WORK_ITEM_TYPES;
+  readonly itemCategories = WORK_ITEM_CATEGORIES;
   readonly states = WORKFLOW_STATES;
   readonly priorities = PRIORITIES;
 
@@ -245,6 +286,7 @@ export class CreateItemComponent implements OnInit {
   form: {
     project_id: number;
     type: WorkItemType;
+    category: WorkItemCategory;
     status: WorkflowState;
     priority: PriorityType;
     title: string;
@@ -261,6 +303,7 @@ export class CreateItemComponent implements OnInit {
   } = {
     project_id: 1,
     type: 'Task',
+    category: 'New Feature',
     status: 'To Do',
     priority: 'Medium',
     title: '',
@@ -282,9 +325,9 @@ export class CreateItemComponent implements OnInit {
     if (projs.length > 0) {
       this.form.project_id = projs[0].id;
     }
-    const sprs = this.api.sprints();
-    if (sprs.length > 0) {
-      this.form.sprint_id = sprs[0].id;
+    const cur = this.api.currentSprint();
+    if (cur) {
+      this.form.sprint_id = cur.id;
     }
     const items = await this.api.getItems();
     this.existingItems.set(items);
@@ -303,20 +346,25 @@ export class CreateItemComponent implements OnInit {
     switch (t) {
       case 'Epic':
         return 'Large initiative spanning multiple sprints';
-      case 'New Feature':
-        return 'Brand-new product capability or functionality';
-      case 'Improvement':
-        return 'Enhancement or optimization of existing feature';
       case 'Story':
-        return 'User-facing feature or requirement';
+        return 'User-facing story or deliverable';
       case 'Task':
-        return 'Engineering or operational work';
+        return 'Engineering or operational task';
       case 'Subtask':
-        return 'Child step under a parent item';
+        return 'Granular child step under a parent item';
+    }
+  }
+
+  categoryDescription(c: WorkItemCategory): string {
+    switch (c) {
+      case 'New Feature':
+        return 'Brand-new capability or functionality';
+      case 'Improvement':
+        return 'Enhancement or optimization to existing work';
       case 'Bug':
         return 'Software defect or regression';
       case 'Issue':
-        return 'General project issue or blocker';
+        return 'General project issue, risk, or blocker';
     }
   }
 
@@ -342,9 +390,9 @@ export class CreateItemComponent implements OnInit {
     try {
       const created = await this.api.createItem(this.form);
       for (const file of this.selectedFiles()) {
-        await this.api.uploadAttachment(created.id, file);
+        await this.api.uploadAttachment(created.key, file);
       }
-      await this.router.navigate(['/items', created.id]);
+      await this.router.navigate(['/', created.key]);
     } catch (err) {
       this.errorMsg.set((err as Error).message);
     } finally {

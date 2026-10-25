@@ -6,6 +6,7 @@ import { ApiService } from '../../services/api.service';
 import {
   PRIORITIES,
   WORKFLOW_STATES,
+  WORK_ITEM_CATEGORIES,
   WORK_ITEM_TYPES,
   WorkItem,
   WorkItemDetail,
@@ -25,12 +26,13 @@ import {
             <a routerLink="/board">Board</a>
             <span>/</span>
             @if (it.parent_key) {
-              <a [routerLink]="['/items', it.parent_id]" class="parent-link">
+              <a [routerLink]="['/', it.parent_key]" class="parent-link">
                 {{ it.parent_key }}: {{ it.parent_title }}
               </a>
               <span>/</span>
             }
             <span class="type-badge" [attr.data-type]="it.type">{{ it.type }}</span>
+            <span class="cat-badge" [attr.data-cat]="it.category">{{ it.category }}</span>
             <strong class="issue-key-lg">{{ it.key }}</strong>
           </div>
           <div class="toolbar-actions">
@@ -76,21 +78,33 @@ import {
           <div class="detail-main">
             <div class="card-panel">
               <div class="form-group">
-                <label>Title</label>
-                <input type="text" [(ngModel)]="it.title" class="title-input" />
+                <label for="detail-title">Title</label>
+                <input
+                  type="text"
+                  id="detail-title"
+                  name="detail_title"
+                  autocomplete="off"
+                  [(ngModel)]="it.title"
+                  class="title-input"
+                />
               </div>
 
               <div class="form-group">
-                <label>Description</label>
-                <textarea [(ngModel)]="it.description" rows="4"></textarea>
+                <label for="detail-description">Description</label>
+                <textarea
+                  id="detail-description"
+                  name="detail_description"
+                  [(ngModel)]="it.description"
+                  rows="4"
+                ></textarea>
               </div>
 
-              @if (it.type === 'Bug') {
+              @if (it.category === 'Bug') {
                 <div class="bug-fields-box">
                   <div class="grid-2">
                     <div class="form-group">
-                      <label>Severity</label>
-                      <select [(ngModel)]="it.severity">
+                      <label for="detail-severity">Severity</label>
+                      <select id="detail-severity" name="detail_severity" [(ngModel)]="it.severity">
                         <option value="">None</option>
                         <option value="Minor">Minor</option>
                         <option value="Major">Major</option>
@@ -99,8 +113,13 @@ import {
                       </select>
                     </div>
                     <div class="form-group">
-                      <label>Steps to Reproduce</label>
-                      <textarea [(ngModel)]="it.steps_to_reproduce" rows="3"></textarea>
+                      <label for="detail-steps">Steps to Reproduce</label>
+                      <textarea
+                        id="detail-steps"
+                        name="detail_steps"
+                        [(ngModel)]="it.steps_to_reproduce"
+                        rows="3"
+                      ></textarea>
                     </div>
                   </div>
                 </div>
@@ -123,8 +142,8 @@ import {
                   @for (sub of it.subtasks; track sub.id) {
                     <div class="subtask-row">
                       <span class="type-badge" [attr.data-type]="sub.type">{{ sub.type }}</span>
-                      <a [routerLink]="['/items', sub.id]" class="issue-key">{{ sub.key }}</a>
-                      <a [routerLink]="['/items', sub.id]" class="subtask-title">{{ sub.title }}</a>
+                      <a [routerLink]="['/', sub.key]" class="issue-key">{{ sub.key }}</a>
+                      <a [routerLink]="['/', sub.key]" class="subtask-title">{{ sub.title }}</a>
                       <span class="state-pill" [attr.data-state]="sub.status">{{ sub.status }}</span>
                       <span class="text-muted">{{ sub.assignee_name || 'Unassigned' }}</span>
                     </div>
@@ -134,6 +153,9 @@ import {
               <div class="quick-subtask-bar">
                 <input
                   type="text"
+                  id="detail-new-subtask"
+                  name="new_subtask_title"
+                  autocomplete="off"
                   [(ngModel)]="newSubtaskTitle"
                   placeholder="Quick add a Subtask under {{ it.key }}..."
                   (keyup.enter)="quickAddSubtask()"
@@ -155,7 +177,7 @@ import {
                     <div class="subtask-row">
                       <span class="link-type-chip">{{ lk.link_type }}</span>
                       @if (lk.source_item_id === it.id) {
-                        <a [routerLink]="['/items', lk.target_item_id]" class="issue-key">
+                        <a [routerLink]="['/', lk.target_key]" class="issue-key">
                           {{ lk.target_key }}
                         </a>
                         <span class="subtask-title">{{ lk.target_title }}</span>
@@ -163,7 +185,7 @@ import {
                           {{ lk.target_status }}
                         </span>
                       } @else {
-                        <a [routerLink]="['/items', lk.source_item_id]" class="issue-key">
+                        <a [routerLink]="['/', lk.source_key]" class="issue-key">
                           {{ lk.source_key }}
                         </a>
                         <span class="subtask-title">{{ lk.source_title }}</span>
@@ -183,13 +205,18 @@ import {
                 </div>
               }
               <div class="quick-subtask-bar">
-                <select [(ngModel)]="newLinkType" style="max-width: 160px;">
+                <select
+                  id="detail-link-type"
+                  name="new_link_type"
+                  [(ngModel)]="newLinkType"
+                  style="max-width: 160px;"
+                >
                   <option value="blocks">blocks</option>
                   <option value="is_blocked_by">is blocked by</option>
                   <option value="relates_to">relates to</option>
                   <option value="duplicates">duplicates</option>
                 </select>
-                <select [(ngModel)]="newLinkTargetId">
+                <select id="detail-link-target" name="new_link_target_id" [(ngModel)]="newLinkTargetId">
                   <option [ngValue]="0">Select work item to link...</option>
                   @for (other of allItems(); track other.id) {
                     @if (other.id !== it.id) {
@@ -207,9 +234,15 @@ import {
             <div class="card-panel">
               <div class="section-header">
                 <h3>File Attachments in <code>blobs/</code> ({{ it.attachments.length }})</h3>
-                <label class="btn btn-secondary btn-sm upload-btn-label">
+                <label class="btn btn-secondary btn-sm upload-btn-label" for="detail-upload-file">
                   📎 Upload File to blobs/
-                  <input type="file" hidden (change)="uploadFile($event)" />
+                  <input
+                    type="file"
+                    id="detail-upload-file"
+                    name="detail_attachment"
+                    hidden
+                    (change)="uploadFile($event)"
+                  />
                 </label>
               </div>
 
@@ -291,6 +324,9 @@ import {
                 <div class="quick-subtask-bar" style="margin-top: 12px;">
                   <input
                     type="text"
+                    id="detail-new-comment"
+                    name="new_comment_text"
+                    autocomplete="off"
                     [(ngModel)]="newCommentText"
                     placeholder="Add a comment..."
                     (keyup.enter)="postComment()"
@@ -324,8 +360,8 @@ import {
               <h3>Attributes &amp; Scheduling</h3>
 
               <div class="form-group">
-                <label>Work Item Type</label>
-                <select [(ngModel)]="it.type" (change)="saveChanges()">
+                <label for="detail-type">Work Element Type (Hierarchy)</label>
+                <select id="detail-type" name="detail_type" [(ngModel)]="it.type" (change)="saveChanges()">
                   @for (t of itemTypes; track t) {
                     <option [value]="t">{{ t }}</option>
                   }
@@ -333,8 +369,27 @@ import {
               </div>
 
               <div class="form-group">
-                <label>Priority</label>
-                <select [(ngModel)]="it.priority" (change)="saveChanges()">
+                <label for="detail-category">Work Category</label>
+                <select
+                  id="detail-category"
+                  name="detail_category"
+                  [(ngModel)]="it.category"
+                  (change)="saveChanges()"
+                >
+                  @for (c of itemCategories; track c) {
+                    <option [value]="c">{{ c }}</option>
+                  }
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label for="detail-priority">Priority</label>
+                <select
+                  id="detail-priority"
+                  name="detail_priority"
+                  [(ngModel)]="it.priority"
+                  (change)="saveChanges()"
+                >
                   @for (p of priorities; track p) {
                     <option [value]="p">{{ p }}</option>
                   }
@@ -342,8 +397,13 @@ import {
               </div>
 
               <div class="form-group">
-                <label>Assignee</label>
-                <select [(ngModel)]="it.assignee_id" (change)="saveChanges()">
+                <label for="detail-assignee">Assignee</label>
+                <select
+                  id="detail-assignee"
+                  name="detail_assignee_id"
+                  [(ngModel)]="it.assignee_id"
+                  (change)="saveChanges()"
+                >
                   <option [ngValue]="null">— Unassigned —</option>
                   @for (u of api.users(); track u.id) {
                     <option [ngValue]="u.id">{{ u.display_name }} ({{ u.role }})</option>
@@ -352,8 +412,13 @@ import {
               </div>
 
               <div class="form-group">
-                <label>Sprint</label>
-                <select [(ngModel)]="it.sprint_id" (change)="saveChanges()">
+                <label for="detail-sprint">Sprint</label>
+                <select
+                  id="detail-sprint"
+                  name="detail_sprint_id"
+                  [(ngModel)]="it.sprint_id"
+                  (change)="saveChanges()"
+                >
                   <option [ngValue]="null">— Backlog —</option>
                   @for (s of api.sprints(); track s.id) {
                     <option [ngValue]="s.id">{{ s.name }}</option>
@@ -362,8 +427,13 @@ import {
               </div>
 
               <div class="form-group">
-                <label>Parent Item</label>
-                <select [(ngModel)]="it.parent_id" (change)="saveChanges()">
+                <label for="detail-parent">Parent Item</label>
+                <select
+                  id="detail-parent"
+                  name="detail_parent_id"
+                  [(ngModel)]="it.parent_id"
+                  (change)="saveChanges()"
+                >
                   <option [ngValue]="null">— None —</option>
                   @for (other of allItems(); track other.id) {
                     @if (other.id !== it.id) {
@@ -375,13 +445,21 @@ import {
 
               <div class="grid-2">
                 <div class="form-group">
-                  <label>Story Points</label>
-                  <input type="number" [(ngModel)]="it.story_points" (change)="saveChanges()" />
-                </div>
-                <div class="form-group">
-                  <label>Progress ({{ it.progress }}%)</label>
+                  <label for="detail-story-points">Story Points</label>
                   <input
                     type="number"
+                    id="detail-story-points"
+                    name="detail_story_points"
+                    [(ngModel)]="it.story_points"
+                    (change)="saveChanges()"
+                  />
+                </div>
+                <div class="form-group">
+                  <label for="detail-progress">Progress ({{ it.progress }}%)</label>
+                  <input
+                    type="number"
+                    id="detail-progress"
+                    name="detail_progress"
                     min="0"
                     max="100"
                     [(ngModel)]="it.progress"
@@ -392,18 +470,37 @@ import {
 
               <div class="grid-2">
                 <div class="form-group">
-                  <label>Start Date</label>
-                  <input type="date" [(ngModel)]="it.start_date" (change)="saveChanges()" />
+                  <label for="detail-start-date">Start Date</label>
+                  <input
+                    type="date"
+                    id="detail-start-date"
+                    name="detail_start_date"
+                    [(ngModel)]="it.start_date"
+                    (change)="saveChanges()"
+                  />
                 </div>
                 <div class="form-group">
-                  <label>Due Date</label>
-                  <input type="date" [(ngModel)]="it.due_date" (change)="saveChanges()" />
+                  <label for="detail-due-date">Due Date</label>
+                  <input
+                    type="date"
+                    id="detail-due-date"
+                    name="detail_due_date"
+                    [(ngModel)]="it.due_date"
+                    (change)="saveChanges()"
+                  />
                 </div>
               </div>
 
               <div class="form-group">
-                <label>Labels</label>
-                <input type="text" [(ngModel)]="it.labels" (change)="saveChanges()" />
+                <label for="detail-labels">Labels</label>
+                <input
+                  type="text"
+                  id="detail-labels"
+                  name="detail_labels"
+                  autocomplete="off"
+                  [(ngModel)]="it.labels"
+                  (change)="saveChanges()"
+                />
               </div>
 
               <div class="meta-timestamps">
@@ -425,6 +522,7 @@ export class ItemDetailComponent implements OnInit {
 
   readonly states = WORKFLOW_STATES;
   readonly itemTypes = WORK_ITEM_TYPES;
+  readonly itemCategories = WORK_ITEM_CATEGORIES;
   readonly priorities = PRIORITIES;
 
   readonly item = signal<WorkItemDetail | null>(null);
@@ -443,33 +541,34 @@ export class ItemDetailComponent implements OnInit {
     this.allItems.set(list);
 
     this.route.paramMap.subscribe(async (params) => {
-      const id = Number(params.get('id'));
-      if (id > 0) {
-        await this.reloadDetail(id);
+      const idOrKey = params.get('id')?.trim();
+      if (idOrKey) {
+        await this.reloadDetail(idOrKey);
       }
     });
   }
 
-  async reloadDetail(id: number): Promise<void> {
-    const d = await this.api.getItemDetail(id);
+  async reloadDetail(idOrKey: string | number): Promise<void> {
+    const d = await this.api.getItemDetail(idOrKey);
     this.item.set(d);
   }
 
   async transitionState(newState: WorkflowState): Promise<void> {
     const cur = this.item();
     if (!cur || cur.status === newState) return;
-    await this.api.transitionItemState(cur.id, newState, {
+    await this.api.transitionItemState(cur.key, newState, {
       comment: `Transitioned to '${newState}' from Item Detail page`,
     });
-    await this.reloadDetail(cur.id);
+    await this.reloadDetail(cur.key);
     this.showToast(`${cur.key} transitioned to ${newState}`);
   }
 
   async saveChanges(): Promise<void> {
     const cur = this.item();
     if (!cur) return;
-    await this.api.updateItem(cur.id, {
+    await this.api.updateItem(cur.key, {
       type: cur.type,
+      category: cur.category,
       status: cur.status,
       priority: cur.priority,
       title: cur.title,
@@ -485,7 +584,7 @@ export class ItemDetailComponent implements OnInit {
       steps_to_reproduce: cur.steps_to_reproduce,
       labels: cur.labels,
     });
-    await this.reloadDetail(cur.id);
+    await this.reloadDetail(cur.key);
     this.showToast(`Saved changes to ${cur.key}`);
   }
 
@@ -495,6 +594,7 @@ export class ItemDetailComponent implements OnInit {
     await this.api.createItem({
       project_id: cur.project_id,
       type: 'Subtask',
+      category: cur.category || 'New Feature',
       status: 'To Do',
       priority: 'Medium',
       title: this.newSubtaskTitle.trim(),
@@ -505,16 +605,16 @@ export class ItemDetailComponent implements OnInit {
       due_date: cur.due_date,
     });
     this.newSubtaskTitle = '';
-    await this.reloadDetail(cur.id);
+    await this.reloadDetail(cur.key);
     this.showToast('Subtask created');
   }
 
   async addIssueLink(): Promise<void> {
     const cur = this.item();
     if (!cur || this.newLinkTargetId <= 0) return;
-    await this.api.addLink(cur.id, this.newLinkTargetId, this.newLinkType);
+    await this.api.addLink(cur.key, this.newLinkTargetId, this.newLinkType);
     this.newLinkTargetId = 0;
-    await this.reloadDetail(cur.id);
+    await this.reloadDetail(cur.key);
     this.showToast('Issue link added');
   }
 
@@ -522,7 +622,7 @@ export class ItemDetailComponent implements OnInit {
     const cur = this.item();
     if (!cur) return;
     await this.api.deleteLink(linkId);
-    await this.reloadDetail(cur.id);
+    await this.reloadDetail(cur.key);
   }
 
   async uploadFile(event: Event): Promise<void> {
@@ -530,9 +630,9 @@ export class ItemDetailComponent implements OnInit {
     const input = event.target as HTMLInputElement;
     if (!cur || !input.files || input.files.length === 0) return;
     const file = input.files[0];
-    await this.api.uploadAttachment(cur.id, file);
+    await this.api.uploadAttachment(cur.key, file);
     input.value = '';
-    await this.reloadDetail(cur.id);
+    await this.reloadDetail(cur.key);
     this.showToast(`Uploaded '${file.name}' to blobs/`);
   }
 
@@ -540,22 +640,22 @@ export class ItemDetailComponent implements OnInit {
     const cur = this.item();
     if (!cur) return;
     await this.api.deleteAttachment(attId);
-    await this.reloadDetail(cur.id);
+    await this.reloadDetail(cur.key);
     this.showToast('Attachment removed from blobs/');
   }
 
   async postComment(): Promise<void> {
     const cur = this.item();
     if (!cur || !this.newCommentText.trim()) return;
-    await this.api.addComment(cur.id, this.newCommentText.trim());
+    await this.api.addComment(cur.key, this.newCommentText.trim());
     this.newCommentText = '';
-    await this.reloadDetail(cur.id);
+    await this.reloadDetail(cur.key);
   }
 
   async deleteCurrentItem(): Promise<void> {
     const cur = this.item();
     if (!cur) return;
-    await this.api.deleteItem(cur.id);
+    await this.api.deleteItem(cur.key);
     await this.router.navigate(['/board']);
   }
 

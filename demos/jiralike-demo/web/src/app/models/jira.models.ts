@@ -1,12 +1,6 @@
-export type WorkItemType =
-  | 'Epic'
-  | 'New Feature'
-  | 'Improvement'
-  | 'Story'
-  | 'Task'
-  | 'Subtask'
-  | 'Bug'
-  | 'Issue';
+export type WorkItemType = 'Epic' | 'Story' | 'Task' | 'Subtask';
+
+export type WorkItemCategory = 'New Feature' | 'Improvement' | 'Bug' | 'Issue';
 
 export type WorkflowState =
   | 'Backlog'
@@ -21,11 +15,14 @@ export type PriorityType = 'Lowest' | 'Low' | 'Medium' | 'High' | 'Highest' | 'C
 
 export const WORK_ITEM_TYPES: WorkItemType[] = [
   'Epic',
-  'New Feature',
-  'Improvement',
   'Story',
   'Task',
   'Subtask',
+];
+
+export const WORK_ITEM_CATEGORIES: WorkItemCategory[] = [
+  'New Feature',
+  'Improvement',
   'Bug',
   'Issue',
 ];
@@ -93,6 +90,10 @@ export interface Sprint {
   status: 'planned' | 'active' | 'closed';
   start_date: string;
   end_date: string;
+  is_current: boolean;
+  item_count?: number;
+  done_count?: number;
+  total_points?: number;
   created_at?: string;
 }
 
@@ -101,6 +102,7 @@ export interface WorkItem {
   project_id: number;
   key: string;
   type: WorkItemType;
+  category: WorkItemCategory;
   status: WorkflowState;
   priority: PriorityType;
   title: string;

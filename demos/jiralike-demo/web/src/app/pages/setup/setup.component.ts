@@ -52,20 +52,24 @@ import { ApiService } from '../../services/api.service';
             <h3>1. Workspace &amp; Initial Project</h3>
             <div class="grid-2">
               <div class="form-group">
-                <label>Workspace Instance Name</label>
+                <label for="setup-instance-name">Workspace Instance Name</label>
                 <input
                   type="text"
+                  id="setup-instance-name"
                   name="instance_name"
+                  autocomplete="organization"
                   [(ngModel)]="form.instance_name"
                   required
                   placeholder="JiraLike Engineering Hub"
                 />
               </div>
               <div class="form-group">
-                <label>Project Key Prefix</label>
+                <label for="setup-project-key">Project Key Prefix</label>
                 <input
                   type="text"
+                  id="setup-project-key"
                   name="project_key"
+                  autocomplete="off"
                   [(ngModel)]="form.project_key"
                   required
                   maxlength="8"
@@ -75,20 +79,24 @@ import { ApiService } from '../../services/api.service';
             </div>
             <div class="grid-2">
               <div class="form-group">
-                <label>Initial Project Name</label>
+                <label for="setup-project-name">Initial Project Name</label>
                 <input
                   type="text"
+                  id="setup-project-name"
                   name="project_name"
+                  autocomplete="off"
                   [(ngModel)]="form.project_name"
                   required
                   placeholder="Core Platform Development"
                 />
               </div>
               <div class="form-group">
-                <label>Project Description</label>
+                <label for="setup-project-desc">Project Description</label>
                 <input
                   type="text"
+                  id="setup-project-desc"
                   name="project_description"
+                  autocomplete="off"
                   [(ngModel)]="form.project_description"
                   placeholder="Agile issue tracking, Kanban board, and Gantt timeline"
                 />
@@ -100,19 +108,23 @@ import { ApiService } from '../../services/api.service';
             <h3>2. Administrator Account</h3>
             <div class="grid-2">
               <div class="form-group">
-                <label>Admin Username</label>
+                <label for="setup-admin-username">Admin Username</label>
                 <input
                   type="text"
+                  id="setup-admin-username"
                   name="admin_username"
+                  autocomplete="username"
                   [(ngModel)]="form.admin_username"
                   required
                 />
               </div>
               <div class="form-group">
-                <label>Display Name</label>
+                <label for="setup-admin-display-name">Display Name</label>
                 <input
                   type="text"
+                  id="setup-admin-display-name"
                   name="admin_display_name"
+                  autocomplete="name"
                   [(ngModel)]="form.admin_display_name"
                   required
                 />
@@ -120,19 +132,23 @@ import { ApiService } from '../../services/api.service';
             </div>
             <div class="grid-2">
               <div class="form-group">
-                <label>Admin Email</label>
+                <label for="setup-admin-email">Admin Email</label>
                 <input
                   type="email"
+                  id="setup-admin-email"
                   name="admin_email"
+                  autocomplete="email"
                   [(ngModel)]="form.admin_email"
                   required
                 />
               </div>
               <div class="form-group">
-                <label>Admin Password</label>
+                <label for="setup-admin-password">Admin Password</label>
                 <input
                   type="password"
+                  id="setup-admin-password"
                   name="admin_password"
+                  autocomplete="new-password"
                   [(ngModel)]="form.admin_password"
                   required
                 />
@@ -141,9 +157,10 @@ import { ApiService } from '../../services/api.service';
           </div>
 
           <div class="form-section seed-box">
-            <label class="checkbox-label">
+            <label class="checkbox-label" for="setup-seed-demo">
               <input
                 type="checkbox"
+                id="setup-seed-demo"
                 name="seed_demo_data"
                 [(ngModel)]="form.seed_demo_data"
               />
@@ -175,7 +192,7 @@ export class SetupComponent implements OnInit {
   readonly errorMsg = signal('');
 
   form = {
-    instance_name: 'JiraLike Agile Workspace',
+    instance_name: 'JiraLike',
     project_key: 'JIRA',
     project_name: 'Core Platform Development',
     project_description: 'Agile project tracking with SQLite, FastCGI, and Angular SPA',

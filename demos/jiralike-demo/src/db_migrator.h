@@ -11,7 +11,7 @@
 
 namespace db {
 
-static constexpr int LATEST_SCHEMA_VERSION = 4;
+static constexpr int LATEST_SCHEMA_VERSION = 6;
 
 struct migration_step {
     int version;
@@ -221,6 +221,39 @@ WHERE p.id = 1
 UPDATE projects
 SET issue_seq = (SELECT COUNT(*) FROM work_items WHERE project_id = projects.id)
 WHERE id = 1;
+)SQL"
+        },
+        {
+            5,
+            "db/migrations/005_current_sprint.sql",
+            "Add is_current flag to sprints table to define the Current Sprint",
+            R"SQL(
+ALTER TABLE sprints ADD COLUMN is_current INTEGER NOT NULL DEFAULT 0;
+
+UPDATE sprints
+SET is_current = 1
+WHERE id = (
+    SELECT id FROM sprints WHERE status = 'active' ORDER BY id ASC LIMIT 1
+)
+AND NOT EXISTS (SELECT 1 FROM sprints WHERE is_current = 1);
+)SQL"
+        },
+        {
+            6,
+            "db/migrations/006_work_item_category.sql",
+            "Separate work item Hierarchy Type (Epic, Story, Task, Subtask) and Category (New Feature, Improvement, Bug, Issue)",
+            R"SQL(
+ALTER TABLE work_items ADD COLUMN category TEXT NOT NULL DEFAULT 'New Feature';
+
+UPDATE work_items SET category = 'Bug',         type = 'Task'  WHERE type = 'Bug';
+UPDATE work_items SET category = 'New Feature', type = 'Story' WHERE type = 'New Feature';
+UPDATE work_items SET category = 'Improvement', type = 'Task'  WHERE type = 'Improvement';
+UPDATE work_items SET category = 'Issue',       type = 'Task'  WHERE type = 'Issue';
+
+UPDATE work_items SET category = 'Improvement' WHERE type = 'Task' AND category = 'New Feature' AND (id % 2 = 0);
+UPDATE work_items SET category = 'Improvement' WHERE type = 'Subtask' AND (id % 2 = 1);
+
+CREATE INDEX IF NOT EXISTS idx_work_items_category ON work_items(category);
 )SQL"
         }
     };

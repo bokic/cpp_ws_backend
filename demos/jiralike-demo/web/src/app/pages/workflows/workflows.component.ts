@@ -88,21 +88,25 @@ import { WORKFLOW_STATES, WorkItem, WorkflowState } from '../../models/jira.mode
             <div class="grid-2">
               <input
                 type="text"
-                name="spName"
+                id="wf-sprint-name"
+                name="sprint_title"
+                autocomplete="off"
                 [(ngModel)]="newSprint.name"
                 placeholder="New Sprint Name (e.g., Sprint 3)"
                 required
               />
               <input
                 type="text"
-                name="spGoal"
+                id="wf-sprint-goal"
+                name="sprint_goal"
+                autocomplete="off"
                 [(ngModel)]="newSprint.goal"
                 placeholder="Sprint Goal"
               />
             </div>
             <div class="grid-3" style="margin-top: 8px;">
-              <input type="date" name="spStart" [(ngModel)]="newSprint.start_date" />
-              <input type="date" name="spEnd" [(ngModel)]="newSprint.end_date" />
+              <input type="date" id="wf-sprint-start" name="spStart" [(ngModel)]="newSprint.start_date" />
+              <input type="date" id="wf-sprint-end" name="spEnd" [(ngModel)]="newSprint.end_date" />
               <button type="submit" class="btn btn-secondary">+ Create Sprint</button>
             </div>
           </form>
@@ -126,19 +130,23 @@ import { WORKFLOW_STATES, WorkItem, WorkflowState } from '../../models/jira.mode
             <div class="grid-3">
               <input
                 type="text"
-                name="uName"
+                id="wf-user-username"
+                name="username"
+                autocomplete="username"
                 [(ngModel)]="newUser.username"
                 placeholder="username"
                 required
               />
               <input
                 type="text"
-                name="dName"
+                id="wf-user-display-name"
+                name="display_name"
+                autocomplete="name"
                 [(ngModel)]="newUser.display_name"
                 placeholder="Full Name"
                 required
               />
-              <select name="uRole" [(ngModel)]="newUser.role">
+              <select id="wf-user-role" name="uRole" [(ngModel)]="newUser.role">
                 <option value="Developer">Developer</option>
                 <option value="Project Manager">Project Manager</option>
                 <option value="QA Engineer">QA Engineer</option>
@@ -161,6 +169,7 @@ import { WORKFLOW_STATES, WorkItem, WorkflowState } from '../../models/jira.mode
             <thead>
               <tr>
                 <th>Type</th>
+                <th>Category</th>
                 <th>Key</th>
                 <th>Title</th>
                 <th>Parent</th>
@@ -174,9 +183,10 @@ import { WORKFLOW_STATES, WorkItem, WorkflowState } from '../../models/jira.mode
               @for (it of items(); track it.id) {
                 <tr>
                   <td><span class="type-badge" [attr.data-type]="it.type">{{ it.type }}</span></td>
-                  <td><a [routerLink]="['/items', it.id]" class="issue-key">{{ it.key }}</a></td>
+                  <td><span class="cat-badge" [attr.data-cat]="it.category">{{ it.category }}</span></td>
+                  <td><a [routerLink]="['/', it.key]" class="issue-key">{{ it.key }}</a></td>
                   <td>
-                    <a [routerLink]="['/items', it.id]" class="table-title-link">{{ it.title }}</a>
+                    <a [routerLink]="['/', it.key]" class="table-title-link">{{ it.title }}</a>
                   </td>
                   <td>{{ it.parent_key || '—' }}</td>
                   <td>{{ it.sprint_name || 'Backlog' }}</td>
@@ -185,6 +195,9 @@ import { WORKFLOW_STATES, WorkItem, WorkflowState } from '../../models/jira.mode
                   <td>
                     <select
                       class="state-select"
+                      [id]="'wf-item-state-' + it.id"
+                      [name]="'wf_item_state_' + it.id"
+                      [attr.name]="'wf_item_state_' + it.id"
                       [attr.data-state]="it.status"
                       [ngModel]="it.status"
                       (ngModelChange)="changeItemState(it, $event)"
@@ -257,7 +270,7 @@ export class WorkflowsComponent implements OnInit {
 
   async changeItemState(item: WorkItem, newState: WorkflowState): Promise<void> {
     if (item.status === newState) return;
-    const updated = await this.api.transitionItemState(item.id, newState, {
+    const updated = await this.api.transitionItemState(item.key, newState, {
       comment: `Transitioned to '${newState}' from Workflows & Backlog page`,
     });
     this.items.update((list) => list.map((i) => (i.id === item.id ? updated : i)));
