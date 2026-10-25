@@ -1056,12 +1056,22 @@ input:focus, select:focus, textarea:focus {
 }
 
 .toast-banner {
+  position: fixed;
+  top: 68px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
   background: #00875a;
   color: #fff;
-  padding: 10px 16px;
+  padding: 10px 20px;
   border-radius: 6px;
-  margin-bottom: 14px;
   font-weight: 600;
+  box-shadow: 0 6px 20px rgba(9, 30, 66, 0.28);
+  pointer-events: none;
+  white-space: nowrap;
+  max-width: calc(100vw - 32px);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .alert-error {
