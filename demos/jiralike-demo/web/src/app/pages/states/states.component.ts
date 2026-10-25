@@ -20,6 +20,11 @@ interface GanttDay {
   selector: 'app-states',
   standalone: true,
   imports: [CommonModule, FormsModule, RouterLink],
+  host: {
+    '(window:mouseup)': 'onSliderEnd()',
+    '(window:pointerup)': 'onSliderEnd()',
+    '(window:touchend)': 'onSliderEnd()',
+  },
   template: `
     <div class="page-container">
       <div class="page-toolbar">
@@ -51,8 +56,8 @@ interface GanttDay {
               </option>
             }
           </select>
-          <a routerLink="/gantt" class="btn btn-secondary">Open Gantt Tree-Grid</a>
-          <a routerLink="/board" class="btn btn-secondary">Switch to Kanban Columns</a>
+          <a routerLink="/gantt" class="btn btn-secondary" style="text-align: center; line-height: 1.2;">Switch to<br />Gantt</a>
+          <a routerLink="/board" class="btn btn-secondary" style="text-align: center; line-height: 1.2;">Switch to<br />Kanban</a>
           <a routerLink="/create" class="btn btn-primary">+ Create Work Item</a>
         </div>
       </div>
@@ -80,15 +85,43 @@ interface GanttDay {
             </div>
           }
         </div>
+
+        <div style="display: flex; align-items: center; gap: 8px; margin-left: auto;">
+          <span class="strip-label">Visible Columns:</span>
+          <label class="state-check-pill" [class.checked]="showStateCol()" for="states-col-state">
+            <input
+              type="checkbox"
+              id="states-col-state"
+              name="states_col_state"
+              [checked]="showStateCol()"
+              (change)="showStateCol.set(!showStateCol())"
+            />
+            <span>Current State</span>
+          </label>
+          <label class="state-check-pill" [class.checked]="showProgressCol()" for="states-col-progress">
+            <input
+              type="checkbox"
+              id="states-col-progress"
+              name="states_col_progress"
+              [checked]="showProgressCol()"
+              (change)="showProgressCol.set(!showProgressCol())"
+            />
+            <span>Progress</span>
+          </label>
+        </div>
       </div>
 
       <!-- States Matrix Grouped by Workflow State -->
       <div class="gantt-wrapper">
         <div class="gantt-table">
-          <div class="gantt-header-row">
+          <div class="gantt-header-row" [style.gridTemplateColumns]="gridTemplateColumns()">
             <div class="gantt-col-info">Work Element (Drag to Move State)</div>
-            <div class="gantt-col-state">Current State</div>
-            <div class="gantt-col-progress">Progress</div>
+            @if (showStateCol()) {
+              <div class="gantt-col-state">Current State</div>
+            }
+            @if (showProgressCol()) {
+              <div class="gantt-col-progress">Progress</div>
+            }
             <div class="gantt-col-timeline">
               <div class="timeline-days-header">
                 @for (d of timelineDays(); track d.iso) {
@@ -119,53 +152,71 @@ interface GanttDay {
               @for (item of itemsByState(state); track item.id) {
                 <div
                   class="gantt-row"
-                  draggable="true"
+                  [style.gridTemplateColumns]="gridTemplateColumns()"
+                  [attr.draggable]="!sliderActive()"
                   [class.dragging]="draggedItem()?.id === item.id"
                   (dragstart)="onDragStart($event, item)"
                   (dragend)="onDragEnd()"
                 >
                   <div class="gantt-col-info">
                     <span class="drag-handle" title="Drag to another state">⋮⋮</span>
-                    <span class="type-badge" [attr.data-type]="item.type">{{ item.type }}</span>
-                    <span class="cat-badge" [attr.data-cat]="item.category">{{ item.category }}</span>
+                    <div class="states-badges-stack">
+                      <span class="type-badge" [attr.data-type]="item.type">{{ item.type }}</span>
+                      <span class="cat-badge" [attr.data-cat]="item.category">{{ item.category }}</span>
+                    </div>
                     <a [routerLink]="['/', item.key]" class="issue-key">{{ item.key }}</a>
                     <a [routerLink]="['/', item.key]" class="gantt-item-title" [title]="item.title">
                       {{ item.title }}
                     </a>
                   </div>
 
-                  <div class="gantt-col-state">
-                    <select
-                      class="state-select"
-                      [id]="'states-item-status-' + item.id"
-                      [name]="'states_item_status_' + item.id"
-                      [attr.name]="'states_item_status_' + item.id"
-                      [attr.data-state]="item.status"
-                      [ngModel]="item.status"
-                      (ngModelChange)="onQuickStateChange(item, $event)"
-                    >
-                      @for (st of states; track st) {
-                        <option [value]="st">{{ st }}</option>
-                      }
-                    </select>
-                  </div>
-
-                  <div class="gantt-col-progress">
-                    <div class="gantt-progress-control">
-                      <input
-                        type="range"
-                        [id]="'states-item-progress-' + item.id"
-                        [name]="'states_item_progress_' + item.id"
-                        [attr.name]="'states_item_progress_' + item.id"
-                        min="0"
-                        max="100"
-                        step="5"
-                        [ngModel]="item.progress"
-                        (change)="onProgressChange(item, $any($event.target).value)"
-                      />
-                      <span>{{ item.progress }}%</span>
+                  @if (showStateCol()) {
+                    <div class="gantt-col-state">
+                      <select
+                        class="state-select"
+                        [id]="'states-item-status-' + item.id"
+                        [name]="'states_item_status_' + item.id"
+                        [attr.name]="'states_item_status_' + item.id"
+                        [attr.data-state]="item.status"
+                        [ngModel]="item.status"
+                        (ngModelChange)="onQuickStateChange(item, $event)"
+                      >
+                        @for (st of states; track st) {
+                          <option [value]="st">{{ st }}</option>
+                        }
+                      </select>
                     </div>
-                  </div>
+                  }
+
+                  @if (showProgressCol()) {
+                    <div
+                      class="gantt-col-progress"
+                      (mousedown)="onSliderStart()"
+                      (pointerdown)="onSliderStart()"
+                      (touchstart)="onSliderStart()"
+                    >
+                      <div class="gantt-progress-control">
+                        <input
+                          type="range"
+                          draggable="false"
+                          [id]="'states-item-progress-' + item.id"
+                          [name]="'states_item_progress_' + item.id"
+                          [attr.name]="'states_item_progress_' + item.id"
+                          min="0"
+                          max="100"
+                          step="5"
+                          [ngModel]="item.progress"
+                          (mousedown)="onSliderStart()"
+                          (pointerdown)="onSliderStart()"
+                          (touchstart)="onSliderStart()"
+                          (dragstart)="$event.preventDefault(); $event.stopPropagation()"
+                          (input)="onProgressInput(item, $any($event.target).value)"
+                          (change)="onProgressChange(item, $any($event.target).value)"
+                        />
+                        <span>{{ item.progress }}%</span>
+                      </div>
+                    </div>
+                  }
 
                   <div class="gantt-col-timeline">
                     <div class="timeline-grid-bg">
@@ -206,9 +257,20 @@ export class StatesComponent implements OnInit {
   readonly states = WORKFLOW_STATES;
   readonly items = signal<WorkItem[]>([]);
   readonly selectedSprint = signal<string>('');
+  readonly showStateCol = signal<boolean>(false);
+  readonly showProgressCol = signal<boolean>(false);
   readonly draggedItem = signal<WorkItem | null>(null);
   readonly dragOverState = signal<WorkflowState | null>(null);
+  readonly sliderActive = signal<boolean>(false);
   readonly toastMsg = signal('');
+
+  readonly gridTemplateColumns = computed(() => {
+    const cols = ['380px'];
+    if (this.showStateCol()) cols.push('150px');
+    if (this.showProgressCol()) cols.push('140px');
+    cols.push('1fr');
+    return cols.join(' ');
+  });
 
   readonly windowStart = new Date('2026-10-14T00:00:00');
   readonly totalDays = 28;
@@ -278,7 +340,29 @@ export class StatesComponent implements OnInit {
     return Math.min(100 - leftPct, Math.max(7, rawPct));
   }
 
+  onSliderStart(): void {
+    this.sliderActive.set(true);
+  }
+
+  onSliderEnd(): void {
+    if (this.sliderActive()) {
+      this.sliderActive.set(false);
+    }
+  }
+
   onDragStart(event: DragEvent, item: WorkItem): void {
+    const target = event.target as HTMLElement | null;
+    if (
+      this.sliderActive() ||
+      target?.tagName === 'INPUT' ||
+      target?.tagName === 'SELECT' ||
+      target?.closest('.gantt-col-progress') ||
+      target?.closest('.gantt-col-state')
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     this.draggedItem.set(item);
     if (event.dataTransfer) {
       event.dataTransfer.effectAllowed = 'move';
@@ -287,6 +371,9 @@ export class StatesComponent implements OnInit {
   }
 
   onDragOver(event: DragEvent, state: WorkflowState): void {
+    if (this.sliderActive() || !this.draggedItem()) {
+      return;
+    }
     event.preventDefault();
     this.dragOverState.set(state);
   }
@@ -300,6 +387,7 @@ export class StatesComponent implements OnInit {
   onDragEnd(): void {
     this.draggedItem.set(null);
     this.dragOverState.set(null);
+    this.sliderActive.set(false);
   }
 
   async onDropToState(event: DragEvent, targetState: WorkflowState): Promise<void> {
@@ -325,7 +413,15 @@ export class StatesComponent implements OnInit {
     }
   }
 
+  onProgressInput(item: WorkItem, valStr: string): void {
+    const progress = Number(valStr) || 0;
+    this.items.update((list) =>
+      list.map((i) => (i.id === item.id ? { ...i, progress } : i))
+    );
+  }
+
   async onProgressChange(item: WorkItem, valStr: string): Promise<void> {
+    this.sliderActive.set(false);
     const progress = Number(valStr) || 0;
     try {
       const updated = await this.api.transitionItemState(item.key, item.status, {
