@@ -318,18 +318,13 @@ inline void ensure_storage_and_migrate(const std::string &db_path, const std::st
                           << ": " << step.description << "..." << std::endl;
                 std::string sql = load_migration_sql(step);
 
-                conn.exec("BEGIN IMMEDIATE;");
-                try {
-                    conn.exec(sql);
-                    auto ins = conn.prepare("INSERT INTO schema_version (version, description) VALUES (?, ?);");
-                    ins.bind_int(1, step.version);
-                    ins.bind_text(2, step.description);
-                    ins.step_done();
-                    conn.exec("COMMIT;");
-                } catch (...) {
-                    try { conn.exec("ROLLBACK;"); } catch (...) {}
-                    throw;
-                }
+                sqlite_transaction tx(conn);
+                conn.exec(sql);
+                auto ins = conn.prepare("INSERT INTO schema_version (version, description) VALUES (?, ?);");
+                ins.bind_int(1, step.version);
+                ins.bind_text(2, step.description);
+                ins.step_done();
+                tx.commit();
                 current_version = step.version;
             }
         }

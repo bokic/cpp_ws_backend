@@ -21,6 +21,17 @@
 #include <atomic>
 
 
+static db::sqlite_db &acquire_db_connection(const std::string &db_pathname = "chinook.db")
+{
+    thread_local db::sqlite_db tl_db;
+    if (!tl_db || tl_db.path() != db_pathname) {
+        tl_db.open(db_pathname);
+    } else {
+        tl_db.reset_for_request();
+    }
+    return tl_db;
+}
+
 static bool is_valid_callback(const std::string &callback)
 {
     if (callback.empty() || callback.size() > 128) {
@@ -36,7 +47,7 @@ static void wsdatabase_sqlite_write_json(FCGX_Stream *out_stream, const char *se
         throw std::invalid_argument("Invalid callback parameter");
     }
 
-    db::sqlite_db db(db_pathname);
+    db::sqlite_db &db = acquire_db_connection(db_pathname);
 
     auto count_stmt = db.prepare(count_sql);
     if (count_stmt.step() != SQLITE_ROW) {
@@ -91,7 +102,7 @@ static const std::string &get_header(const std::map<std::string, std::string> &h
 
 static void request_ws_db_tables(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const std::list<std::string> &uri_params)
 {
-    db::sqlite_db db("chinook.db");
+    db::sqlite_db &db = acquire_db_connection("chinook.db");
     auto stmt = db.prepare("SELECT name FROM sqlite_master WHERE type ='table' AND name NOT LIKE 'sqlite_%'");
 
     auto json = json::json_value::make_object();
@@ -121,7 +132,7 @@ static void request_ws_jsGrid_customers(backend::wsworker *worker, const std::ma
     int page_size = std::atoi(args["rows"].data());
     if (page_size <= 0) throw std::invalid_argument("page_size contains invalid value!");
 
-    db::sqlite_db db("chinook.db");
+    db::sqlite_db &db = acquire_db_connection("chinook.db");
 
     auto count_stmt = db.prepare("SELECT COUNT(*) FROM customers");
     if (count_stmt.step() != SQLITE_ROW) throw std::runtime_error("Can't step SQL!");
@@ -215,7 +226,7 @@ static void request_ws_jsGrid_artist_song_type(backend::wsworker *worker, const 
     int id = std::atoi(args["id"].data());
     if (id <= 0) throw std::invalid_argument("Invalid id.");
 
-    db::sqlite_db db("chinook.db");
+    db::sqlite_db &db = acquire_db_connection("chinook.db");
 
     std::string sql = "SELECT genres.Name as 'name', count(DISTINCT tracks.TrackId) as 'hvalue' FROM genres INNER JOIN tracks ON(tracks.GenreId = genres.GenreId) INNER JOIN albums ON(albums.AlbumId = tracks.AlbumId) WHERE albums.ArtistId = ? GROUP BY genres.Name ORDER BY `hvalue` DESC";
     auto stmt = db.prepare(sql);

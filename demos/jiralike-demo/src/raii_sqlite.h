@@ -16,44 +16,81 @@ public:
 
     explicit sqlite_db(const std::string &path,
                        int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX) {
-        int rc = sqlite3_open_v2(path.c_str(), &m_db, flags, nullptr);
-        if (rc != SQLITE_OK) {
-            std::string err = m_db ? sqlite3_errmsg(m_db) : "Failed to open database";
-            reset();
-            throw std::runtime_error("Can't open database '" + path + "': " + err);
-        }
-        sqlite3_busy_timeout(m_db, 5000);
-        exec("PRAGMA foreign_keys = ON;");
-        exec("PRAGMA journal_mode = WAL;");
+        open(path, flags);
     }
 
     ~sqlite_db() {
-        reset();
+        close();
     }
 
     sqlite_db(const sqlite_db &) = delete;
     sqlite_db &operator=(const sqlite_db &) = delete;
 
-    sqlite_db(sqlite_db &&other) noexcept : m_db(other.m_db) {
+    sqlite_db(sqlite_db &&other) noexcept
+        : m_db(other.m_db), m_path(std::move(other.m_path)), m_flags(other.m_flags) {
         other.m_db = nullptr;
     }
 
     sqlite_db &operator=(sqlite_db &&other) noexcept {
         if (this != &other) {
-            reset();
+            close();
             m_db = other.m_db;
+            m_path = std::move(other.m_path);
+            m_flags = other.m_flags;
             other.m_db = nullptr;
         }
         return *this;
     }
 
-    void reset() noexcept {
+    void open(const std::string &path,
+              int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX) {
+        close();
+        m_path = path;
+        m_flags = flags;
+        int rc = sqlite3_open_v2(path.c_str(), &m_db, flags, nullptr);
+        if (rc != SQLITE_OK) {
+            std::string err = m_db ? sqlite3_errmsg(m_db) : "Failed to open database";
+            close();
+            throw std::runtime_error("Can't open database '" + path + "': " + err);
+        }
+        sqlite3_busy_timeout(m_db, 5000);
+        exec("PRAGMA foreign_keys = ON;");
+        exec("PRAGMA journal_mode = WAL;");
+        exec("PRAGMA synchronous = NORMAL;");
+    }
+
+    void close() noexcept {
         if (m_db) {
             sqlite3_close_v2(m_db);
             m_db = nullptr;
         }
     }
 
+    // Reset persistent SQLite connection state before handling a new request
+    void reset_for_request() {
+        if (!m_db) {
+            if (!m_path.empty()) {
+                open(m_path, m_flags);
+            }
+            return;
+        }
+        sqlite3_stmt *stmt = nullptr;
+        while ((stmt = sqlite3_next_stmt(m_db, stmt)) != nullptr) {
+            sqlite3_reset(stmt);
+            sqlite3_clear_bindings(stmt);
+        }
+        if (sqlite3_get_autocommit(m_db) == 0) {
+            char *err_msg = nullptr;
+            sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, &err_msg);
+            if (err_msg) sqlite3_free(err_msg);
+        }
+    }
+
+    void reset() noexcept {
+        close();
+    }
+
+    const std::string &path() const noexcept { return m_path; }
     sqlite3 *get() const noexcept { return m_db; }
     explicit operator bool() const noexcept { return m_db != nullptr; }
 
@@ -84,6 +121,8 @@ public:
 
 private:
     sqlite3 *m_db = nullptr;
+    std::string m_path;
+    int m_flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX;
 };
 
 class sqlite_stmt {
@@ -216,5 +255,42 @@ inline sqlite_stmt sqlite_db::prepare(const std::string &sql) const {
     if (!m_db) throw std::runtime_error("Database connection is closed");
     return sqlite_stmt(m_db, sql);
 }
+
+class sqlite_transaction {
+public:
+    explicit sqlite_transaction(sqlite_db &db, bool immediate = true) : m_db(db) {
+        m_db.exec(immediate ? "BEGIN IMMEDIATE;" : "BEGIN;");
+    }
+
+    ~sqlite_transaction() {
+        if (!m_committed) {
+            try {
+                m_db.exec("ROLLBACK;");
+            } catch (...) {
+            }
+        }
+    }
+
+    sqlite_transaction(const sqlite_transaction &) = delete;
+    sqlite_transaction &operator=(const sqlite_transaction &) = delete;
+
+    void commit() {
+        if (!m_committed) {
+            m_db.exec("COMMIT;");
+            m_committed = true;
+        }
+    }
+
+    void rollback() {
+        if (!m_committed) {
+            m_db.exec("ROLLBACK;");
+            m_committed = true;
+        }
+    }
+
+private:
+    sqlite_db &m_db;
+    bool m_committed = false;
+};
 
 } // namespace db

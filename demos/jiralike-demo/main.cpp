@@ -27,6 +27,18 @@
 static std::string g_db_path = "db/jiralike.db";
 static std::string g_blobs_dir = "blobs";
 
+// Keeps the SQLite database connection open across requests on each worker thread
+// and resets its state before handling every incoming request.
+static db::sqlite_db &acquire_db_connection() {
+    thread_local db::sqlite_db tl_conn;
+    if (!tl_conn || tl_conn.path() != g_db_path) {
+        tl_conn.open(g_db_path);
+    } else {
+        tl_conn.reset_for_request();
+    }
+    return tl_conn;
+}
+
 static const std::string &get_header(const std::map<std::string, std::string> &header, const std::string &key) {
     static const std::string empty_str;
     auto it = header.find(key);
@@ -127,7 +139,7 @@ static json::json_value user_to_json(const auth_user &u) {
 static void handle_setup_status(backend::wsworker *worker,
                                 const std::map<std::string, std::string> &header,
                                 const std::list<std::string> &) {
-    db::sqlite_db conn(g_db_path);
+    db::sqlite_db &conn = acquire_db_connection();
 
     bool is_setup = false;
     std::string instance_name = "JiraLike Workspace";
@@ -457,7 +469,7 @@ static void handle_setup_init(backend::wsworker *worker,
         return;
     }
 
-    db::sqlite_db conn(g_db_path);
+    db::sqlite_db &conn = acquire_db_connection();
     {
         auto chk = conn.prepare("SELECT is_setup_complete FROM app_config WHERE id = 1;");
         if (chk.step() == SQLITE_ROW && chk.column_int(0) != 0) {
@@ -484,11 +496,11 @@ static void handle_setup_init(backend::wsworker *worker,
     // Normalize project key to uppercase alphanumeric
     for (char &c : project_key) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
 
-    conn.exec("BEGIN IMMEDIATE;");
     int admin_id = 0;
     int project_id = 0;
     std::string token;
     try {
+        db::sqlite_transaction tx(conn);
         auto ins_admin = conn.prepare(R"SQL(
             INSERT INTO users (username, email, password_hash, display_name, role, avatar_color)
             VALUES (?, ?, ?, ?, 'Admin', '#0052CC');
@@ -539,9 +551,8 @@ static void handle_setup_init(backend::wsworker *worker,
         ins_sess.bind_int(2, admin_id);
         ins_sess.step_done();
 
-        conn.exec("COMMIT;");
+        tx.commit();
     } catch (const std::exception &ex) {
-        try { conn.exec("ROLLBACK;"); } catch (...) {}
         send_error(worker, header, "500 Internal Server Error", std::string("Setup failed: ") + ex.what());
         return;
     }
@@ -573,7 +584,7 @@ static void handle_auth_login(backend::wsworker *worker,
         return;
     }
 
-    db::sqlite_db conn(g_db_path);
+    db::sqlite_db &conn = acquire_db_connection();
     auto stmt = conn.prepare(R"SQL(
         SELECT id, username, email, password_hash, display_name, role, avatar_color
         FROM users
@@ -604,13 +615,17 @@ static void handle_auth_login(backend::wsworker *worker,
     stmt.reset();
 
     std::string token = utils::generate_random_hex(32);
-    auto ins = conn.prepare(R"SQL(
-        INSERT INTO sessions (token, user_id, expires_at)
-        VALUES (?, ?, datetime('now', '+7 days'));
-    )SQL");
-    ins.bind_text(1, token);
-    ins.bind_int(2, u.id);
-    ins.step_done();
+    {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare(R"SQL(
+            INSERT INTO sessions (token, user_id, expires_at)
+            VALUES (?, ?, datetime('now', '+7 days'));
+        )SQL");
+        ins.bind_text(1, token);
+        ins.bind_int(2, u.id);
+        ins.step_done();
+        tx.commit();
+    }
 
     auto res = json::json_value::make_object();
     res.add_str("token", token);
@@ -624,10 +639,12 @@ static void handle_auth_logout(backend::wsworker *worker,
                                const std::list<std::string> &) {
     std::string token = extract_token(worker, header);
     if (!token.empty()) {
-        db::sqlite_db conn(g_db_path);
+        db::sqlite_db &conn = acquire_db_connection();
+        db::sqlite_transaction tx(conn);
         auto stmt = conn.prepare("DELETE FROM sessions WHERE token = ?;");
         stmt.bind_text(1, token);
         stmt.step_done();
+        tx.commit();
     }
     auto res = json::json_value::make_object();
     res.add_bool("ok", true);
@@ -638,7 +655,7 @@ static void handle_auth_logout(backend::wsworker *worker,
 static void handle_auth_me(backend::wsworker *worker,
                            const std::map<std::string, std::string> &header,
                            const std::list<std::string> &) {
-    db::sqlite_db conn(g_db_path);
+    db::sqlite_db &conn = acquire_db_connection();
     auto u = get_authenticated_user(conn, worker, header);
     if (!u.authenticated) {
         send_error(worker, header, "401 Unauthorized", "Not authenticated");
@@ -651,7 +668,7 @@ static void handle_auth_me(backend::wsworker *worker,
 static void handle_users(backend::wsworker *worker,
                          const std::map<std::string, std::string> &header,
                          const std::list<std::string> &) {
-    db::sqlite_db conn(g_db_path);
+    db::sqlite_db &conn = acquire_db_connection();
     std::string method = get_header(header, "REQUEST_METHOD");
 
     if (method == "GET") {
@@ -700,19 +717,24 @@ static void handle_users(backend::wsworker *worker,
     }
     if (email.empty()) email = uname + "@jiralike.local";
 
-    auto ins = conn.prepare(R"SQL(
-        INSERT INTO users (username, email, password_hash, display_name, role, avatar_color)
-        VALUES (?, ?, ?, ?, ?, ?);
-    )SQL");
-    ins.bind_text(1, uname);
-    ins.bind_text(2, email);
-    ins.bind_text(3, utils::hash_password(pw));
-    ins.bind_text(4, dname);
-    ins.bind_text(5, role);
-    ins.bind_text(6, color);
-    ins.step_done();
+    int new_id = 0;
+    {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare(R"SQL(
+            INSERT INTO users (username, email, password_hash, display_name, role, avatar_color)
+            VALUES (?, ?, ?, ?, ?, ?);
+        )SQL");
+        ins.bind_text(1, uname);
+        ins.bind_text(2, email);
+        ins.bind_text(3, utils::hash_password(pw));
+        ins.bind_text(4, dname);
+        ins.bind_text(5, role);
+        ins.bind_text(6, color);
+        ins.step_done();
+        new_id = static_cast<int>(conn.last_insert_rowid());
+        tx.commit();
+    }
 
-    int new_id = static_cast<int>(conn.last_insert_rowid());
     auth_user created{new_id, uname, email, dname, role, color, true};
     send_json(worker, header, "201 Created", user_to_json(created));
 }
@@ -721,7 +743,7 @@ static void handle_users(backend::wsworker *worker,
 static void handle_projects(backend::wsworker *worker,
                             const std::map<std::string, std::string> &header,
                             const std::list<std::string> &) {
-    db::sqlite_db conn(g_db_path);
+    db::sqlite_db &conn = acquire_db_connection();
     std::string method = get_header(header, "REQUEST_METHOD");
 
     if (method == "GET") {
@@ -772,13 +794,18 @@ static void handle_projects(backend::wsworker *worker,
     }
     for (char &c : key) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
 
-    auto ins = conn.prepare("INSERT INTO projects (key, name, description, lead_user_id) VALUES (?, ?, ?, ?);");
-    ins.bind_text(1, key);
-    ins.bind_text(2, name);
-    ins.bind_text(3, desc);
-    ins.bind_int(4, u_auth.id);
-    ins.step_done();
-    int pid = static_cast<int>(conn.last_insert_rowid());
+    int pid = 0;
+    {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare("INSERT INTO projects (key, name, description, lead_user_id) VALUES (?, ?, ?, ?);");
+        ins.bind_text(1, key);
+        ins.bind_text(2, name);
+        ins.bind_text(3, desc);
+        ins.bind_int(4, u_auth.id);
+        ins.step_done();
+        pid = static_cast<int>(conn.last_insert_rowid());
+        tx.commit();
+    }
 
     auto res = json::json_value::make_object();
     res.add_int("id", pid);
@@ -792,7 +819,7 @@ static void handle_projects(backend::wsworker *worker,
 static void handle_sprints(backend::wsworker *worker,
                            const std::map<std::string, std::string> &header,
                            const std::list<std::string> &) {
-    db::sqlite_db conn(g_db_path);
+    db::sqlite_db &conn = acquire_db_connection();
     std::string method = get_header(header, "REQUEST_METHOD");
 
     if (method == "GET") {
@@ -868,9 +895,9 @@ static void handle_sprints(backend::wsworker *worker,
         return;
     }
 
-    conn.exec("BEGIN IMMEDIATE;");
     int new_id = 0;
     try {
+        db::sqlite_transaction tx(conn);
         if (is_current) {
             auto clr = conn.prepare("UPDATE sprints SET is_current = 0 WHERE project_id = ?;");
             clr.bind_int(1, project_id);
@@ -890,9 +917,8 @@ static void handle_sprints(backend::wsworker *worker,
         ins.bind_int(7, is_current ? 1 : 0);
         ins.step_done();
         new_id = static_cast<int>(conn.last_insert_rowid());
-        conn.exec("COMMIT;");
+        tx.commit();
     } catch (const std::exception &ex) {
-        try { conn.exec("ROLLBACK;"); } catch (...) {}
         send_error(worker, header, "500 Internal Server Error", ex.what());
         return;
     }
@@ -922,7 +948,7 @@ static void handle_sprint_detail(backend::wsworker *worker,
     }
     int sprint_id = std::atoi(uri_params.front().c_str());
 
-    db::sqlite_db conn(g_db_path);
+    db::sqlite_db &conn = acquire_db_connection();
     auto u_auth = get_authenticated_user(conn, worker, header);
     if (!u_auth.authenticated) {
         send_error(worker, header, "401 Unauthorized", "Authentication required");
@@ -935,9 +961,11 @@ static void handle_sprint_detail(backend::wsworker *worker,
 
     std::string method = get_header(header, "REQUEST_METHOD");
     if (method == "DELETE") {
+        db::sqlite_transaction tx(conn);
         auto del = conn.prepare("DELETE FROM sprints WHERE id = ?;");
         del.bind_int(1, sprint_id);
         del.step_done();
+        tx.commit();
         auto res = json::json_value::make_object();
         res.add_bool("deleted", true);
         send_json(worker, header, "200 OK", res);
@@ -966,8 +994,8 @@ static void handle_sprint_detail(backend::wsworker *worker,
         return;
     }
 
-    conn.exec("BEGIN IMMEDIATE;");
     try {
+        db::sqlite_transaction tx(conn);
         if (is_current) {
             auto clr = conn.prepare("UPDATE sprints SET is_current = 0 WHERE project_id = ?;");
             clr.bind_int(1, project_id);
@@ -986,9 +1014,8 @@ static void handle_sprint_detail(backend::wsworker *worker,
         upd.bind_int(6, is_current ? 1 : 0);
         upd.bind_int(7, sprint_id);
         upd.step_done();
-        conn.exec("COMMIT;");
+        tx.commit();
     } catch (const std::exception &ex) {
-        try { conn.exec("ROLLBACK;"); } catch (...) {}
         send_error(worker, header, "500 Internal Server Error", ex.what());
         return;
     }
@@ -1015,7 +1042,7 @@ static void handle_sprint_set_current(backend::wsworker *worker,
     }
     int sprint_id = std::atoi(uri_params.front().c_str());
 
-    db::sqlite_db conn(g_db_path);
+    db::sqlite_db &conn = acquire_db_connection();
     auto u_auth = get_authenticated_user(conn, worker, header);
     if (!u_auth.authenticated) {
         send_error(worker, header, "401 Unauthorized", "Authentication required");
@@ -1026,17 +1053,16 @@ static void handle_sprint_set_current(backend::wsworker *worker,
         return;
     }
 
-    conn.exec("BEGIN IMMEDIATE;");
     try {
+        db::sqlite_transaction tx(conn);
         auto clr = conn.prepare("UPDATE sprints SET is_current = 0;");
         clr.step_done();
 
         auto setc = conn.prepare("UPDATE sprints SET is_current = 1, status = 'active' WHERE id = ?;");
         setc.bind_int(1, sprint_id);
         setc.step_done();
-        conn.exec("COMMIT;");
+        tx.commit();
     } catch (const std::exception &ex) {
-        try { conn.exec("ROLLBACK;"); } catch (...) {}
         send_error(worker, header, "500 Internal Server Error", ex.what());
         return;
     }
@@ -1110,7 +1136,7 @@ static const char *BASE_WORK_ITEM_SELECT = R"SQL(
 static void handle_items(backend::wsworker *worker,
                          const std::map<std::string, std::string> &header,
                          const std::list<std::string> &) {
-    db::sqlite_db conn(g_db_path);
+    db::sqlite_db &conn = acquire_db_connection();
     std::string method = get_header(header, "REQUEST_METHOD");
 
     if (method == "GET") {
@@ -1206,9 +1232,9 @@ static void handle_items(backend::wsworker *worker,
         return;
     }
 
-    conn.exec("BEGIN IMMEDIATE;");
     int new_item_id = 0;
     try {
+        db::sqlite_transaction tx(conn);
         std::string proj_key = "JIRA";
         int next_seq = 1;
         {
@@ -1266,9 +1292,8 @@ static void handle_items(backend::wsworker *worker,
         hist.bind_int(3, u_auth.id);
         hist.step_done();
 
-        conn.exec("COMMIT;");
+        tx.commit();
     } catch (const std::exception &ex) {
-        try { conn.exec("ROLLBACK;"); } catch (...) {}
         send_error(worker, header, "500 Internal Server Error", ex.what());
         return;
     }
@@ -1311,7 +1336,7 @@ static void handle_item_detail(backend::wsworker *worker,
         send_error(worker, header, "400 Bad Request", "Missing item ID or key");
         return;
     }
-    db::sqlite_db conn(g_db_path);
+    db::sqlite_db &conn = acquire_db_connection();
     int item_id = resolve_work_item_id(conn, uri_params.front());
     if (item_id <= 0) {
         send_error(worker, header, "404 Not Found", "Work item not found");
@@ -1465,9 +1490,13 @@ static void handle_item_detail(backend::wsworker *worker,
         }
         b_stmt.reset();
 
-        auto del = conn.prepare("DELETE FROM work_items WHERE id = ?;");
-        del.bind_int(1, item_id);
-        del.step_done();
+        {
+            db::sqlite_transaction tx(conn);
+            auto del = conn.prepare("DELETE FROM work_items WHERE id = ?;");
+            del.bind_int(1, item_id);
+            del.step_done();
+            tx.commit();
+        }
 
         auto res = json::json_value::make_object();
         res.add_bool("deleted", true);
@@ -1510,43 +1539,47 @@ static void handle_item_detail(backend::wsworker *worker,
     std::string steps = body.get_string("steps_to_reproduce");
     std::string labels = body.get_string("labels");
 
-    auto upd = conn.prepare(R"SQL(
-        UPDATE work_items
-        SET type = ?, category = ?, status = ?, priority = ?, title = ?, description = ?,
-            parent_id = ?, sprint_id = ?, assignee_id = ?, story_points = ?,
-            progress = ?, start_date = ?, due_date = ?, severity = ?,
-            steps_to_reproduce = ?, labels = ?, updated_at = datetime('now')
-        WHERE id = ?;
-    )SQL");
-    upd.bind_text(1, type);
-    upd.bind_text(2, category);
-    upd.bind_text(3, status);
-    upd.bind_text(4, priority);
-    upd.bind_text(5, title);
-    upd.bind_text(6, description);
-    upd.bind_optional_int(7, parent_id);
-    upd.bind_optional_int(8, sprint_id);
-    upd.bind_optional_int(9, assignee_id);
-    upd.bind_int(10, story_points);
-    upd.bind_int(11, progress);
-    upd.bind_text(12, start_date);
-    upd.bind_text(13, due_date);
-    upd.bind_text(14, severity);
-    upd.bind_text(15, steps);
-    upd.bind_text(16, labels);
-    upd.bind_int(17, item_id);
-    upd.step_done();
-
-    if (status != old_status) {
-        auto hist = conn.prepare(R"SQL(
-            INSERT INTO workflow_history (work_item_id, from_status, to_status, changed_by, comment)
-            VALUES (?, ?, ?, ?, 'Status updated');
+    {
+        db::sqlite_transaction tx(conn);
+        auto upd = conn.prepare(R"SQL(
+            UPDATE work_items
+            SET type = ?, category = ?, status = ?, priority = ?, title = ?, description = ?,
+                parent_id = ?, sprint_id = ?, assignee_id = ?, story_points = ?,
+                progress = ?, start_date = ?, due_date = ?, severity = ?,
+                steps_to_reproduce = ?, labels = ?, updated_at = datetime('now')
+            WHERE id = ?;
         )SQL");
-        hist.bind_int(1, item_id);
-        hist.bind_text(2, old_status);
-        hist.bind_text(3, status);
-        hist.bind_int(4, u_auth.id);
-        hist.step_done();
+        upd.bind_text(1, type);
+        upd.bind_text(2, category);
+        upd.bind_text(3, status);
+        upd.bind_text(4, priority);
+        upd.bind_text(5, title);
+        upd.bind_text(6, description);
+        upd.bind_optional_int(7, parent_id);
+        upd.bind_optional_int(8, sprint_id);
+        upd.bind_optional_int(9, assignee_id);
+        upd.bind_int(10, story_points);
+        upd.bind_int(11, progress);
+        upd.bind_text(12, start_date);
+        upd.bind_text(13, due_date);
+        upd.bind_text(14, severity);
+        upd.bind_text(15, steps);
+        upd.bind_text(16, labels);
+        upd.bind_int(17, item_id);
+        upd.step_done();
+
+        if (status != old_status) {
+            auto hist = conn.prepare(R"SQL(
+                INSERT INTO workflow_history (work_item_id, from_status, to_status, changed_by, comment)
+                VALUES (?, ?, ?, ?, 'Status updated');
+            )SQL");
+            hist.bind_int(1, item_id);
+            hist.bind_text(2, old_status);
+            hist.bind_text(3, status);
+            hist.bind_int(4, u_auth.id);
+            hist.step_done();
+        }
+        tx.commit();
     }
 
     auto q = conn.prepare(std::string(BASE_WORK_ITEM_SELECT) + " WHERE w.id = ?;");
@@ -1566,7 +1599,7 @@ static void handle_item_state_transition(backend::wsworker *worker,
         send_error(worker, header, "400 Bad Request", "Missing item ID or key");
         return;
     }
-    db::sqlite_db conn(g_db_path);
+    db::sqlite_db &conn = acquire_db_connection();
     int item_id = resolve_work_item_id(conn, uri_params.front());
     if (item_id <= 0) {
         send_error(worker, header, "404 Not Found", "Work item not found");
@@ -1617,30 +1650,34 @@ static void handle_item_state_transition(backend::wsworker *worker,
     int new_order = body.has_key("board_order") ? body.get_int("board_order", old_order) : old_order;
     std::string comment = body.get_string("comment", "Transitioned via board drag-and-drop");
 
-    auto upd = conn.prepare(R"SQL(
-        UPDATE work_items
-        SET status = ?, progress = ?, start_date = ?, due_date = ?, board_order = ?, updated_at = datetime('now')
-        WHERE id = ?;
-    )SQL");
-    upd.bind_text(1, new_status);
-    upd.bind_int(2, new_progress);
-    upd.bind_text(3, new_start);
-    upd.bind_text(4, new_due);
-    upd.bind_int(5, new_order);
-    upd.bind_int(6, item_id);
-    upd.step_done();
-
-    if (new_status != old_status) {
-        auto hist = conn.prepare(R"SQL(
-            INSERT INTO workflow_history (work_item_id, from_status, to_status, changed_by, comment)
-            VALUES (?, ?, ?, ?, ?);
+    {
+        db::sqlite_transaction tx(conn);
+        auto upd = conn.prepare(R"SQL(
+            UPDATE work_items
+            SET status = ?, progress = ?, start_date = ?, due_date = ?, board_order = ?, updated_at = datetime('now')
+            WHERE id = ?;
         )SQL");
-        hist.bind_int(1, item_id);
-        hist.bind_text(2, old_status);
-        hist.bind_text(3, new_status);
-        hist.bind_int(4, u_auth.id);
-        hist.bind_text(5, comment);
-        hist.step_done();
+        upd.bind_text(1, new_status);
+        upd.bind_int(2, new_progress);
+        upd.bind_text(3, new_start);
+        upd.bind_text(4, new_due);
+        upd.bind_int(5, new_order);
+        upd.bind_int(6, item_id);
+        upd.step_done();
+
+        if (new_status != old_status) {
+            auto hist = conn.prepare(R"SQL(
+                INSERT INTO workflow_history (work_item_id, from_status, to_status, changed_by, comment)
+                VALUES (?, ?, ?, ?, ?);
+            )SQL");
+            hist.bind_int(1, item_id);
+            hist.bind_text(2, old_status);
+            hist.bind_text(3, new_status);
+            hist.bind_int(4, u_auth.id);
+            hist.bind_text(5, comment);
+            hist.step_done();
+        }
+        tx.commit();
     }
 
     auto q = conn.prepare(std::string(BASE_WORK_ITEM_SELECT) + " WHERE w.id = ?;");
@@ -1660,7 +1697,7 @@ static void handle_item_comments(backend::wsworker *worker,
         send_error(worker, header, "400 Bad Request", "Missing item ID or key");
         return;
     }
-    db::sqlite_db conn(g_db_path);
+    db::sqlite_db &conn = acquire_db_connection();
     int item_id = resolve_work_item_id(conn, uri_params.front());
     if (item_id <= 0) {
         send_error(worker, header, "404 Not Found", "Work item not found");
@@ -1683,12 +1720,17 @@ static void handle_item_comments(backend::wsworker *worker,
         return;
     }
 
-    auto ins = conn.prepare("INSERT INTO comments (work_item_id, author_id, body) VALUES (?, ?, ?);");
-    ins.bind_int(1, item_id);
-    ins.bind_int(2, u_auth.id);
-    ins.bind_text(3, text);
-    ins.step_done();
-    int cid = static_cast<int>(conn.last_insert_rowid());
+    int cid = 0;
+    {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare("INSERT INTO comments (work_item_id, author_id, body) VALUES (?, ?, ?);");
+        ins.bind_int(1, item_id);
+        ins.bind_int(2, u_auth.id);
+        ins.bind_text(3, text);
+        ins.step_done();
+        cid = static_cast<int>(conn.last_insert_rowid());
+        tx.commit();
+    }
 
     auto res = json::json_value::make_object();
     res.add_int("id", cid);
@@ -1709,7 +1751,7 @@ static void handle_item_links(backend::wsworker *worker,
         send_error(worker, header, "400 Bad Request", "Missing item ID or key");
         return;
     }
-    db::sqlite_db conn(g_db_path);
+    db::sqlite_db &conn = acquire_db_connection();
     int source_id = resolve_work_item_id(conn, uri_params.front());
     if (source_id <= 0) {
         send_error(worker, header, "404 Not Found", "Work item not found");
@@ -1734,14 +1776,20 @@ static void handle_item_links(backend::wsworker *worker,
         return;
     }
 
-    auto ins = conn.prepare("INSERT INTO work_item_links (source_item_id, target_item_id, link_type) VALUES (?, ?, ?);");
-    ins.bind_int(1, source_id);
-    ins.bind_int(2, target_id);
-    ins.bind_text(3, link_type);
-    ins.step_done();
+    int link_id = 0;
+    {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare("INSERT INTO work_item_links (source_item_id, target_item_id, link_type) VALUES (?, ?, ?);");
+        ins.bind_int(1, source_id);
+        ins.bind_int(2, target_id);
+        ins.bind_text(3, link_type);
+        ins.step_done();
+        link_id = static_cast<int>(conn.last_insert_rowid());
+        tx.commit();
+    }
 
     auto res = json::json_value::make_object();
-    res.add_int("id", static_cast<int>(conn.last_insert_rowid()));
+    res.add_int("id", link_id);
     res.add_int("source_item_id", source_id);
     res.add_int("target_item_id", target_id);
     res.add_str("link_type", link_type);
@@ -1752,7 +1800,7 @@ static void handle_item_links(backend::wsworker *worker,
 static void handle_all_links(backend::wsworker *worker,
                              const std::map<std::string, std::string> &header,
                              const std::list<std::string> &) {
-    db::sqlite_db conn(g_db_path);
+    db::sqlite_db &conn = acquire_db_connection();
     auto stmt = conn.prepare(R"SQL(
         SELECT l.id, l.source_item_id, l.target_item_id, l.link_type,
                ws.key, ws.title, ws.status, ws.type,
@@ -1791,16 +1839,20 @@ static void handle_delete_link(backend::wsworker *worker,
         return;
     }
     int link_id = std::atoi(uri_params.front().c_str());
-    db::sqlite_db conn(g_db_path);
+    db::sqlite_db &conn = acquire_db_connection();
     auto u_auth = get_authenticated_user(conn, worker, header);
     if (!u_auth.authenticated) {
         send_error(worker, header, "401 Unauthorized", "Authentication required");
         return;
     }
 
-    auto del = conn.prepare("DELETE FROM work_item_links WHERE id = ?;");
-    del.bind_int(1, link_id);
-    del.step_done();
+    {
+        db::sqlite_transaction tx(conn);
+        auto del = conn.prepare("DELETE FROM work_item_links WHERE id = ?;");
+        del.bind_int(1, link_id);
+        del.step_done();
+        tx.commit();
+    }
 
     auto res = json::json_value::make_object();
     res.add_bool("deleted", true);
@@ -1815,7 +1867,7 @@ static void handle_item_attachments(backend::wsworker *worker,
         send_error(worker, header, "400 Bad Request", "Missing item ID or key");
         return;
     }
-    db::sqlite_db conn(g_db_path);
+    db::sqlite_db &conn = acquire_db_connection();
     int item_id = resolve_work_item_id(conn, uri_params.front());
     if (item_id <= 0) {
         send_error(worker, header, "404 Not Found", "Work item not found");
@@ -1871,18 +1923,23 @@ static void handle_item_attachments(backend::wsworker *worker,
         ofs.write(file_bytes.data(), static_cast<std::streamsize>(file_bytes.size()));
     }
 
-    auto ins = conn.prepare(R"SQL(
-        INSERT INTO attachments (work_item_id, uploader_id, original_filename, mime_type, size_bytes, blob_filename)
-        VALUES (?, ?, ?, ?, ?, ?);
-    )SQL");
-    ins.bind_int(1, item_id);
-    ins.bind_int(2, u_auth.id);
-    ins.bind_text(3, orig_filename);
-    ins.bind_text(4, mime_type);
-    ins.bind_int(5, static_cast<int>(file_bytes.size()));
-    ins.bind_text(6, blob_filename);
-    ins.step_done();
-    int att_id = static_cast<int>(conn.last_insert_rowid());
+    int att_id = 0;
+    {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare(R"SQL(
+            INSERT INTO attachments (work_item_id, uploader_id, original_filename, mime_type, size_bytes, blob_filename)
+            VALUES (?, ?, ?, ?, ?, ?);
+        )SQL");
+        ins.bind_int(1, item_id);
+        ins.bind_int(2, u_auth.id);
+        ins.bind_text(3, orig_filename);
+        ins.bind_text(4, mime_type);
+        ins.bind_int(5, static_cast<int>(file_bytes.size()));
+        ins.bind_text(6, blob_filename);
+        ins.step_done();
+        att_id = static_cast<int>(conn.last_insert_rowid());
+        tx.commit();
+    }
 
     auto res = json::json_value::make_object();
     res.add_int("id", att_id);
@@ -1916,7 +1973,7 @@ static void handle_blob_download(backend::wsworker *worker,
     std::string mime_type = "application/octet-stream";
     std::string orig_name = blob_name;
     {
-        db::sqlite_db conn(g_db_path);
+        db::sqlite_db &conn = acquire_db_connection();
         auto stmt = conn.prepare("SELECT original_filename, mime_type FROM attachments WHERE blob_filename = ?;");
         stmt.bind_text(1, blob_name);
         if (stmt.step() == SQLITE_ROW) {
@@ -1954,7 +2011,7 @@ static void handle_delete_attachment(backend::wsworker *worker,
     }
     int att_id = std::atoi(uri_params.front().c_str());
 
-    db::sqlite_db conn(g_db_path);
+    db::sqlite_db &conn = acquire_db_connection();
     auto u_auth = get_authenticated_user(conn, worker, header);
     if (!u_auth.authenticated) {
         send_error(worker, header, "401 Unauthorized", "Authentication required");
@@ -1975,9 +2032,13 @@ static void handle_delete_attachment(backend::wsworker *worker,
         std::filesystem::remove(std::filesystem::path(g_blobs_dir) / blob_name, ec);
     }
 
-    auto del = conn.prepare("DELETE FROM attachments WHERE id = ?;");
-    del.bind_int(1, att_id);
-    del.step_done();
+    {
+        db::sqlite_transaction tx(conn);
+        auto del = conn.prepare("DELETE FROM attachments WHERE id = ?;");
+        del.bind_int(1, att_id);
+        del.step_done();
+        tx.commit();
+    }
 
     auto res = json::json_value::make_object();
     res.add_bool("deleted", true);
@@ -2033,6 +2094,7 @@ int main(int argc, char *argv[]) {
 
     try {
         db::ensure_storage_and_migrate(g_db_path, g_blobs_dir);
+        (void)acquire_db_connection();
     } catch (const std::exception &ex) {
         std::cerr << "[jiralike-demo] FATAL: Database initialization/migration failed: " << ex.what() << std::endl;
         return 1;
