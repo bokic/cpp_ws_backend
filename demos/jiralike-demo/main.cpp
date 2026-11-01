@@ -11,6 +11,7 @@
 #include "src/analytics_engine.h"
 #include "src/jql_lexer.h"
 #include "src/jql_parser.h"
+#include "src/dashboard_engine.h"
 
 #include <algorithm>
 #include <atomic>
@@ -741,6 +742,34 @@ static void seed_demo_workspace(db::sqlite_db &conn, int admin_id, int project_i
                 WHEN status = 'Done' THEN 0
                 ELSE MAX(0, original_estimate_seconds - COALESCE((SELECT SUM(wl.time_spent_seconds) FROM worklogs wl WHERE wl.work_item_id = work_items.id), 0))
             END;
+
+        INSERT OR IGNORE INTO dashboards (id, owner_id, name, description, layout, is_favorite, share_type, project_id, created_at, updated_at)
+        SELECT 1, 1, 'Engineering Operations & Agile Overview', 'Default team executive dashboard featuring active sprint burndown, personal work queue, and defect distribution.', '2_column_equal', 1, 'public', 1, datetime('now', '-3 days'), datetime('now')
+        WHERE EXISTS (SELECT 1 FROM users WHERE id = 1) AND EXISTS (SELECT 1 FROM projects WHERE id = 1);
+
+        INSERT OR IGNORE INTO dashboard_gadgets (id, dashboard_id, gadget_type, title, column_index, row_index, preferences_json, created_at)
+        SELECT 1, 1, 'assigned_to_me', 'Assigned to Me', 0, 0, '{"limit":10,"include_resolved":false}', datetime('now', '-3 days')
+        WHERE EXISTS (SELECT 1 FROM dashboards WHERE id = 1);
+
+        INSERT OR IGNORE INTO dashboard_gadgets (id, dashboard_id, gadget_type, title, column_index, row_index, preferences_json, created_at)
+        SELECT 2, 1, 'sprint_burndown', 'Active Sprint Burndown', 1, 0, '{"sprint_id":0,"unit":"points"}', datetime('now', '-3 days')
+        WHERE EXISTS (SELECT 1 FROM dashboards WHERE id = 1);
+
+        INSERT OR IGNORE INTO dashboard_gadgets (id, dashboard_id, gadget_type, title, column_index, row_index, preferences_json, created_at)
+        SELECT 3, 1, 'pie_chart', 'Issues by Status', 0, 1, '{"statistic_type":"status"}', datetime('now', '-3 days')
+        WHERE EXISTS (SELECT 1 FROM dashboards WHERE id = 1);
+
+        INSERT OR IGNORE INTO dashboard_gadgets (id, dashboard_id, gadget_type, title, column_index, row_index, preferences_json, created_at)
+        SELECT 4, 1, 'activity_stream', 'Recent Activity Stream', 1, 1, '{"limit":15}', datetime('now', '-3 days')
+        WHERE EXISTS (SELECT 1 FROM dashboards WHERE id = 1);
+
+        INSERT OR IGNORE INTO dashboard_gadgets (id, dashboard_id, gadget_type, title, column_index, row_index, preferences_json, created_at)
+        SELECT 5, 1, 'two_dimensional_stats', 'Assignee vs Status Matrix', 0, 2, '{"x_axis":"status","y_axis":"assignee"}', datetime('now', '-3 days')
+        WHERE EXISTS (SELECT 1 FROM dashboards WHERE id = 1);
+
+        INSERT OR IGNORE INTO dashboard_gadgets (id, dashboard_id, gadget_type, title, column_index, row_index, preferences_json, created_at)
+        SELECT 6, 1, 'created_vs_resolved', 'Created vs Resolved Trend', 1, 2, '{"days":30}', datetime('now', '-3 days')
+        WHERE EXISTS (SELECT 1 FROM dashboards WHERE id = 1);
     )SQL");
 }
 
@@ -10231,6 +10260,689 @@ static void handle_report_releases_list(backend::wsworker *worker,
     send_json(worker, header, "200 OK", out);
 }
 
+// ============================================================================
+// Epic 7 & Step 9: Configurable Dashboards & Gadgets Framework Handlers
+// ============================================================================
+
+// GET /api/gadgets/catalog
+static void handle_gadgets_catalog(backend::wsworker *worker,
+                                   const std::map<std::string, std::string> &header,
+                                   const std::list<std::string> &) {
+    send_json(worker, header, "200 OK", dashboard::get_gadget_catalog());
+}
+
+// POST /api/gadgets/execute
+static void handle_gadgets_execute(backend::wsworker *worker,
+                                   const std::map<std::string, std::string> &header,
+                                   const std::list<std::string> &) {
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON payload");
+        return;
+    }
+    std::string gadget_type = body.get_string("gadget_type");
+    std::string prefs_str = body.has_key("preferences_json") ? body.get_string("preferences_json") : "";
+    json::json_value prefs;
+    if (!prefs_str.empty()) {
+        prefs = json::json_value::parse(prefs_str);
+    } else if (body.has_key("preferences")) {
+        prefs = body.get_child("preferences");
+    }
+    if (!prefs) prefs = json::json_value::make_object();
+
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    int uid = u_auth.authenticated ? u_auth.id : 1;
+    std::string uname = u_auth.authenticated ? u_auth.display_name : "System Administrator";
+
+    auto data = dashboard::execute_gadget(conn, uid, uname, gadget_type, prefs);
+    send_json(worker, header, "200 OK", data);
+}
+
+// GET / POST /api/dashboards
+static void handle_dashboards(backend::wsworker *worker,
+                              const std::map<std::string, std::string> &header,
+                              const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    int uid = u_auth.authenticated ? u_auth.id : 1;
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+        bool fav_only = (args["favorite_only"] == "1" || args["favorite_only"] == "true");
+        int project_id = args["project_id"].empty() ? 0 : std::atoi(args["project_id"].c_str());
+
+        std::string sql = R"SQL(
+            SELECT d.id, d.owner_id, d.name, d.description, d.layout, d.is_favorite, d.share_type, d.project_id,
+                   d.created_at, d.updated_at,
+                   u.display_name AS owner_name, u.avatar_color AS owner_avatar,
+                   p.name AS project_name, p.key AS project_key,
+                   (SELECT COUNT(*) FROM dashboard_gadgets dg WHERE dg.dashboard_id = d.id) AS gadget_count
+            FROM dashboards d
+            JOIN users u ON u.id = d.owner_id
+            LEFT JOIN projects p ON p.id = d.project_id
+            WHERE (d.owner_id = ? OR d.share_type = 'public' OR (d.share_type = 'project' AND (? = 0 OR d.project_id = ?)))
+        )SQL";
+        if (fav_only) {
+            sql += " AND d.is_favorite = 1 ";
+        }
+        sql += " ORDER BY d.is_favorite DESC, d.updated_at DESC, d.id ASC;";
+
+        auto stmt = conn.prepare(sql);
+        stmt.bind_int(1, uid);
+        stmt.bind_int(2, project_id);
+        stmt.bind_int(3, project_id);
+
+        auto arr = json::json_value::make_array();
+        while (stmt.step() == SQLITE_ROW) {
+            auto d = json::json_value::make_object();
+            d.add_int("id", stmt.column_int(0));
+            d.add_int("owner_id", stmt.column_int(1));
+            d.add_str("name", stmt.column_str(2));
+            d.add_str("description", stmt.column_str(3));
+            d.add_str("layout", stmt.column_str(4));
+            d.add_bool("is_favorite", stmt.column_int(5) != 0);
+            d.add_str("share_type", stmt.column_str(6));
+            if (!stmt.column_is_null(7)) {
+                d.add_int("project_id", stmt.column_int(7));
+                d.add_str("project_name", stmt.column_str(12));
+                d.add_str("project_key", stmt.column_str(13));
+            } else {
+                d.add("project_id", json::json_value::make_null());
+            }
+            d.add_str("created_at", stmt.column_str(8));
+            d.add_str("updated_at", stmt.column_str(9));
+            d.add_str("owner_name", stmt.column_str(10));
+            d.add_str("owner_avatar", stmt.column_str(11));
+            d.add_int("gadget_count", stmt.column_int(14));
+            arr.add(std::move(d));
+        }
+
+        auto res = json::json_value::make_object();
+        res.add("dashboards", std::move(arr));
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    if (method == "POST") {
+        auto body = json::json_value::parse(worker->body());
+        if (!body) {
+            send_error(worker, header, "400 Bad Request", "Invalid JSON payload");
+            return;
+        }
+
+        std::string name = body.get_string("name");
+        if (name.empty()) {
+            send_error(worker, header, "400 Bad Request", "Dashboard name is required");
+            return;
+        }
+
+        std::string desc = body.get_string("description");
+        std::string layout = body.get_string("layout", "2_column_equal");
+        if (!dashboard::is_valid_layout(layout)) {
+            layout = "2_column_equal";
+        }
+        std::string share_type = body.get_string("share_type", "private");
+        if (!dashboard::is_valid_share_type(share_type)) {
+            share_type = "private";
+        }
+        int project_id = body.get_int("project_id", 0);
+        bool is_fav = body.get_bool("is_favorite", false);
+
+        int new_id = 0;
+        try {
+            db::sqlite_transaction tx(conn);
+            auto ins = conn.prepare(R"SQL(
+                INSERT INTO dashboards (owner_id, name, description, layout, is_favorite, share_type, project_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, CASE WHEN ? > 0 THEN ? ELSE NULL END, datetime('now'), datetime('now'));
+            )SQL");
+            ins.bind_int(1, uid);
+            ins.bind_text(2, name);
+            ins.bind_text(3, desc);
+            ins.bind_text(4, layout);
+            ins.bind_int(5, is_fav ? 1 : 0);
+            ins.bind_text(6, share_type);
+            ins.bind_int(7, project_id);
+            ins.bind_int(8, project_id);
+            ins.step_done();
+            new_id = static_cast<int>(conn.last_insert_rowid());
+            tx.commit();
+        } catch (const std::exception &ex) {
+            send_error(worker, header, "500 Internal Server Error", std::string("Database error: ") + ex.what());
+            return;
+        }
+
+        auto res = json::json_value::make_object();
+        res.add_int("id", new_id);
+        res.add_int("owner_id", uid);
+        res.add_str("name", name);
+        res.add_str("description", desc);
+        res.add_str("layout", layout);
+        res.add_bool("is_favorite", is_fav);
+        res.add_str("share_type", share_type);
+        if (project_id > 0) res.add_int("project_id", project_id);
+        else res.add("project_id", json::json_value::make_null());
+        send_json(worker, header, "201 Created", res);
+        return;
+    }
+
+    send_error(worker, header, "405 Method Not Allowed", "Method not supported");
+}
+
+// GET / PUT / DELETE /api/dashboards/([0-9]+)
+static void handle_dashboard_detail(backend::wsworker *worker,
+                                    const std::map<std::string, std::string> &header,
+                                    const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing dashboard ID");
+        return;
+    }
+    int dash_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto dstmt = conn.prepare(R"SQL(
+            SELECT d.id, d.owner_id, d.name, d.description, d.layout, d.is_favorite, d.share_type, d.project_id,
+                   d.created_at, d.updated_at,
+                   u.display_name AS owner_name, u.avatar_color AS owner_avatar,
+                   p.name AS project_name, p.key AS project_key
+            FROM dashboards d
+            JOIN users u ON u.id = d.owner_id
+            LEFT JOIN projects p ON p.id = d.project_id
+            WHERE d.id = ?;
+        )SQL");
+        dstmt.bind_int(1, dash_id);
+        if (dstmt.step() != SQLITE_ROW) {
+            send_error(worker, header, "404 Not Found", "Dashboard not found");
+            return;
+        }
+
+        auto res = json::json_value::make_object();
+        res.add_int("id", dstmt.column_int(0));
+        res.add_int("owner_id", dstmt.column_int(1));
+        res.add_str("name", dstmt.column_str(2));
+        res.add_str("description", dstmt.column_str(3));
+        res.add_str("layout", dstmt.column_str(4));
+        res.add_bool("is_favorite", dstmt.column_int(5) != 0);
+        res.add_str("share_type", dstmt.column_str(6));
+        if (!dstmt.column_is_null(7)) {
+            res.add_int("project_id", dstmt.column_int(7));
+            res.add_str("project_name", dstmt.column_str(12));
+            res.add_str("project_key", dstmt.column_str(13));
+        } else {
+            res.add("project_id", json::json_value::make_null());
+        }
+        res.add_str("created_at", dstmt.column_str(8));
+        res.add_str("updated_at", dstmt.column_str(9));
+        res.add_str("owner_name", dstmt.column_str(10));
+        res.add_str("owner_avatar", dstmt.column_str(11));
+
+        // Fetch gadgets
+        auto gstmt = conn.prepare(R"SQL(
+            SELECT id, gadget_type, title, column_index, row_index, preferences_json, created_at, updated_at
+            FROM dashboard_gadgets
+            WHERE dashboard_id = ?
+            ORDER BY column_index ASC, row_index ASC, id ASC;
+        )SQL");
+        gstmt.bind_int(1, dash_id);
+
+        auto gadgets_arr = json::json_value::make_array();
+        while (gstmt.step() == SQLITE_ROW) {
+            auto g = json::json_value::make_object();
+            g.add_int("id", gstmt.column_int(0));
+            g.add_int("dashboard_id", dash_id);
+            g.add_str("gadget_type", gstmt.column_str(1));
+            g.add_str("title", gstmt.column_str(2));
+            g.add_int("column_index", gstmt.column_int(3));
+            g.add_int("row_index", gstmt.column_int(4));
+            std::string pjson = gstmt.column_str(5);
+            g.add_str("preferences_json", pjson);
+            auto parsed_p = json::json_value::parse(pjson);
+            if (parsed_p) {
+                g.add("preferences", std::move(parsed_p));
+            } else {
+                g.add("preferences", json::json_value::make_object());
+            }
+            g.add_str("created_at", gstmt.column_str(6));
+            g.add_str("updated_at", gstmt.column_str(7));
+            gadgets_arr.add(std::move(g));
+        }
+        res.add("gadgets", std::move(gadgets_arr));
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    if (method == "PUT") {
+        auto body = json::json_value::parse(worker->body());
+        if (!body) {
+            send_error(worker, header, "400 Bad Request", "Invalid JSON payload");
+            return;
+        }
+
+        auto chk = conn.prepare("SELECT owner_id, name, description, layout, share_type, project_id, is_favorite FROM dashboards WHERE id = ?;");
+        chk.bind_int(1, dash_id);
+        if (chk.step() != SQLITE_ROW) {
+            send_error(worker, header, "404 Not Found", "Dashboard not found");
+            return;
+        }
+
+        std::string name = body.has_key("name") ? body.get_string("name") : chk.column_str(1);
+        std::string desc = body.has_key("description") ? body.get_string("description") : chk.column_str(2);
+        std::string layout = body.has_key("layout") ? body.get_string("layout") : chk.column_str(3);
+        if (!dashboard::is_valid_layout(layout)) layout = chk.column_str(3);
+        std::string share_type = body.has_key("share_type") ? body.get_string("share_type") : chk.column_str(4);
+        if (!dashboard::is_valid_share_type(share_type)) share_type = chk.column_str(4);
+        int project_id = body.has_key("project_id") ? body.get_int("project_id", 0) : (chk.column_is_null(5) ? 0 : chk.column_int(5));
+        bool is_fav = body.has_key("is_favorite") ? body.get_bool("is_favorite") : (chk.column_int(6) != 0);
+
+        try {
+            db::sqlite_transaction tx(conn);
+            auto upd = conn.prepare(R"SQL(
+                UPDATE dashboards
+                SET name = ?, description = ?, layout = ?, share_type = ?, project_id = CASE WHEN ? > 0 THEN ? ELSE NULL END, is_favorite = ?, updated_at = datetime('now')
+                WHERE id = ?;
+            )SQL");
+            upd.bind_text(1, name);
+            upd.bind_text(2, desc);
+            upd.bind_text(3, layout);
+            upd.bind_text(4, share_type);
+            upd.bind_int(5, project_id);
+            upd.bind_int(6, project_id);
+            upd.bind_int(7, is_fav ? 1 : 0);
+            upd.bind_int(8, dash_id);
+            upd.step_done();
+            tx.commit();
+        } catch (const std::exception &ex) {
+            send_error(worker, header, "500 Internal Server Error", std::string("Database error: ") + ex.what());
+            return;
+        }
+
+        auto res = json::json_value::make_object();
+        res.add_int("id", dash_id);
+        res.add_str("name", name);
+        res.add_str("description", desc);
+        res.add_str("layout", layout);
+        res.add_str("share_type", share_type);
+        if (project_id > 0) res.add_int("project_id", project_id);
+        else res.add("project_id", json::json_value::make_null());
+        res.add_bool("is_favorite", is_fav);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    if (method == "DELETE") {
+        try {
+            db::sqlite_transaction tx(conn);
+            auto del = conn.prepare("DELETE FROM dashboards WHERE id = ?;");
+            del.bind_int(1, dash_id);
+            del.step_done();
+            tx.commit();
+        } catch (const std::exception &ex) {
+            send_error(worker, header, "500 Internal Server Error", std::string("Database error: ") + ex.what());
+            return;
+        }
+        auto res = json::json_value::make_object();
+        res.add_bool("success", true);
+        res.add_int("deleted_id", dash_id);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    send_error(worker, header, "405 Method Not Allowed", "Method not supported");
+}
+
+// POST /api/dashboards/([0-9]+)/copy
+static void handle_dashboard_copy(backend::wsworker *worker,
+                                  const std::map<std::string, std::string> &header,
+                                  const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing dashboard ID");
+        return;
+    }
+    int dash_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    int uid = u_auth.authenticated ? u_auth.id : 1;
+
+    auto src = conn.prepare("SELECT name, description, layout, share_type, project_id FROM dashboards WHERE id = ?;");
+    src.bind_int(1, dash_id);
+    if (src.step() != SQLITE_ROW) {
+        send_error(worker, header, "404 Not Found", "Source dashboard not found");
+        return;
+    }
+
+    std::string name = src.column_str(0) + " (Copy)";
+    std::string desc = src.column_str(1);
+    std::string layout = src.column_str(2);
+    std::string share_type = src.column_str(3);
+    int project_id = src.column_is_null(4) ? 0 : src.column_int(4);
+    src.reset();
+
+    int new_dash_id = 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare(R"SQL(
+            INSERT INTO dashboards (owner_id, name, description, layout, is_favorite, share_type, project_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 0, ?, CASE WHEN ? > 0 THEN ? ELSE NULL END, datetime('now'), datetime('now'));
+        )SQL");
+        ins.bind_int(1, uid);
+        ins.bind_text(2, name);
+        ins.bind_text(3, desc);
+        ins.bind_text(4, layout);
+        ins.bind_text(5, share_type);
+        ins.bind_int(6, project_id);
+        ins.bind_int(7, project_id);
+        ins.step_done();
+        new_dash_id = static_cast<int>(conn.last_insert_rowid());
+
+        // Clone gadgets
+        auto clone_g = conn.prepare(R"SQL(
+            INSERT INTO dashboard_gadgets (dashboard_id, gadget_type, title, column_index, row_index, preferences_json, created_at, updated_at)
+            SELECT ?, gadget_type, title, column_index, row_index, preferences_json, datetime('now'), datetime('now')
+            FROM dashboard_gadgets
+            WHERE dashboard_id = ?;
+        )SQL");
+        clone_g.bind_int(1, new_dash_id);
+        clone_g.bind_int(2, dash_id);
+        clone_g.step_done();
+
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "500 Internal Server Error", std::string("Database error: ") + ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", new_dash_id);
+    res.add_str("name", name);
+    res.add_str("layout", layout);
+    send_json(worker, header, "201 Created", res);
+}
+
+// POST /api/dashboards/([0-9]+)/star
+static void handle_dashboard_star(backend::wsworker *worker,
+                                  const std::map<std::string, std::string> &header,
+                                  const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing dashboard ID");
+        return;
+    }
+    int dash_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+
+    auto chk = conn.prepare("SELECT is_favorite FROM dashboards WHERE id = ?;");
+    chk.bind_int(1, dash_id);
+    if (chk.step() != SQLITE_ROW) {
+        send_error(worker, header, "404 Not Found", "Dashboard not found");
+        return;
+    }
+    int cur_fav = chk.column_int(0);
+    chk.reset();
+
+    int new_fav = (cur_fav == 0) ? 1 : 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        auto upd = conn.prepare("UPDATE dashboards SET is_favorite = ?, updated_at = datetime('now') WHERE id = ?;");
+        upd.bind_int(1, new_fav);
+        upd.bind_int(2, dash_id);
+        upd.step_done();
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "500 Internal Server Error", std::string("Database error: ") + ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", dash_id);
+    res.add_bool("is_favorite", new_fav != 0);
+    send_json(worker, header, "200 OK", res);
+}
+
+// POST /api/dashboards/([0-9]+)/gadgets
+static void handle_dashboard_add_gadget(backend::wsworker *worker,
+                                        const std::map<std::string, std::string> &header,
+                                        const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing dashboard ID");
+        return;
+    }
+    int dash_id = std::atoi(uri_params.front().c_str());
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON payload");
+        return;
+    }
+
+    std::string gadget_type = body.get_string("gadget_type");
+    if (gadget_type.empty()) {
+        send_error(worker, header, "400 Bad Request", "gadget_type is required");
+        return;
+    }
+
+    std::string title = body.get_string("title");
+    if (title.empty()) {
+        title = gadget_type;
+    }
+
+    int col_idx = body.get_int("column_index", 0);
+    int row_idx = body.get_int("row_index", 0);
+
+    std::string prefs_json = "{}";
+    if (body.has_key("preferences_json")) {
+        prefs_json = body.get_string("preferences_json");
+    } else if (body.has_key("preferences")) {
+        auto pobj = body.get_child("preferences");
+        if (pobj) prefs_json = pobj.serialize();
+    }
+
+    auto conn = acquire_db_connection();
+    int new_id = 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare(R"SQL(
+            INSERT INTO dashboard_gadgets (dashboard_id, gadget_type, title, column_index, row_index, preferences_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'));
+        )SQL");
+        ins.bind_int(1, dash_id);
+        ins.bind_text(2, gadget_type);
+        ins.bind_text(3, title);
+        ins.bind_int(4, col_idx);
+        ins.bind_int(5, row_idx);
+        ins.bind_text(6, prefs_json);
+        ins.step_done();
+        new_id = static_cast<int>(conn.last_insert_rowid());
+
+        auto upd_dash = conn.prepare("UPDATE dashboards SET updated_at = datetime('now') WHERE id = ?;");
+        upd_dash.bind_int(1, dash_id);
+        upd_dash.step_done();
+
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "500 Internal Server Error", std::string("Database error: ") + ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", new_id);
+    res.add_int("dashboard_id", dash_id);
+    res.add_str("gadget_type", gadget_type);
+    res.add_str("title", title);
+    res.add_int("column_index", col_idx);
+    res.add_int("row_index", row_idx);
+    res.add_str("preferences_json", prefs_json);
+    auto parsed_p = json::json_value::parse(prefs_json);
+    if (parsed_p) res.add("preferences", std::move(parsed_p));
+    send_json(worker, header, "201 Created", res);
+}
+
+// PUT / DELETE /api/dashboard-gadgets/([0-9]+)
+static void handle_gadget_update(backend::wsworker *worker,
+                                 const std::map<std::string, std::string> &header,
+                                 const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing gadget ID");
+        return;
+    }
+    int gadget_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "PUT") {
+        auto body = json::json_value::parse(worker->body());
+        if (!body) {
+            send_error(worker, header, "400 Bad Request", "Invalid JSON payload");
+            return;
+        }
+
+        auto chk = conn.prepare("SELECT dashboard_id, title, preferences_json FROM dashboard_gadgets WHERE id = ?;");
+        chk.bind_int(1, gadget_id);
+        if (chk.step() != SQLITE_ROW) {
+            send_error(worker, header, "404 Not Found", "Gadget not found");
+            return;
+        }
+        int dash_id = chk.column_int(0);
+        std::string title = body.has_key("title") ? body.get_string("title") : chk.column_str(1);
+        std::string prefs_json = chk.column_str(2);
+        if (body.has_key("preferences_json")) {
+            prefs_json = body.get_string("preferences_json");
+        } else if (body.has_key("preferences")) {
+            auto pobj = body.get_child("preferences");
+            if (pobj) prefs_json = pobj.serialize();
+        }
+        chk.reset();
+
+        try {
+            db::sqlite_transaction tx(conn);
+            auto upd = conn.prepare(R"SQL(
+                UPDATE dashboard_gadgets
+                SET title = ?, preferences_json = ?, updated_at = datetime('now')
+                WHERE id = ?;
+            )SQL");
+            upd.bind_text(1, title);
+            upd.bind_text(2, prefs_json);
+            upd.bind_int(3, gadget_id);
+            upd.step_done();
+
+            auto upd_dash = conn.prepare("UPDATE dashboards SET updated_at = datetime('now') WHERE id = ?;");
+            upd_dash.bind_int(1, dash_id);
+            upd_dash.step_done();
+
+            tx.commit();
+        } catch (const std::exception &ex) {
+            send_error(worker, header, "500 Internal Server Error", std::string("Database error: ") + ex.what());
+            return;
+        }
+
+        auto res = json::json_value::make_object();
+        res.add_int("id", gadget_id);
+        res.add_str("title", title);
+        res.add_str("preferences_json", prefs_json);
+        auto parsed_p = json::json_value::parse(prefs_json);
+        if (parsed_p) res.add("preferences", std::move(parsed_p));
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    if (method == "DELETE") {
+        try {
+            db::sqlite_transaction tx(conn);
+            auto del = conn.prepare("DELETE FROM dashboard_gadgets WHERE id = ?;");
+            del.bind_int(1, gadget_id);
+            del.step_done();
+            tx.commit();
+        } catch (const std::exception &ex) {
+            send_error(worker, header, "500 Internal Server Error", std::string("Database error: ") + ex.what());
+            return;
+        }
+        auto res = json::json_value::make_object();
+        res.add_bool("success", true);
+        res.add_int("deleted_id", gadget_id);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    send_error(worker, header, "405 Method Not Allowed", "Method not supported");
+}
+
+// PUT /api/dashboard-gadgets/([0-9]+)/position
+static void handle_gadget_position(backend::wsworker *worker,
+                                   const std::map<std::string, std::string> &header,
+                                   const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing gadget ID");
+        return;
+    }
+    int gadget_id = std::atoi(uri_params.front().c_str());
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON payload");
+        return;
+    }
+
+    int col_idx = body.get_int("column_index", 0);
+    int row_idx = body.get_int("row_index", 0);
+
+    auto conn = acquire_db_connection();
+    try {
+        db::sqlite_transaction tx(conn);
+        auto upd = conn.prepare("UPDATE dashboard_gadgets SET column_index = ?, row_index = ?, updated_at = datetime('now') WHERE id = ?;");
+        upd.bind_int(1, col_idx);
+        upd.bind_int(2, row_idx);
+        upd.bind_int(3, gadget_id);
+        upd.step_done();
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "500 Internal Server Error", std::string("Database error: ") + ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", gadget_id);
+    res.add_int("column_index", col_idx);
+    res.add_int("row_index", row_idx);
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET /api/dashboard-gadgets/([0-9]+)/data
+static void handle_gadget_data(backend::wsworker *worker,
+                               const std::map<std::string, std::string> &header,
+                               const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing gadget ID");
+        return;
+    }
+    int gadget_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    int uid = u_auth.authenticated ? u_auth.id : 1;
+    std::string uname = u_auth.authenticated ? u_auth.display_name : "System Administrator";
+
+    auto gstmt = conn.prepare("SELECT gadget_type, preferences_json, title FROM dashboard_gadgets WHERE id = ?;");
+    gstmt.bind_int(1, gadget_id);
+    if (gstmt.step() != SQLITE_ROW) {
+        send_error(worker, header, "404 Not Found", "Gadget not found");
+        return;
+    }
+
+    std::string gtype = gstmt.column_str(0);
+    std::string pjson = gstmt.column_str(1);
+    std::string title = gstmt.column_str(2);
+    gstmt.reset();
+
+    auto prefs = json::json_value::parse(pjson);
+    if (!prefs) prefs = json::json_value::make_object();
+
+    auto data = dashboard::execute_gadget(conn, uid, uname, gtype, prefs);
+    auto res = json::json_value::make_object();
+    res.add_int("gadget_id", gadget_id);
+    res.add_str("gadget_type", gtype);
+    res.add_str("title", title);
+    res.add("data", std::move(data));
+    send_json(worker, header, "200 OK", res);
+}
+
 static constexpr auto DEFAULT_SOCKET_NAME = ":9002";
 static constexpr auto DEFAULT_BACKLOG = 100;
 
@@ -10382,6 +11094,16 @@ int main(int argc, char *argv[]) {
         {"^/api/reports/epics$",                        backend::GET,                   handle_report_epics_list    },
         {"^/api/reports/release-burndown$",             backend::GET,                   handle_report_release       },
         {"^/api/reports/releases$",                     backend::GET,                   handle_report_releases_list },
+        {"^/api/gadgets/catalog$",                      backend::GET,                   handle_gadgets_catalog      },
+        {"^/api/gadgets/execute$",                      backend::POST,                  handle_gadgets_execute      },
+        {"^/api/dashboards$",                           backend::GET | backend::POST,   handle_dashboards           },
+        {"^/api/dashboards/([0-9]+)$",                  backend::GET | backend::PUT | backend::DELETE, handle_dashboard_detail},
+        {"^/api/dashboards/([0-9]+)/copy$",             backend::POST,                  handle_dashboard_copy       },
+        {"^/api/dashboards/([0-9]+)/star$",             backend::POST,                  handle_dashboard_star       },
+        {"^/api/dashboards/([0-9]+)/gadgets$",          backend::POST,                  handle_dashboard_add_gadget },
+        {"^/api/dashboard-gadgets/([0-9]+)$",           backend::PUT | backend::DELETE, handle_gadget_update        },
+        {"^/api/dashboard-gadgets/([0-9]+)/position$",  backend::PUT,                   handle_gadget_position      },
+        {"^/api/dashboard-gadgets/([0-9]+)/data$",      backend::GET,                   handle_gadget_data          },
         {"^/api/items/([A-Za-z0-9_-]+)/links$",         backend::POST,                  handle_item_links           },
         {"^/api/links$",                                backend::GET,                   handle_all_links            },
         {"^/api/links/([0-9]+)$",                       backend::DELETE,                handle_delete_link          },

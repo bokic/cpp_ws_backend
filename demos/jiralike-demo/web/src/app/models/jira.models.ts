@@ -1037,5 +1037,53 @@ export interface ReleaseSummaryItem {
   completion_percent: number;
 }
 
+export type DashboardLayout = '1_column' | '2_column_equal' | '2_column_split' | '3_column';
+export type DashboardShareType = 'private' | 'project' | 'public';
+
+export interface DashboardGadget {
+  id: number;
+  dashboard_id: number;
+  gadget_type: string;
+  title: string;
+  column_index: number;
+  row_index: number;
+  preferences_json: string;
+  preferences?: any;
+  created_at?: string;
+  updated_at?: string;
+  data?: any;
+  loading?: boolean;
+  error?: string;
+}
+
+export interface Dashboard {
+  id: number;
+  owner_id: number;
+  name: string;
+  description: string;
+  layout: DashboardLayout;
+  is_favorite: boolean;
+  share_type: DashboardShareType;
+  project_id?: number | null;
+  project_name?: string;
+  project_key?: string;
+  gadget_count?: number;
+  created_at: string;
+  updated_at: string;
+  owner_name?: string;
+  owner_avatar?: string;
+  gadgets?: DashboardGadget[];
+}
+
+export interface GadgetCatalogItem {
+  gadget_type: string;
+  title: string;
+  description: string;
+  category: string;
+  icon: string;
+  default_preferences: string;
+}
+
+
 
 

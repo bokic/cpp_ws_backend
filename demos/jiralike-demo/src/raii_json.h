@@ -55,6 +55,18 @@ public:
         return m_obj ? json_object_to_json_string_ext(m_obj, JSON_C_TO_STRING_PLAIN) : "{}";
     }
 
+    std::string serialize() const {
+        return to_string();
+    }
+
+    json_value get_child(const char *key) const {
+        if (!m_obj || !json_object_is_type(m_obj, json_type_object)) return json_value(nullptr);
+        json_object *field = nullptr;
+        if (!json_object_object_get_ex(m_obj, key, &field) || !field) return json_value(nullptr);
+        json_object_get(field);
+        return json_value(field);
+    }
+
     static json_value parse(const std::string &raw) {
         if (raw.empty()) return json_value(nullptr);
         json_object *parsed = json_tokener_parse(raw.c_str());

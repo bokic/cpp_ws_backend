@@ -12,11 +12,13 @@ import { ProjectSettingsComponent } from './pages/project-settings/project-setti
 import { CustomFieldsComponent } from './pages/custom-fields/custom-fields.component';
 import { SearchComponent } from './pages/search/search.component';
 import { ReportsComponent } from './pages/reports/reports.component';
+import { DashboardsComponent } from './pages/dashboards/dashboards.component';
 
 export const routes: Routes = [
-  { path: '', pathMatch: 'full', redirectTo: 'board' },
+  { path: '', pathMatch: 'full', redirectTo: 'dashboards' },
   { path: 'setup', component: SetupComponent },
   { path: 'login', component: LoginComponent },
+  { path: 'dashboards', component: DashboardsComponent },
   { path: 'board', component: BoardComponent },
   { path: 'backlog', component: BoardComponent },
   { path: 'search', component: SearchComponent },

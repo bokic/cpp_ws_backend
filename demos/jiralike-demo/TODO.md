@@ -373,20 +373,20 @@ This document provides a comprehensive gap analysis and exhaustive development r
 ## 8. Epic 7: Configurable Dashboards & Gadgets Framework
 
 ### 8.1 Multi-Dashboard System
-- [ ] **Dashboard Schema (`dashboards`, `dashboard_gadgets`)**:
+- [x] **Dashboard Schema (`dashboards`, `dashboard_gadgets`)**:
   - Multi-dashboard management: create, star, share, and duplicate dashboards.
   - Layout Options: 1 Column, 2 Columns (50/50 or 30/70), 3 Columns.
   - Drag-and-drop gadget placement and reordering.
 
 ### 8.2 Standard Gadget Catalog
-- [ ] **Filter Results Gadget**: Display paginated table of issues returned by any saved JQL filter with configurable columns.
-- [ ] **Pie Chart Gadget**: Interactive pie chart grouping issues by Assignee, Status, Priority, Component, or Issue Type.
-- [ ] **Created vs Resolved Gadget**: Time-series chart comparing incoming vs completed items.
-- [ ] **Sprint Burndown Gadget**: Real-time burndown progress for the active sprint.
-- [ ] **Two-Dimensional Filter Statistics Gadget**: Cross-tabulation matrix (e.g. Assignee on X-axis vs Status on Y-axis).
-- [ ] **Assigned to Me / In Progress Gadget**: Quick personal work queue.
-- [ ] **Activity Stream Gadget**: Chronological timeline of updates across selected projects.
-- [ ] **Roadmap Summary Gadget**: High-level timeline status of current milestones.
+- [x] **Filter Results Gadget**: Display paginated table of issues returned by any saved JQL filter with configurable columns.
+- [x] **Pie Chart Gadget**: Interactive pie chart grouping issues by Assignee, Status, Priority, Component, or Issue Type.
+- [x] **Created vs Resolved Gadget**: Time-series chart comparing incoming vs completed items.
+- [x] **Sprint Burndown Gadget**: Real-time burndown progress for the active sprint.
+- [x] **Two-Dimensional Filter Statistics Gadget**: Cross-tabulation matrix (e.g. Assignee on X-axis vs Status on Y-axis).
+- [x] **Assigned to Me / In Progress Gadget**: Quick personal work queue.
+- [x] **Activity Stream Gadget**: Chronological timeline of updates across selected projects.
+- [x] **Roadmap Summary Gadget**: High-level timeline status of current milestones.
 
 ---
 
@@ -814,21 +814,23 @@ flowchart TD
   - [x] Reports Hub (`/reports`): Interactive charts rendered with responsive SVGs, hover tooltips, date range selectors, estimation unit toggles, and 1-click CSV download.
 - **Verification**: Burndown chart accurately reflects mid-sprint scope changes (added/removed issues) and weekend flattening; end-to-end verified with 12/12 passing tests in `verify_step8.py`.
 
-#### Step 9: Dashboards & Gadgets Framework
+#### Step 9: Dashboards & Gadgets Framework *(Completed)*
 - **Why Next**: Uses Saved Filters (Step 5), Agile Reports (Step 8), and Work Items to provide customizable executive and team overviews.
 - **Backend Deliverables**:
-  - Database Migration: Create `dashboards`, `dashboard_gadgets` (storing gadget type, position, coordinates, and JSON preferences).
-  - Endpoints: CRUD for dashboards, gadget state updates, and gadget data providers.
+  - [x] Database Migration: Create `dashboards`, `dashboard_gadgets` (storing gadget type, position, coordinates, and JSON preferences).
+  - [x] Endpoints: CRUD for dashboards, gadget state updates, and gadget data providers (`/api/dashboards`, `/api/dashboards/:id`, `/api/dashboards/:id/copy`, `/api/dashboards/:id/star`, `/api/dashboards/:id/gadgets`, `/api/dashboard-gadgets/:id`, `/api/dashboard-gadgets/:id/position`, `/api/dashboard-gadgets/:id/data`, `/api/gadgets/catalog`, `/api/gadgets/execute`).
 - **Frontend Deliverables**:
-  - Multi-Dashboard Page (`/dashboards`): Create private or shared dashboards with 1, 2, or 3-column responsive grid.
-  - Gadget Directory Modal: Add gadgets from catalog:
+  - [x] Multi-Dashboard Page (`/dashboards`): Create private or shared dashboards with 1, 2, or 3-column responsive grid, layout switcher, and duplicate/star tools.
+  - [x] Gadget Directory Modal: Add gadgets from catalog:
     - *Filter Results Gadget* (paginated issue list).
     - *Pie Chart Gadget* (breakdown by Assignee, Priority, Status, Component).
+    - *Created vs Resolved Gadget* (incoming vs completed trend).
     - *Sprint Burndown Gadget* (active sprint).
     - *Two-Dimensional Filter Statistics Gadget* (cross-tabulation matrix).
     - *Assigned to Me Gadget*.
     - *Activity Stream Gadget*.
-- **Verification**: Users can customize and rearrange gadgets; gadgets refresh data independently without full page reloads.
+    - *Roadmap Summary Gadget*.
+- **Verification**: Users can customize and rearrange gadgets; gadgets refresh data independently without full page reloads; 8/8 test suites verified end-to-end in `verify_step9.py`.
 
 #### Step 10: Rich Text, Markdown WYSIWYG Editor, Mentions & Image Pasting
 - **Why Next**: Enhances core usability for daily communication across descriptions and comments.

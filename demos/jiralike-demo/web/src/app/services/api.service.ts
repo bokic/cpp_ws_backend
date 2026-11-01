@@ -15,10 +15,13 @@ import {
   CustomFieldDef,
   CustomFieldOption,
   CycleTimeReport,
+  Dashboard,
+  DashboardGadget,
   DurationParseResponse,
   EpicReport,
   EpicSummaryItem,
   FieldConfiguration,
+  GadgetCatalogItem,
   IssueTypeDef,
   IssueTypeScheme,
   ItemTransitionsPayload,
@@ -1447,5 +1450,136 @@ export class ApiService {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  }
+
+  // ============================================================================
+  // Epic 7 & Step 9: Dashboards & Gadgets Framework Methods
+  // ============================================================================
+
+  async getGadgetCatalog(): Promise<GadgetCatalogItem[]> {
+    return this.request<GadgetCatalogItem[]>('/api/gadgets/catalog');
+  }
+
+  async executeGadget(gadgetType: string, preferences: any): Promise<any> {
+    return this.request<any>('/api/gadgets/execute', {
+      method: 'POST',
+      body: JSON.stringify({
+        gadget_type: gadgetType,
+        preferences,
+      }),
+    });
+  }
+
+  async getDashboards(favoriteOnly = false, projectId = 0): Promise<{ dashboards: Dashboard[] }> {
+    const params = new URLSearchParams();
+    if (favoriteOnly) params.set('favorite_only', '1');
+    if (projectId > 0) params.set('project_id', String(projectId));
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    return this.request<{ dashboards: Dashboard[] }>(`/api/dashboards${qs}`);
+  }
+
+  async getDashboard(id: number): Promise<Dashboard> {
+    return this.request<Dashboard>(`/api/dashboards/${id}`);
+  }
+
+  async createDashboard(data: {
+    name: string;
+    description?: string;
+    layout?: string;
+    share_type?: string;
+    project_id?: number | null;
+    is_favorite?: boolean;
+  }): Promise<Dashboard> {
+    return this.request<Dashboard>('/api/dashboards', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateDashboard(id: number, data: Partial<Dashboard>): Promise<Dashboard> {
+    return this.request<Dashboard>(`/api/dashboards/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteDashboard(id: number): Promise<{ success: boolean; deleted_id: number }> {
+    return this.request<{ success: boolean; deleted_id: number }>(`/api/dashboards/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async copyDashboard(id: number): Promise<Dashboard> {
+    return this.request<Dashboard>(`/api/dashboards/${id}/copy`, {
+      method: 'POST',
+    });
+  }
+
+  async toggleDashboardStar(id: number): Promise<{ id: number; is_favorite: boolean }> {
+    return this.request<{ id: number; is_favorite: boolean }>(`/api/dashboards/${id}/star`, {
+      method: 'POST',
+    });
+  }
+
+  async addDashboardGadget(
+    dashboardId: number,
+    gadget: {
+      gadget_type: string;
+      title?: string;
+      column_index?: number;
+      row_index?: number;
+      preferences?: any;
+    }
+  ): Promise<DashboardGadget> {
+    return this.request<DashboardGadget>(`/api/dashboards/${dashboardId}/gadgets`, {
+      method: 'POST',
+      body: JSON.stringify(gadget),
+    });
+  }
+
+  async updateDashboardGadget(
+    gadgetId: number,
+    update: { title?: string; preferences?: any }
+  ): Promise<DashboardGadget> {
+    return this.request<DashboardGadget>(`/api/dashboard-gadgets/${gadgetId}`, {
+      method: 'PUT',
+      body: JSON.stringify(update),
+    });
+  }
+
+  async updateDashboardGadgetPosition(
+    gadgetId: number,
+    pos: { column_index: number; row_index: number }
+  ): Promise<{ id: number; column_index: number; row_index: number }> {
+    return this.request<{ id: number; column_index: number; row_index: number }>(
+      `/api/dashboard-gadgets/${gadgetId}/position`,
+      {
+        method: 'PUT',
+        body: JSON.stringify(pos),
+      }
+    );
+  }
+
+  async deleteDashboardGadget(gadgetId: number): Promise<{ success: boolean; deleted_id: number }> {
+    return this.request<{ success: boolean; deleted_id: number }>(
+      `/api/dashboard-gadgets/${gadgetId}`,
+      {
+        method: 'DELETE',
+      }
+    );
+  }
+
+  async getDashboardGadgetData(gadgetId: number): Promise<{
+    gadget_id: number;
+    gadget_type: string;
+    title: string;
+    data: any;
+  }> {
+    return this.request<{
+      gadget_id: number;
+      gadget_type: string;
+      title: string;
+      data: any;
+    }>(`/api/dashboard-gadgets/${gadgetId}/data`);
   }
 }
