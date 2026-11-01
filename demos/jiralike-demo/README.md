@@ -178,6 +178,8 @@ A high-performance, full-featured, enterprise-grade Jira clone powered by a **`c
 
 ```text
 demos/jiralike-demo/
+├── run.sh                      # One-click launcher script (builds, starts backend & dev-gateway)
+├── dev-gateway.js              # Node.js HTTP gateway (serves SPA + proxies /api to FastCGI)
 ├── CMakeLists.txt              # CMake build configuration for C++ backend
 ├── README.md                   # This documentation
 ├── TODO.md                     # Roadmap and completed 20-step execution plan
@@ -250,6 +252,34 @@ The backend exposes over 80 RESTful and streaming endpoints. Below is a high-lev
 
 > [!TIP]
 > Visit **`/api/docs`** in your browser for the full, interactive Swagger UI documentation and live API console.
+
+---
+
+## Quick Start with `run.sh`
+
+The fastest way to launch the demo (compiles C++ backend and Angular frontend automatically if not yet built, applies all 24 database migrations, and serves the web application and API proxy):
+
+```bash
+cd demos/jiralike-demo
+./run.sh
+```
+
+Then open **[http://localhost:4200](http://localhost:4200)** in your browser!
+
+### `run.sh` Options
+```text
+Usage: ./run.sh [OPTIONS]
+
+Options:
+  -p, --port <port>       HTTP gateway port for web app (default: 4200, env: PORT)
+  -f, --fcgi-port <port>  FastCGI backend port (default: 9002, env: FCGI_PORT)
+  -w, --workers <count>   FastCGI worker thread count (default: 4, env: WORKERS)
+  -d, --db <path>         Path to SQLite database file (default: db/jiralike.db, env: DB_PATH)
+  -u, --blobs <dir>       Path to blob attachments directory (default: blobs, env: BLOBS_DIR)
+  -b, --build             Force rebuild backend and frontend before starting
+  --backend-only          Start only the C++ FastCGI backend (e.g., if using system Nginx)
+  -h, --help              Show usage help
+```
 
 ---
 
