@@ -34,6 +34,81 @@
         <span class="schema-badge" title="SQLite Schema Version">
           DB Schema v{{ api.setupStatus()?.schema_version || 5 }}
         </span>
+
+        <!-- In-App Mentions & Notifications Bell -->
+        <div class="notifications-wrapper" style="position: relative;">
+          <button
+            type="button"
+            class="nav-bell-btn"
+            [class.has-unread]="api.unreadMentionsCount() > 0"
+            (click)="toggleMentionsDropdown()"
+            title="Notifications & Mentions"
+          >
+            🔔
+            @if (api.unreadMentionsCount() > 0) {
+              <span class="bell-badge">{{ api.unreadMentionsCount() }}</span>
+            }
+          </button>
+
+          @if (showMentionsDropdown()) {
+            <div class="mentions-dropdown-panel" (click)="$event.stopPropagation()">
+              <div class="mentions-panel-header">
+                <div>
+                  <strong>Mentions &amp; Activity</strong>
+                  <span class="badge badge-info" style="margin-left: 6px;">{{ api.mentions().length }}</span>
+                </div>
+                @if (api.unreadMentionsCount() > 0) {
+                  <button type="button" class="btn btn-ghost btn-xs" (click)="markAllRead()">
+                    Mark all read
+                  </button>
+                }
+              </div>
+
+              <div class="mentions-panel-body">
+                @for (m of api.mentions(); track m.id) {
+                  <div
+                    class="mention-item-card"
+                    [class.unread]="!m.is_read"
+                    (click)="openMention(m)"
+                  >
+                    <div class="mention-avatar-col">
+                      <span class="avatar-circle-sm" [style.background]="m.author_color">
+                        {{ m.author_name.slice(0, 2).toUpperCase() }}
+                      </span>
+                    </div>
+                    <div class="mention-info-col">
+                      <div class="mention-top-line">
+                        <strong>{{ m.author_name }}</strong>
+                        <span class="text-muted">mentioned you on</span>
+                        <strong class="item-key-tag">{{ m.item_key }}</strong>
+                      </div>
+                      <div class="mention-snippet-text">{{ m.snippet }}</div>
+                      <div class="mention-time-row">
+                        <span class="text-muted">{{ m.created_at }}</span>
+                        @if (!m.is_read) {
+                          <button
+                            type="button"
+                            class="mark-read-btn"
+                            (click)="markRead(m, $event)"
+                            title="Mark as read"
+                          >
+                            ✓
+                          </button>
+                        }
+                      </div>
+                    </div>
+                  </div>
+                } @empty {
+                  <div style="padding: 24px; text-align: center; color: #6b778c;">
+                    <div style="font-size: 24px; margin-bottom: 6px;">🔕</div>
+                    <p style="margin: 0;">No mentions yet. Teammates can mention you with &#64;{{ user.username }}</p>
+                  </div>
+                }
+              </div>
+            </div>
+          }
+        </div>
+
         <div class="user-pill">
           <span class="avatar-sm" [style.background]="user.avatar_color">
             {{ user.display_name.slice(0, 2).toUpperCase() }}

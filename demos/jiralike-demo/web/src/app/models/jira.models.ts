@@ -310,6 +310,10 @@ export interface WorkItem {
   time_tracking_pct?: number;
   is_over_estimate?: boolean;
   bm25_score?: number;
+  watchers_count?: number;
+  votes_count?: number;
+  is_watching?: boolean;
+  has_voted?: boolean;
 }
 
 export type WorklogAdjustmentMode = 'auto' | 'leave' | 'set' | 'reduce';
@@ -466,6 +470,59 @@ export interface WorkflowHistoryItem {
   executed_post_functions?: string;
 }
 
+export interface WorkItemChangelog {
+  id: number;
+  work_item_id: number;
+  changed_by_id: number | null;
+  changed_by_name: string;
+  changed_by_color: string;
+  field_name: string;
+  old_value: string;
+  new_value: string;
+  created_at: string;
+}
+
+export interface UserMention {
+  id: number;
+  work_item_id: number;
+  item_key: string;
+  item_title: string;
+  comment_id: number | null;
+  author_id: number;
+  author_name: string;
+  author_color: string;
+  snippet: string;
+  is_read: boolean;
+  created_at: string;
+}
+
+export interface WatcherUser {
+  user_id: number;
+  username: string;
+  display_name: string;
+  avatar_color: string;
+  created_at: string;
+}
+
+export interface WatchersPayload {
+  watchers_count: number;
+  is_watching: boolean;
+  watchers: WatcherUser[];
+}
+
+export interface VoterUser {
+  user_id: number;
+  username: string;
+  display_name: string;
+  created_at: string;
+}
+
+export interface VotesPayload {
+  votes_count: number;
+  has_voted: boolean;
+  voters: VoterUser[];
+}
+
 export interface WorkItemDetail extends WorkItem {
   subtasks: WorkItem[];
   links: WorkItemLink[];
@@ -475,6 +532,9 @@ export interface WorkItemDetail extends WorkItem {
   worklogs?: WorklogItem[];
   time_rollup?: TimeRollup;
   workflow?: ItemTransitionsPayload;
+  changelog?: WorkItemChangelog[];
+  watchers_info?: WatchersPayload;
+  votes_info?: VotesPayload;
 }
 
 export type CustomFieldType =

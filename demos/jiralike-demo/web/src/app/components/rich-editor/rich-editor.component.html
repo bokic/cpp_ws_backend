@@ -1,0 +1,296 @@
+<div class="rich-editor-container" [class.compact-mode]="compact">
+  <!-- Editor Toolbar -->
+  <div class="rich-toolbar">
+    <div class="toolbar-group">
+      <button
+        type="button"
+        class="tool-btn"
+        (click)="applyFormat('bold')"
+        title="Bold (**text**)"
+      >
+        <strong>B</strong>
+      </button>
+      <button
+        type="button"
+        class="tool-btn"
+        (click)="applyFormat('italic')"
+        title="Italic (*text*)"
+      >
+        <em>I</em>
+      </button>
+      <button
+        type="button"
+        class="tool-btn"
+        (click)="applyFormat('underline')"
+        title="Underline (<u>text</u>)"
+      >
+        <u>U</u>
+      </button>
+      <button
+        type="button"
+        class="tool-btn"
+        (click)="applyFormat('strike')"
+        title="Strikethrough (~~text~~)"
+      >
+        <s>S</s>
+      </button>
+      <button
+        type="button"
+        class="tool-btn"
+        (click)="applyFormat('code')"
+        title="Inline Code (`code`)"
+      >
+        <code>&lt;&gt;</code>
+      </button>
+    </div>
+
+    <div class="toolbar-divider"></div>
+
+    <div class="toolbar-group">
+      <button
+        type="button"
+        class="tool-btn"
+        (click)="applyFormat('h1')"
+        title="Heading 1"
+      >
+        H1
+      </button>
+      <button
+        type="button"
+        class="tool-btn"
+        (click)="applyFormat('h2')"
+        title="Heading 2"
+      >
+        H2
+      </button>
+      <button
+        type="button"
+        class="tool-btn"
+        (click)="applyFormat('h3')"
+        title="Heading 3"
+      >
+        H3
+      </button>
+    </div>
+
+    <div class="toolbar-divider"></div>
+
+    <div class="toolbar-group">
+      <button
+        type="button"
+        class="tool-btn"
+        (click)="applyFormat('bullet')"
+        title="Bullet List (- item)"
+      >
+        • List
+      </button>
+      <button
+        type="button"
+        class="tool-btn"
+        (click)="applyFormat('number')"
+        title="Numbered List (1. item)"
+      >
+        1. List
+      </button>
+      <button
+        type="button"
+        class="tool-btn"
+        (click)="applyFormat('checklist')"
+        title="Checklist (- [ ] task)"
+      >
+        ☑ Task
+      </button>
+      <button
+        type="button"
+        class="tool-btn"
+        (click)="applyFormat('quote')"
+        title="Blockquote (> quote)"
+      >
+        ❝ Quote
+      </button>
+    </div>
+
+    <div class="toolbar-divider"></div>
+
+    <div class="toolbar-group">
+      <button
+        type="button"
+        class="tool-btn"
+        (click)="applyFormat('note')"
+        title="Info Callout Panel"
+      >
+        ℹ Note
+      </button>
+      <button
+        type="button"
+        class="tool-btn"
+        (click)="applyFormat('tip')"
+        title="Tip Callout Panel"
+      >
+        💡 Tip
+      </button>
+      <button
+        type="button"
+        class="tool-btn"
+        (click)="applyFormat('warning')"
+        title="Warning Callout Panel"
+      >
+        ⚠ Warn
+      </button>
+    </div>
+
+    <div class="toolbar-divider"></div>
+
+    <div class="toolbar-group">
+      <button
+        type="button"
+        class="tool-btn"
+        (click)="applyFormat('codeblock')"
+        title="Code Block (```lang)"
+      >
+        &#123; &#125; Code
+      </button>
+      <button
+        type="button"
+        class="tool-btn"
+        (click)="applyFormat('table')"
+        title="Table (| Col 1 | Col 2 |)"
+      >
+        ⊞ Table
+      </button>
+      <button
+        type="button"
+        class="tool-btn"
+        (click)="applyFormat('link')"
+        title="Insert Link ([title](url))"
+      >
+        🔗 Link
+      </button>
+      <button
+        type="button"
+        class="tool-btn"
+        (click)="triggerImageUpload()"
+        title="Upload or paste image from clipboard (Ctrl+V)"
+      >
+        🖼 Image
+      </button>
+    </div>
+
+    <!-- Right Mode Switcher -->
+    <div class="toolbar-right">
+      @if (uploadMessage()) {
+        <span class="upload-badge" [class.uploading]="isUploading()">
+          {{ uploadMessage() }}
+        </span>
+      }
+
+      <div class="mode-toggles">
+        <button
+          type="button"
+          class="mode-btn"
+          [class.active]="mode() === 'write'"
+          (click)="setMode('write')"
+          title="Write Markdown"
+        >
+          ✏ Write
+        </button>
+        <button
+          type="button"
+          class="mode-btn"
+          [class.active]="mode() === 'preview'"
+          (click)="setMode('preview')"
+          title="Live Markdown Preview"
+        >
+          👁 Preview
+        </button>
+        @if (!compact) {
+          <button
+            type="button"
+            class="mode-btn"
+            [class.active]="mode() === 'split'"
+            (click)="setMode('split')"
+            title="Split Editor & Preview"
+          >
+            ◫ Split
+          </button>
+        }
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Editor Area -->
+  <div class="rich-body" [attr.data-mode]="mode()">
+    <!-- Write pane -->
+    @if (mode() === 'write' || mode() === 'split') {
+      <div class="editor-pane">
+        <textarea
+          #editorTextarea
+          class="rich-textarea"
+          [rows]="minRows"
+          [placeholder]="placeholder"
+          [value]="value"
+          (input)="onInput($any($event.target).value)"
+          (keydown)="onKeyDown($event)"
+          (paste)="onPaste($event)"
+          (drop)="onDrop($event)"
+          (dragover)="onDragOver($event)"
+        ></textarea>
+
+        <!-- Drop overlay hint -->
+        <div class="drag-hint">
+          Drag & drop images or paste from clipboard (Ctrl+V) · Type @ to mention a teammate
+        </div>
+
+        <!-- Mentions Autocomplete Popup -->
+        @if (showMentionPopup()) {
+          <div class="mention-dropdown">
+            <div class="mention-header">
+              <span>Mention User: <strong>@{{ mentionQuery() }}</strong></span>
+            </div>
+            <div class="mention-list">
+              @for (user of filteredUsers(); track user.id; let idx = $index) {
+                <div
+                  class="mention-item"
+                  [class.selected]="idx === mentionSelectedIndex()"
+                  (mousedown)="selectMentionUser(user)"
+                >
+                  <span class="user-avatar-mini" [style.background]="user.avatar_color">
+                    {{ user.display_name.slice(0, 2).toUpperCase() }}
+                  </span>
+                  <div class="mention-meta">
+                    <strong class="user-name">{{ user.display_name }}</strong>
+                    <span class="user-handle">&#64;{{ user.username }} · {{ user.role }}</span>
+                  </div>
+                </div>
+              } @empty {
+                <div class="mention-empty">No users matching "@{{ mentionQuery() }}"</div>
+              }
+            </div>
+          </div>
+        }
+      </div>
+    }
+
+    <!-- Preview pane -->
+    @if (mode() === 'preview' || mode() === 'split') {
+      <div class="preview-pane">
+        <div class="preview-header">
+          <span class="preview-tag">Markdown Preview</span>
+          @if (mode() === 'split') {
+            <span class="text-muted" style="font-size: 11px;">Live auto-updating</span>
+          }
+        </div>
+        <div class="preview-content" [innerHTML]="renderedHtml()"></div>
+      </div>
+    }
+  </div>
+
+  <!-- Hidden file input for toolbar image button -->
+  <input
+    #fileInput
+    type="file"
+    accept="image/*,.png,.jpg,.jpeg,.gif,.webp,.svg,.pdf"
+    hidden
+    (change)="onFileSelected($event)"
+  />
+</div>

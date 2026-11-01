@@ -12,6 +12,7 @@
 #include "src/jql_lexer.h"
 #include "src/jql_parser.h"
 #include "src/dashboard_engine.h"
+#include "src/collaboration_engine.h"
 
 #include <algorithm>
 #include <atomic>
@@ -535,8 +536,28 @@ static void seed_demo_workspace(db::sqlite_db &conn, int admin_id, int project_i
     ins_comment.clear_and_reset();
     ins_comment.bind_int(1, story2);
     ins_comment.bind_int(2, marcus_id);
-    ins_comment.bind_text(3, "Blob storage handler is wired up and tested with both multipart uploads and base64 payloads.");
+    ins_comment.bind_text(3, "Blob storage handler is wired up and tested with both multipart uploads and base64 payloads. @sarah please verify integration with JIRA-1!");
     ins_comment.step_done();
+    int seeded_c2 = static_cast<int>(conn.last_insert_rowid());
+    collaboration::process_mentions_and_links(conn, story2, seeded_c2, marcus_id,
+        "Blob storage handler is wired up and tested with both multipart uploads and base64 payloads. @sarah please verify integration with JIRA-1!");
+
+    // Seed sample watchers and votes
+    {
+        auto w_ins = conn.prepare("INSERT OR IGNORE INTO work_item_watchers (work_item_id, user_id) VALUES (?, ?);");
+        w_ins.bind_int(1, story2);
+        w_ins.bind_int(2, admin_id);
+        w_ins.step_done();
+        w_ins.clear_and_reset();
+        w_ins.bind_int(1, story2);
+        w_ins.bind_int(2, marcus_id);
+        w_ins.step_done();
+
+        auto v_ins = conn.prepare("INSERT OR IGNORE INTO work_item_votes (work_item_id, user_id) VALUES (?, ?);");
+        v_ins.bind_int(1, story2);
+        v_ins.bind_int(2, sarah_id);
+        v_ins.step_done();
+    }
 
     // Create a sample attachment in blobs/
     std::string blob_name = "demo_architecture_spec.txt";
@@ -5393,6 +5414,22 @@ static json::json_value row_to_work_item_json(db::sqlite_db &conn, db::sqlite_st
     item.add("custom_fields", std::move(cf_map));
     item.add("custom_field_entries", std::move(cf_entries));
 
+    int watchers_count = 0;
+    {
+        auto wstmt = conn.prepare("SELECT COUNT(*) FROM work_item_watchers WHERE work_item_id = ?;");
+        wstmt.bind_int(1, item_id);
+        if (wstmt.step() == SQLITE_ROW) watchers_count = wstmt.column_int(0);
+    }
+    item.add_int("watchers_count", watchers_count);
+
+    int votes_count = 0;
+    {
+        auto vstmt = conn.prepare("SELECT COUNT(*) FROM work_item_votes WHERE work_item_id = ?;");
+        vstmt.bind_int(1, item_id);
+        if (vstmt.step() == SQLITE_ROW) votes_count = vstmt.column_int(0);
+    }
+    item.add_int("votes_count", votes_count);
+
     return item;
 }
 
@@ -8062,6 +8099,23 @@ static void handle_items(backend::wsworker *worker,
         hist.bind_int(3, u_auth.id);
         hist.step_done();
 
+        // Step 10: Rich text mentions, auto-links, changelog and default watchers
+        collaboration::record_changelog(conn, new_item_id, u_auth.id, "Issue", "", "Work item created");
+        collaboration::process_mentions_and_links(conn, new_item_id, 0, u_auth.id, description);
+
+        if (reporter_id > 0) {
+            auto wstmt = conn.prepare("INSERT OR IGNORE INTO work_item_watchers (work_item_id, user_id) VALUES (?, ?);");
+            wstmt.bind_int(1, new_item_id);
+            wstmt.bind_int(2, reporter_id);
+            wstmt.step_done();
+        }
+        if (assignee_id > 0 && assignee_id != reporter_id) {
+            auto wstmt = conn.prepare("INSERT OR IGNORE INTO work_item_watchers (work_item_id, user_id) VALUES (?, ?);");
+            wstmt.bind_int(1, new_item_id);
+            wstmt.bind_int(2, assignee_id);
+            wstmt.step_done();
+        }
+
         tx.commit();
     } catch (const std::exception &ex) {
         send_error(worker, header, "500 Internal Server Error", ex.what());
@@ -8251,6 +8305,15 @@ static void handle_item_detail(backend::wsworker *worker,
         item.add("worklogs", build_item_worklogs_array(conn, item_id));
         item.add("time_rollup", build_item_time_rollup_json(conn, item_id));
 
+        // Step 10: Rich text changelog, watchers, and votes info
+        item.add("changelog", collaboration::get_item_changelog(conn, item_id));
+        auto watchers_obj = collaboration::get_item_watchers(conn, item_id, u_viewer.id);
+        item.add_bool("is_watching", watchers_obj.get_bool("is_watching"));
+        item.add("watchers_info", std::move(watchers_obj));
+        auto votes_obj = collaboration::get_item_votes(conn, item_id, u_viewer.id);
+        item.add_bool("has_voted", votes_obj.get_bool("has_voted"));
+        item.add("votes_info", std::move(votes_obj));
+
         send_json(worker, header, "200 OK", item);
         return;
     }
@@ -8300,11 +8363,31 @@ static void handle_item_detail(backend::wsworker *worker,
     int old_orig_est = 0;
     int old_rem_est = 0;
     std::string old_tshirt;
+    std::string old_type;
+    std::string old_category;
+    std::string old_priority;
+    std::string old_title;
+    std::string old_desc;
+    int old_parent_id = 0;
+    int old_sprint_id = 0;
+    int old_assignee_id = 0;
+    int old_story_points = 0;
+    int old_progress = 0;
+    std::string old_start_date;
+    std::string old_due_date;
+    std::string old_severity;
+    std::string old_steps;
+    std::string old_labels;
     {
         auto cur = conn.prepare(R"SQL(
             SELECT status, COALESCE(resolution_id, 0), COALESCE(resolution_date, ''), project_id,
                    COALESCE(original_estimate_seconds, 0), COALESCE(remaining_estimate_seconds, 0),
-                   COALESCE(tshirt_size, '')
+                   COALESCE(tshirt_size, ''),
+                   type, category, priority, title, description,
+                   COALESCE(parent_id, 0), COALESCE(sprint_id, 0), COALESCE(assignee_id, 0),
+                   COALESCE(story_points, 0), COALESCE(progress, 0),
+                   COALESCE(start_date, ''), COALESCE(due_date, ''),
+                   COALESCE(severity, ''), COALESCE(steps_to_reproduce, ''), COALESCE(labels, '')
             FROM work_items WHERE id = ?;
         )SQL");
         cur.bind_int(1, item_id);
@@ -8319,6 +8402,21 @@ static void handle_item_detail(backend::wsworker *worker,
         old_orig_est = cur.column_int(4);
         old_rem_est = cur.column_int(5);
         old_tshirt = cur.column_str(6);
+        old_type = cur.column_str(7);
+        old_category = cur.column_str(8);
+        old_priority = cur.column_str(9);
+        old_title = cur.column_str(10);
+        old_desc = cur.column_str(11);
+        old_parent_id = cur.column_int(12);
+        old_sprint_id = cur.column_int(13);
+        old_assignee_id = cur.column_int(14);
+        old_story_points = cur.column_int(15);
+        old_progress = cur.column_int(16);
+        old_start_date = cur.column_str(17);
+        old_due_date = cur.column_str(18);
+        old_severity = cur.column_str(19);
+        old_steps = cur.column_str(20);
+        old_labels = cur.column_str(21);
     }
 
     std::string type = body.get_string("type", "Task");
@@ -8434,6 +8532,51 @@ static void handle_item_detail(backend::wsworker *worker,
             hist.bind_int(4, u_auth.id);
             hist.step_done();
         }
+
+        // Step 10: Rich text mentions, auto-links, and comprehensive field changelog
+        collaboration::record_changelog(conn, item_id, u_auth.id, "title", old_title, title);
+        collaboration::record_changelog(conn, item_id, u_auth.id, "description", old_desc, description);
+        collaboration::record_changelog(conn, item_id, u_auth.id, "type", old_type, type);
+        collaboration::record_changelog(conn, item_id, u_auth.id, "category", old_category, category);
+        collaboration::record_changelog(conn, item_id, u_auth.id, "priority", old_priority, priority);
+        collaboration::record_changelog(conn, item_id, u_auth.id, "status", old_status, status);
+        if (old_assignee_id != assignee_id) {
+            collaboration::record_changelog(conn, item_id, u_auth.id, "assignee",
+                old_assignee_id > 0 ? std::to_string(old_assignee_id) : "Unassigned",
+                assignee_id > 0 ? std::to_string(assignee_id) : "Unassigned");
+        }
+        if (old_sprint_id != sprint_id) {
+            collaboration::record_changelog(conn, item_id, u_auth.id, "sprint", std::to_string(old_sprint_id), std::to_string(sprint_id));
+        }
+        if (old_parent_id != parent_id) {
+            collaboration::record_changelog(conn, item_id, u_auth.id, "parent", std::to_string(old_parent_id), std::to_string(parent_id));
+        }
+        if (old_story_points != story_points) {
+            collaboration::record_changelog(conn, item_id, u_auth.id, "story_points", std::to_string(old_story_points), std::to_string(story_points));
+        }
+        if (old_progress != progress) {
+            collaboration::record_changelog(conn, item_id, u_auth.id, "progress", std::to_string(old_progress) + "%", std::to_string(progress) + "%");
+        }
+        collaboration::record_changelog(conn, item_id, u_auth.id, "start_date", old_start_date, start_date);
+        collaboration::record_changelog(conn, item_id, u_auth.id, "due_date", old_due_date, due_date);
+        collaboration::record_changelog(conn, item_id, u_auth.id, "severity", old_severity, severity);
+        collaboration::record_changelog(conn, item_id, u_auth.id, "steps_to_reproduce", old_steps, steps);
+        collaboration::record_changelog(conn, item_id, u_auth.id, "labels", old_labels, labels);
+        collaboration::record_changelog(conn, item_id, u_auth.id, "tshirt_size", old_tshirt, tshirt_size);
+        if (old_orig_est != original_estimate_seconds) {
+            collaboration::record_changelog(conn, item_id, u_auth.id, "original_estimate", std::to_string(old_orig_est) + "s", std::to_string(original_estimate_seconds) + "s");
+        }
+        if (old_rem_est != remaining_estimate_seconds) {
+            collaboration::record_changelog(conn, item_id, u_auth.id, "remaining_estimate", std::to_string(old_rem_est) + "s", std::to_string(remaining_estimate_seconds) + "s");
+        }
+        if (old_resolution_id != resolution_id) {
+            collaboration::record_changelog(conn, item_id, u_auth.id, "resolution", std::to_string(old_resolution_id), std::to_string(resolution_id));
+        }
+
+        if (description != old_desc) {
+            collaboration::process_mentions_and_links(conn, item_id, 0, u_auth.id, description);
+        }
+
         tx.commit();
     }
 
@@ -8868,6 +9011,13 @@ static void handle_item_state_transition(backend::wsworker *worker,
             }
         }
 
+        if (new_status != old_status) {
+            collaboration::record_changelog(conn, item_id, u_auth.id, "status", old_status, new_status);
+        }
+        if (body.get_bool("post_comment", false) && !raw_comment.empty()) {
+            collaboration::process_mentions_and_links(conn, item_id, 0, u_auth.id, raw_comment);
+        }
+
         tx.commit();
     }
 
@@ -8920,6 +9070,15 @@ static void handle_item_comments(backend::wsworker *worker,
         ins.bind_text(3, text);
         ins.step_done();
         cid = static_cast<int>(conn.last_insert_rowid());
+
+        // Step 10: Rich text mentions, auto-links, changelog and default watcher subscription
+        collaboration::process_mentions_and_links(conn, item_id, cid, u_auth.id, text);
+        collaboration::record_changelog(conn, item_id, u_auth.id, "comment", "", "Added comment #" + std::to_string(cid));
+        auto wstmt = conn.prepare("INSERT OR IGNORE INTO work_item_watchers (work_item_id, user_id) VALUES (?, ?);");
+        wstmt.bind_int(1, item_id);
+        wstmt.bind_int(2, u_auth.id);
+        wstmt.step_done();
+
         tx.commit();
     }
 
@@ -9234,6 +9393,305 @@ static void handle_delete_attachment(backend::wsworker *worker,
     auto res = json::json_value::make_object();
     res.add_bool("deleted", true);
     send_json(worker, header, "200 OK", res);
+}
+
+// ============================================================================
+// Step 10: Rich Text, WYSIWYG, Clipboard Image Pasting, Mentions & Collaboration
+// ============================================================================
+
+// POST /api/blobs/upload & POST /api/attachments/upload
+static void handle_blob_upload(backend::wsworker *worker,
+                               const std::map<std::string, std::string> &header,
+                               const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    std::string content_type = get_header(header, "CONTENT_TYPE");
+    std::string orig_filename = "pasted_image.png";
+    std::string mime_type = "image/png";
+    std::string file_bytes;
+    int work_item_id = 0;
+
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+    if (!args["work_item_id"].empty()) {
+        work_item_id = resolve_work_item_id(conn, args["work_item_id"]);
+    } else if (!args["item_id"].empty()) {
+        work_item_id = resolve_work_item_id(conn, args["item_id"]);
+    }
+
+    if (content_type.find("multipart/form-data") != std::string::npos) {
+        auto parsed = utils::parse_multipart_file(content_type, worker->body());
+        if (!parsed.valid) {
+            send_error(worker, header, "400 Bad Request", "Could not parse multipart file upload");
+            return;
+        }
+        orig_filename = parsed.filename.empty() ? "uploaded_file.bin" : parsed.filename;
+        mime_type = parsed.mime_type.empty() ? "application/octet-stream" : parsed.mime_type;
+        file_bytes = std::move(parsed.data);
+    } else {
+        auto body = json::json_value::parse(worker->body());
+        if (!body) {
+            send_error(worker, header, "400 Bad Request", "Invalid JSON body for blob upload");
+            return;
+        }
+        orig_filename = body.get_string("filename", "pasted_image.png");
+        mime_type = body.get_string("mime_type", "image/png");
+        if (work_item_id <= 0 && body.has_key("work_item_id")) {
+            work_item_id = resolve_work_item_id(conn, std::to_string(body.get_int("work_item_id")));
+        }
+        std::string b64 = body.get_string("content_base64");
+        if (b64.empty()) {
+            b64 = body.get_string("data");
+        }
+        if (b64.starts_with("data:")) {
+            auto semi = b64.find(";base64,");
+            if (semi != std::string::npos) {
+                mime_type = b64.substr(5, semi - 5);
+                b64 = b64.substr(semi + 8);
+            } else {
+                auto comma = b64.find(',');
+                if (comma != std::string::npos) b64 = b64.substr(comma + 1);
+            }
+        }
+        file_bytes = utils::base64_decode(b64);
+    }
+
+    if (file_bytes.empty()) {
+        send_error(worker, header, "400 Bad Request", "File content is empty or invalid");
+        return;
+    }
+
+    std::string safe_name = utils::sanitize_filename(orig_filename);
+    if (safe_name.empty()) safe_name = "image.png";
+    std::string blob_filename = utils::generate_random_hex(12) + "_" + safe_name;
+    std::filesystem::create_directories(g_blobs_dir);
+    std::filesystem::path blob_path = std::filesystem::path(g_blobs_dir) / blob_filename;
+
+    {
+        std::ofstream ofs(blob_path, std::ios::binary);
+        if (!ofs.is_open()) {
+            send_error(worker, header, "500 Internal Server Error", "Failed to write file to blobs directory");
+            return;
+        }
+        ofs.write(file_bytes.data(), static_cast<std::streamsize>(file_bytes.size()));
+    }
+
+    int att_id = 0;
+    if (work_item_id > 0) {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare(R"SQL(
+            INSERT INTO attachments (work_item_id, uploader_id, original_filename, mime_type, size_bytes, blob_filename)
+            VALUES (?, ?, ?, ?, ?, ?);
+        )SQL");
+        ins.bind_int(1, work_item_id);
+        ins.bind_int(2, u_auth.id);
+        ins.bind_text(3, orig_filename);
+        ins.bind_text(4, mime_type);
+        ins.bind_int(5, static_cast<int>(file_bytes.size()));
+        ins.bind_text(6, blob_filename);
+        ins.step_done();
+        att_id = static_cast<int>(conn.last_insert_rowid());
+        collaboration::record_changelog(conn, work_item_id, u_auth.id, "attachment", "", orig_filename);
+        tx.commit();
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", att_id);
+    res.add_int("work_item_id", work_item_id);
+    res.add_int("uploader_id", u_auth.id);
+    res.add_str("uploader_name", u_auth.display_name);
+    res.add_str("original_filename", orig_filename);
+    res.add_str("mime_type", mime_type);
+    res.add_int("size_bytes", static_cast<int>(file_bytes.size()));
+    res.add_str("blob_filename", blob_filename);
+    res.add_str("url", "/api/blobs/" + blob_filename);
+    send_json(worker, header, "201 Created", res);
+}
+
+// GET /api/items/([A-Za-z0-9_-]+)/changelog
+static void handle_item_changelog(backend::wsworker *worker,
+                                  const std::map<std::string, std::string> &header,
+                                  const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing item ID or key");
+        return;
+    }
+    auto conn = acquire_db_connection();
+    int item_id = resolve_work_item_id(conn, uri_params.front());
+    if (item_id <= 0) {
+        send_error(worker, header, "404 Not Found", "Work item not found");
+        return;
+    }
+    send_json(worker, header, "200 OK", collaboration::get_item_changelog(conn, item_id));
+}
+
+// GET /api/mentions and GET /api/users/mentions
+static void handle_mentions(backend::wsworker *worker,
+                            const std::map<std::string, std::string> &header,
+                            const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+    bool unread_only = (args["unread"] == "1" || args["unread"] == "true" || args["unread_only"] == "1" || args["unread_only"] == "true");
+    send_json(worker, header, "200 OK", collaboration::get_user_mentions(conn, u_auth.id, unread_only));
+}
+
+// POST /api/mentions/([0-9]+)/read
+static void handle_mention_mark_read(backend::wsworker *worker,
+                                     const std::map<std::string, std::string> &header,
+                                     const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing mention ID");
+        return;
+    }
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+    int mid = std::atoi(uri_params.front().c_str());
+    {
+        db::sqlite_transaction tx(conn);
+        auto upd = conn.prepare("UPDATE work_item_mentions SET is_read = 1 WHERE id = ? AND mentioned_user_id = ?;");
+        upd.bind_int(1, mid);
+        upd.bind_int(2, u_auth.id);
+        upd.step_done();
+        tx.commit();
+    }
+    auto res = json::json_value::make_object();
+    res.add_bool("ok", true);
+    send_json(worker, header, "200 OK", res);
+}
+
+// POST /api/mentions/read-all
+static void handle_mentions_mark_all_read(backend::wsworker *worker,
+                                          const std::map<std::string, std::string> &header,
+                                          const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+    {
+        db::sqlite_transaction tx(conn);
+        auto upd = conn.prepare("UPDATE work_item_mentions SET is_read = 1 WHERE mentioned_user_id = ?;");
+        upd.bind_int(1, u_auth.id);
+        upd.step_done();
+        tx.commit();
+    }
+    auto res = json::json_value::make_object();
+    res.add_bool("ok", true);
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET | POST | DELETE /api/items/([A-Za-z0-9_-]+)/watchers
+static void handle_item_watchers(backend::wsworker *worker,
+                                 const std::map<std::string, std::string> &header,
+                                 const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing item ID or key");
+        return;
+    }
+    auto conn = acquire_db_connection();
+    int item_id = resolve_work_item_id(conn, uri_params.front());
+    if (item_id <= 0) {
+        send_error(worker, header, "404 Not Found", "Work item not found");
+        return;
+    }
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        send_json(worker, header, "200 OK", collaboration::get_item_watchers(conn, item_id, u_auth.id));
+        return;
+    }
+
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    int target_user_id = u_auth.id;
+    if (!worker->body().empty()) {
+        auto body = json::json_value::parse(worker->body());
+        if (body && body.has_key("user_id")) {
+            target_user_id = body.get_int("user_id");
+        }
+    }
+
+    if (method == "POST") {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare("INSERT OR IGNORE INTO work_item_watchers (work_item_id, user_id) VALUES (?, ?);");
+        ins.bind_int(1, item_id);
+        ins.bind_int(2, target_user_id);
+        ins.step_done();
+        tx.commit();
+    } else if (method == "DELETE") {
+        db::sqlite_transaction tx(conn);
+        auto del = conn.prepare("DELETE FROM work_item_watchers WHERE work_item_id = ? AND user_id = ?;");
+        del.bind_int(1, item_id);
+        del.bind_int(2, target_user_id);
+        del.step_done();
+        tx.commit();
+    }
+
+    send_json(worker, header, "200 OK", collaboration::get_item_watchers(conn, item_id, u_auth.id));
+}
+
+// GET | POST | DELETE /api/items/([A-Za-z0-9_-]+)/votes
+static void handle_item_votes(backend::wsworker *worker,
+                              const std::map<std::string, std::string> &header,
+                              const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing item ID or key");
+        return;
+    }
+    auto conn = acquire_db_connection();
+    int item_id = resolve_work_item_id(conn, uri_params.front());
+    if (item_id <= 0) {
+        send_error(worker, header, "404 Not Found", "Work item not found");
+        return;
+    }
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        send_json(worker, header, "200 OK", collaboration::get_item_votes(conn, item_id, u_auth.id));
+        return;
+    }
+
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    if (method == "POST") {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare("INSERT OR IGNORE INTO work_item_votes (work_item_id, user_id) VALUES (?, ?);");
+        ins.bind_int(1, item_id);
+        ins.bind_int(2, u_auth.id);
+        ins.step_done();
+        tx.commit();
+    } else if (method == "DELETE") {
+        db::sqlite_transaction tx(conn);
+        auto del = conn.prepare("DELETE FROM work_item_votes WHERE work_item_id = ? AND user_id = ?;");
+        del.bind_int(1, item_id);
+        del.bind_int(2, u_auth.id);
+        del.step_done();
+        tx.commit();
+    }
+
+    send_json(worker, header, "200 OK", collaboration::get_item_votes(conn, item_id, u_auth.id));
 }
 
 // ============================================================================
@@ -11108,8 +11566,17 @@ int main(int argc, char *argv[]) {
         {"^/api/links$",                                backend::GET,                   handle_all_links            },
         {"^/api/links/([0-9]+)$",                       backend::DELETE,                handle_delete_link          },
         {"^/api/items/([A-Za-z0-9_-]+)/attachments$",   backend::POST,                  handle_item_attachments     },
-        {"^/api/blobs/([a-zA-Z0-9._-]+)$",          backend::GET,                   handle_blob_download        },
-        {"^/api/attachments/([0-9]+)$",             backend::DELETE,                handle_delete_attachment    },
+        {"^/api/blobs/upload$",                         backend::POST,                  handle_blob_upload          },
+        {"^/api/attachments/upload$",                   backend::POST,                  handle_blob_upload          },
+        {"^/api/blobs/([a-zA-Z0-9._-]+)$",              backend::GET,                   handle_blob_download        },
+        {"^/api/attachments/([0-9]+)$",                 backend::DELETE,                handle_delete_attachment    },
+        {"^/api/items/([A-Za-z0-9_-]+)/changelog$",     backend::GET,                   handle_item_changelog       },
+        {"^/api/items/([A-Za-z0-9_-]+)/watchers$",      backend::GET | backend::POST | backend::DELETE, handle_item_watchers },
+        {"^/api/items/([A-Za-z0-9_-]+)/votes$",         backend::GET | backend::POST | backend::DELETE, handle_item_votes },
+        {"^/api/mentions$",                             backend::GET,                   handle_mentions             },
+        {"^/api/users/mentions$",                       backend::GET,                   handle_mentions             },
+        {"^/api/mentions/([0-9]+)/read$",               backend::POST,                  handle_mention_mark_read    },
+        {"^/api/mentions/read-all$",                    backend::POST,                  handle_mentions_mark_all_read},
     });
 
     server.init(socket_name.c_str(), backlog, worker_num);

@@ -3,6 +3,8 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { ApiService } from '../../services/api.service';
+import { RichEditorComponent } from '../../components/rich-editor/rich-editor.component';
+import { MarkdownViewerComponent } from '../../components/rich-editor/markdown-viewer.component';
 import {
   AvailableTransition,
   PRIORITIES,
@@ -22,7 +24,7 @@ import {
 @Component({
   selector: 'app-item-detail',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink],
+  imports: [CommonModule, FormsModule, RouterLink, RichEditorComponent, MarkdownViewerComponent],
   template: `
     @if (item(); as it) {
       <div class="page-container">
@@ -524,13 +526,39 @@ import {
               </div>
 
               <div class="form-group">
-                <label for="detail-description">Description</label>
-                <textarea
-                  id="detail-description"
-                  name="detail_description"
-                  [(ngModel)]="it.description"
-                  rows="4"
-                ></textarea>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                  <label for="detail-description" style="margin: 0; font-weight: 600;">Description</label>
+                  @if (!isEditingDescription()) {
+                    <button type="button" class="btn btn-ghost btn-sm" (click)="startEditDescription(it.description)">
+                      ✏ Edit Description
+                    </button>
+                  } @else {
+                    <div style="display: flex; gap: 6px;">
+                      <button type="button" class="btn btn-primary btn-sm" (click)="saveDescription()">
+                        Save
+                      </button>
+                      <button type="button" class="btn btn-secondary btn-sm" (click)="cancelEditDescription()">
+                        Cancel
+                      </button>
+                    </div>
+                  }
+                </div>
+
+                @if (isEditingDescription()) {
+                  <app-rich-editor
+                    [(value)]="descriptionDraft"
+                    [workItemId]="it.id"
+                    placeholder="Detailed technical description, checklists, callouts, or paste images (Ctrl+V)..."
+                  ></app-rich-editor>
+                } @else {
+                  <div class="desc-preview-container" (dblclick)="startEditDescription(it.description)" title="Double click to edit">
+                    @if (it.description) {
+                      <app-markdown-viewer [content]="it.description"></app-markdown-viewer>
+                    } @else {
+                      <p class="text-muted" style="margin: 0; font-style: italic;">No description provided. Click "Edit Description" to add one.</p>
+                    }
+                  </div>
+                }
               </div>
 
               @if (it.category === 'Bug') {
@@ -924,6 +952,14 @@ import {
                 >
                   Workflow State History ({{ it.history.length }})
                 </button>
+                <button
+                  type="button"
+                  class="tab-btn"
+                  [class.active]="activeTab() === 'changelog'"
+                  (click)="activeTab.set('changelog')"
+                >
+                  📜 History & Changelog ({{ it.changelog?.length || 0 }})
+                </button>
               </div>
 
               @if (activeTab() === 'comments') {
@@ -938,24 +974,28 @@ import {
                           <strong>{{ c.author_name }}</strong>
                           <span class="text-muted">{{ c.created_at }}</span>
                         </div>
-                        <p>{{ c.body }}</p>
+                        <app-markdown-viewer [content]="c.body"></app-markdown-viewer>
                       </div>
                     </div>
                   }
                 </div>
-                <div class="quick-subtask-bar" style="margin-top: 12px;">
-                  <input
-                    type="text"
-                    id="detail-new-comment"
-                    name="new_comment_text"
-                    autocomplete="off"
-                    [(ngModel)]="newCommentText"
-                    placeholder="Add a comment..."
-                    (keyup.enter)="postComment()"
-                  />
-                  <button type="button" class="btn btn-primary" (click)="postComment()">
-                    Post Comment
-                  </button>
+                <div class="rich-comment-box" style="margin-top: 14px;">
+                  <app-rich-editor
+                    [(value)]="newCommentText"
+                    [compact]="true"
+                    [workItemId]="it.id"
+                    placeholder="Add a comment... (Type @ to mention teammates, Ctrl+V to paste images)"
+                  ></app-rich-editor>
+                  <div style="display: flex; justify-content: flex-end; margin-top: 8px;">
+                    <button
+                      type="button"
+                      class="btn btn-primary"
+                      [disabled]="!newCommentText.trim()"
+                      (click)="postComment()"
+                    >
+                      Post Comment
+                    </button>
+                  </div>
                 </div>
               } @else if (activeTab() === 'worklogs') {
                 <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #ebecf0;">
@@ -1011,7 +1051,7 @@ import {
                     </button>
                   </div>
                 }
-              } @else {
+              } @else if (activeTab() === 'history') {
                 <div class="history-list">
                   @for (h of it.history; track h.id) {
                     <div class="history-row">
@@ -1036,12 +1076,81 @@ import {
                     </div>
                   }
                 </div>
+              } @else if (activeTab() === 'changelog') {
+                <div class="changelog-list">
+                  @for (entry of it.changelog || []; track entry.id) {
+                    <div class="changelog-row">
+                      <span class="avatar-circle-sm" [style.background]="entry.changed_by_color">
+                        {{ entry.changed_by_name.slice(0, 2).toUpperCase() }}
+                      </span>
+                      <div class="changelog-body">
+                        <div class="changelog-header">
+                          <strong>{{ entry.changed_by_name }}</strong>
+                          <span class="text-muted">modified</span>
+                          <code class="changelog-field">{{ entry.field_name }}</code>
+                          <span class="text-muted">· {{ entry.created_at }}</span>
+                        </div>
+                        <div class="changelog-diff">
+                          @if (entry.old_value) {
+                            <span class="diff-old"><del>{{ entry.old_value }}</del></span>
+                            <span class="diff-arrow">→</span>
+                          }
+                          <span class="diff-new"><ins>{{ entry.new_value }}</ins></span>
+                        </div>
+                      </div>
+                    </div>
+                  } @empty {
+                    <div style="padding: 24px; text-align: center; color: #6b778c;">
+                      <p>No audit changelog entries yet. Any updates to this issue will appear here.</p>
+                    </div>
+                  }
+                </div>
               }
             </div>
           </div>
 
           <!-- Right Metadata Sidebar -->
           <div class="detail-sidebar">
+            <!-- Collaboration: Watchers & Voting Panel -->
+            <div class="collab-panel">
+              <div class="collab-actions">
+                <button
+                  type="button"
+                  class="btn btn-sm collab-btn"
+                  [class.active]="it.is_watching"
+                  [disabled]="isTogglingWatch()"
+                  (click)="toggleWatch(it)"
+                  [title]="it.is_watching ? 'Stop watching this issue' : 'Watch this issue for notifications'"
+                >
+                  👁 {{ it.is_watching ? 'Watching' : 'Watch' }}
+                </button>
+                <button
+                  type="button"
+                  class="collab-count-btn"
+                  (click)="showWatchersModal.set(true)"
+                  title="View list of watchers"
+                >
+                  {{ it.watchers_count || 0 }}
+                </button>
+
+                <div style="width: 1px; height: 22px; background: #ebecf0; margin: 0 4px;"></div>
+
+                <button
+                  type="button"
+                  class="btn btn-sm collab-btn"
+                  [class.active]="it.has_voted"
+                  [disabled]="isTogglingVote()"
+                  (click)="toggleVote(it)"
+                  [title]="it.has_voted ? 'Remove your vote' : 'Vote for this issue'"
+                >
+                  👍 {{ it.has_voted ? 'Voted' : 'Vote' }}
+                </button>
+                <span class="collab-count-badge" title="Total votes">
+                  {{ it.votes_count || 0 }}
+                </span>
+              </div>
+            </div>
+
             <!-- Prominent Time Tracking & Estimation Panel -->
             <div class="tt-panel">
               <div class="tt-header">
@@ -1378,6 +1487,48 @@ import {
             </div>
           </div>
         </div>
+
+        <!-- Watchers List Modal -->
+        @if (showWatchersModal()) {
+          <div
+            style="position: fixed; inset: 0; background: rgba(15, 23, 42, 0.55); z-index: 1200; display: flex; align-items: center; justify-content: center; padding: 16px;"
+            (click)="showWatchersModal.set(false)"
+          >
+            <div
+              class="card-panel"
+              style="width: 100%; max-width: 460px; max-height: 80vh; overflow-y: auto; box-shadow: 0 20px 45px rgba(0,0,0,0.25);"
+              (click)="$event.stopPropagation()"
+            >
+              <div class="section-header" style="margin-bottom: 12px;">
+                <div>
+                  <h3 style="margin: 0;">👁 Watchers ({{ it.watchers_count || 0 }})</h3>
+                  <small class="text-muted">{{ it.key }}: {{ it.title }}</small>
+                </div>
+                <button type="button" class="btn btn-ghost btn-sm" (click)="showWatchersModal.set(false)">✕</button>
+              </div>
+
+              <div class="watchers-modal-list">
+                @for (w of it.watchers_info?.watchers || []; track w.user_id) {
+                  <div style="display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #ebecf0;">
+                    <div class="avatar-circle" [style.background]="w.avatar_color" style="width: 28px; height: 28px; font-size: 11px;">
+                      {{ w.display_name.slice(0, 2).toUpperCase() }}
+                    </div>
+                    <div>
+                      <div style="font-weight: 600; font-size: 13px;">{{ w.display_name }}</div>
+                      <small class="text-muted">&#64;{{ w.username }} · Watching since {{ w.created_at }}</small>
+                    </div>
+                  </div>
+                } @empty {
+                  <p class="text-muted" style="padding: 12px 0;">No teammates are watching this issue yet.</p>
+                }
+              </div>
+
+              <div style="display: flex; justify-content: flex-end; margin-top: 16px;">
+                <button type="button" class="btn btn-secondary btn-sm" (click)="showWatchersModal.set(false)">Close</button>
+              </div>
+            </div>
+          </div>
+        }
       </div>
     }
   `,
@@ -1394,12 +1545,19 @@ export class ItemDetailComponent implements OnInit {
 
   readonly item = signal<WorkItemDetail | null>(null);
   readonly allItems = signal<WorkItem[]>([]);
-  readonly activeTab = signal<'comments' | 'worklogs' | 'history'>('comments');
+  readonly activeTab = signal<'comments' | 'worklogs' | 'history' | 'changelog'>('comments');
   readonly toastMsg = signal('');
   readonly resolvedScreen = signal<ScreenDef | null>(null);
   readonly activeScreenTabId = signal<number>(0);
   readonly activeTransitionModal = signal<AvailableTransition | null>(null);
   readonly transitionModalError = signal('');
+
+  // Step 10: Rich Text & Collaboration Signals
+  readonly isEditingDescription = signal(false);
+  descriptionDraft = '';
+  readonly showWatchersModal = signal(false);
+  readonly isTogglingWatch = signal(false);
+  readonly isTogglingVote = signal(false);
 
   // Step 7: Time Tracking & Worklogs Signals & Draft State
   readonly showLogWorkModal = signal(false);
@@ -1712,6 +1870,75 @@ export class ItemDetailComponent implements OnInit {
     if (!cur) return;
     await this.api.deleteItem(cur.key);
     await this.router.navigate(['/board']);
+  }
+
+  // Step 10: Rich Text & Collaboration Handlers
+  startEditDescription(currentDesc: string): void {
+    this.descriptionDraft = currentDesc || '';
+    this.isEditingDescription.set(true);
+  }
+
+  cancelEditDescription(): void {
+    this.isEditingDescription.set(false);
+  }
+
+  async saveDescription(): Promise<void> {
+    const cur = this.item();
+    if (!cur) return;
+    cur.description = this.descriptionDraft;
+    await this.saveChanges();
+    this.isEditingDescription.set(false);
+    this.showToast('Description updated successfully');
+  }
+
+  async toggleWatch(it: WorkItemDetail): Promise<void> {
+    if (this.isTogglingWatch()) return;
+    this.isTogglingWatch.set(true);
+    try {
+      const res = it.is_watching
+        ? await this.api.unwatchItem(it.key)
+        : await this.api.watchItem(it.key);
+      this.item.update((prev) =>
+        prev
+          ? {
+              ...prev,
+              is_watching: res.is_watching,
+              watchers_count: res.watchers_count,
+              watchers_info: res,
+            }
+          : prev
+      );
+      this.showToast(res.is_watching ? 'Now watching this issue' : 'Stopped watching this issue');
+    } catch (err: any) {
+      this.showToast(err.message || 'Failed to update watch status');
+    } finally {
+      this.isTogglingWatch.set(false);
+    }
+  }
+
+  async toggleVote(it: WorkItemDetail): Promise<void> {
+    if (this.isTogglingVote()) return;
+    this.isTogglingVote.set(true);
+    try {
+      const res = it.has_voted
+        ? await this.api.unvoteItem(it.key)
+        : await this.api.voteItem(it.key);
+      this.item.update((prev) =>
+        prev
+          ? {
+              ...prev,
+              has_voted: res.has_voted,
+              votes_count: res.votes_count,
+              votes_info: res,
+            }
+          : prev
+      );
+      this.showToast(res.has_voted ? 'Vote registered!' : 'Vote removed');
+    } catch (err: any) {
+      this.showToast(err.message || 'Failed to update vote');
+    } finally {
+      this.isTogglingVote.set(false);
+    }
   }
 
   // Step 7: Time Tracking & Estimation Methods

@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { ApiService } from '../../services/api.service';
+import { RichEditorComponent } from '../../components/rich-editor/rich-editor.component';
 import {
   PRIORITIES,
   PriorityType,
@@ -21,7 +22,7 @@ import {
 @Component({
   selector: 'app-create-item',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink],
+  imports: [CommonModule, FormsModule, RouterLink, RichEditorComponent],
   template: `
     <div class="page-container narrow-container">
       <div class="page-toolbar">
@@ -128,14 +129,11 @@ import {
         </div>
 
         <div class="form-group">
-          <label for="create-description">Description</label>
-          <textarea
-            id="create-description"
-            name="description"
-            [(ngModel)]="form.description"
-            rows="4"
-            placeholder="Detailed acceptance criteria, context, or technical notes..."
-          ></textarea>
+          <label for="create-description" style="margin-bottom: 6px; font-weight: 600;">Description</label>
+          <app-rich-editor
+            [(value)]="form.description"
+            placeholder="Detailed acceptance criteria, context, checklists, or paste images directly (Ctrl+V)..."
+          ></app-rich-editor>
         </div>
 
         @if (form.category === 'Bug') {

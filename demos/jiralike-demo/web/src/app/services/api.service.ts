@@ -44,8 +44,12 @@ import {
   TimeRollup,
   TimesheetResponse,
   User,
+  UserMention,
   VelocityReport,
+  VotesPayload,
+  WatchersPayload,
   WorkItem,
+  WorkItemChangelog,
   WorkItemDetail,
   WorkItemLink,
   WorklogItem,
@@ -84,6 +88,10 @@ export class ApiService {
   readonly workflows = signal<WorkflowDef[]>([]);
   readonly workflowSchemes = signal<WorkflowSchemeBinding[]>([]);
   readonly savedFilters = signal<SavedFilter[]>([]);
+  readonly mentions = signal<UserMention[]>([]);
+  readonly unreadMentionsCount = computed<number>(() => {
+    return this.mentions().filter((m) => !m.is_read).length;
+  });
   readonly currentSprint = computed<Sprint | null>(() => {
     const list = this.sprints();
     return (
@@ -1581,5 +1589,154 @@ export class ApiService {
       title: string;
       data: any;
     }>(`/api/dashboard-gadgets/${gadgetId}/data`);
+  }
+
+  // ============================================================================
+  // Step 10: Rich Text, WYSIWYG, Clipboard Image Pasting, Mentions & Collaboration
+  // ============================================================================
+
+  async uploadBlob(
+    file: File,
+    workItemId?: number
+  ): Promise<{
+    id: number;
+    url: string;
+    blob_filename: string;
+    original_filename: string;
+    mime_type: string;
+    size_bytes: number;
+    uploader_name: string;
+  }> {
+    const base64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      reader.readAsDataURL(file);
+    });
+
+    const url = workItemId ? `/api/blobs/upload?work_item_id=${workItemId}` : '/api/blobs/upload';
+    return this.request(url, {
+      method: 'POST',
+      body: JSON.stringify({
+        filename: file.name,
+        mime_type: file.type || 'image/png',
+        content_base64: base64,
+        work_item_id: workItemId || 0,
+      }),
+    });
+  }
+
+  async uploadBlobBase64(
+    filename: string,
+    mimeType: string,
+    contentBase64: string,
+    workItemId?: number
+  ): Promise<{
+    id: number;
+    url: string;
+    blob_filename: string;
+    original_filename: string;
+    mime_type: string;
+    size_bytes: number;
+  }> {
+    const url = workItemId ? `/api/blobs/upload?work_item_id=${workItemId}` : '/api/blobs/upload';
+    return this.request(url, {
+      method: 'POST',
+      body: JSON.stringify({
+        filename,
+        mime_type: mimeType,
+        content_base64: contentBase64,
+        work_item_id: workItemId || 0,
+      }),
+    });
+  }
+
+  async getItemChangelog(itemIdOrKey: string | number): Promise<WorkItemChangelog[]> {
+    return this.request<WorkItemChangelog[]>(
+      `/api/items/${encodeURIComponent(String(itemIdOrKey))}/changelog`
+    );
+  }
+
+  async getUserMentions(unreadOnly = false): Promise<UserMention[]> {
+    const query = unreadOnly ? '?unread_only=1' : '';
+    const list = await this.request<UserMention[]>(`/api/mentions${query}`);
+    this.mentions.set(list);
+    return list;
+  }
+
+  async refreshMentions(): Promise<void> {
+    if (this.currentUser()) {
+      try {
+        await this.getUserMentions(false);
+      } catch {
+        // ignore background poll errors
+      }
+    }
+  }
+
+  async markMentionRead(mentionId: number): Promise<{ ok: boolean }> {
+    const res = await this.request<{ ok: boolean }>(`/api/mentions/${mentionId}/read`, {
+      method: 'POST',
+    });
+    this.mentions.update((prev) =>
+      prev.map((m) => (m.id === mentionId ? { ...m, is_read: true } : m))
+    );
+    return res;
+  }
+
+  async markAllMentionsRead(): Promise<{ ok: boolean }> {
+    const res = await this.request<{ ok: boolean }>('/api/mentions/read-all', {
+      method: 'POST',
+    });
+    this.mentions.update((prev) => prev.map((m) => ({ ...m, is_read: true })));
+    return res;
+  }
+
+  async getItemWatchers(itemIdOrKey: string | number): Promise<WatchersPayload> {
+    return this.request<WatchersPayload>(
+      `/api/items/${encodeURIComponent(String(itemIdOrKey))}/watchers`
+    );
+  }
+
+  async watchItem(itemIdOrKey: string | number): Promise<WatchersPayload> {
+    return this.request<WatchersPayload>(
+      `/api/items/${encodeURIComponent(String(itemIdOrKey))}/watchers`,
+      {
+        method: 'POST',
+      }
+    );
+  }
+
+  async unwatchItem(itemIdOrKey: string | number): Promise<WatchersPayload> {
+    return this.request<WatchersPayload>(
+      `/api/items/${encodeURIComponent(String(itemIdOrKey))}/watchers`,
+      {
+        method: 'DELETE',
+      }
+    );
+  }
+
+  async getItemVotes(itemIdOrKey: string | number): Promise<VotesPayload> {
+    return this.request<VotesPayload>(
+      `/api/items/${encodeURIComponent(String(itemIdOrKey))}/votes`
+    );
+  }
+
+  async voteItem(itemIdOrKey: string | number): Promise<VotesPayload> {
+    return this.request<VotesPayload>(
+      `/api/items/${encodeURIComponent(String(itemIdOrKey))}/votes`,
+      {
+        method: 'POST',
+      }
+    );
+  }
+
+  async unvoteItem(itemIdOrKey: string | number): Promise<VotesPayload> {
+    return this.request<VotesPayload>(
+      `/api/items/${encodeURIComponent(String(itemIdOrKey))}/votes`,
+      {
+        method: 'DELETE',
+      }
+    );
   }
 }

@@ -418,23 +418,23 @@ This document provides a comprehensive gap analysis and exhaustive development r
 ## 10. Epic 9: Rich Text, WYSIWYG Editing & Collaboration
 
 ### 10.1 WYSIWYG Markdown / ADF Editor
-- [ ] **Rich Editor Integration**:
+- [x] **Rich Editor Integration**:
   - Integrated editor (TipTap / ProseMirror / Markdown WYSIWYG) supporting:
     - Headings, bold, italics, underline, strike-through.
     - Numbered and bulleted lists, task checklists (`[ ]` / `[x]`).
     - Code blocks with automatic language syntax highlighting.
     - Information panels / callouts (Info, Note, Warning, Success, Error).
     - Rich tables with resizable columns and header rows.
-- [ ] **Clipboard Image Pasting & Drag-and-Drop**:
+- [x] **Clipboard Image Pasting & Drag-and-Drop**:
   - Paste screenshots directly from OS clipboard (`Ctrl+V`) into description or comments, auto-uploading to `blobs/` and embedding inline.
 
 ### 10.2 Mentions, Smart Links & Activity Audit
-- [ ] **`@User` Mentions**: Autocomplete popup when typing `@`; triggers instant notification to mentioned user.
-- [ ] **Issue Key Auto-Linking**: Automatically convert references like `PROJ-123` into clickable issue badges with tooltip previews.
-- [ ] **Comprehensive Field Changelog (`work_item_changelog`)**:
+- [x] **`@User` Mentions**: Autocomplete popup when typing `@`; triggers instant notification to mentioned user.
+- [x] **Issue Key Auto-Linking**: Automatically convert references like `PROJ-123` into clickable issue badges with tooltip previews.
+- [x] **Comprehensive Field Changelog (`work_item_changelog`)**:
   - Detailed audit log recording every modification: `work_item_id`, `field_name`, `old_value`, `new_value`, `changed_by_id`, `timestamp`.
   - View full history tab in item details showing exact who/what/when diffs.
-- [ ] **Watchers & Voting**:
+- [x] **Watchers & Voting**:
   - Watchers table (`work_item_watchers`): Subscribe to receive notifications on item updates.
   - Voting table (`work_item_votes`): Allow users to upvote feature requests or bug fixes.
 
@@ -832,17 +832,22 @@ flowchart TD
     - *Roadmap Summary Gadget*.
 - **Verification**: Users can customize and rearrange gadgets; gadgets refresh data independently without full page reloads; 8/8 test suites verified end-to-end in `verify_step9.py`.
 
-#### Step 10: Rich Text, Markdown WYSIWYG Editor, Mentions & Image Pasting
+#### Step 10: Rich Text, Markdown WYSIWYG Editor, Mentions & Image Pasting *(Completed)*
 - **Why Next**: Enhances core usability for daily communication across descriptions and comments.
 - **Backend Deliverables**:
-  - Enhanced Attachment API: Multipart / base64 inline image upload handler with content-type verification.
-  - User Mention Parser: Detect `@username` tokens in descriptions/comments and persist mention events.
-  - Issue Auto-Linker: Detect `[A-Z]+-[0-9]+` keys and link to target items.
+  - [x] Enhanced Attachment API: Multipart / base64 inline image upload handler with content-type verification (`/api/blobs/upload` and `/api/attachments/upload`).
+  - [x] User Mention Parser: Detect `@username` tokens in descriptions/comments and persist mention events in `work_item_mentions`.
+  - [x] Issue Auto-Linker: Detect `[A-Z]+-[0-9]+` keys and link to target items automatically.
+  - [x] Comprehensive Field Changelog: `work_item_changelog` audit trail table and GET endpoint.
+  - [x] Watchers & Voting: `work_item_watchers` and `work_item_votes` subscription and voting API.
 - **Frontend Deliverables**:
-  - WYSIWYG Rich Editor (TipTap / ProseMirror): Markdown support, headers, task checklists, code blocks with syntax highlighting, and callout panels.
-  - Direct Clipboard Paste (`Ctrl+V`): Automatically uploads pasted image blobs and inserts markdown image tags.
-  - Mention Dropdown: Interactive user autocomplete dropdown when typing `@`.
-- **Verification**: Pasting a screenshot uploads the image to `blobs/` and displays it inline; typing `@marcus` highlights the mention and triggers an alert.
+  - [x] WYSIWYG Rich Editor: Full markdown toolbar (formatting, headings, checklists, callout panels, tables, code blocks).
+  - [x] Direct Clipboard Paste (`Ctrl+V`) & Drag-and-Drop: Automatically uploads pasted image blobs and inserts markdown image tags.
+  - [x] Interactive `@` Mention Autocomplete: Autocomplete popup when typing `@` with keyboard navigation.
+  - [x] Markdown Viewer Component: Full preview rendering with clickable issue badges, user mention pills, task checklists, and callout alerts.
+  - [x] Activity Tabs & Sidebar: Dedicated "History & Changelog" audit tab, Watchers & Votes widgets and modal.
+  - [x] Top Navigation: In-app Mentions & Activity bell with unread badge counter.
+- **Verification**: Pasting a screenshot uploads the image to `blobs/` and displays it inline; typing `@marcus` highlights the mention and triggers an alert; 9/9 test suites verified end-to-end in `verify_step10.py`.
 
 #### Step 11: Granular Project Permission Schemes & Issue Security Levels
 - **Why Next**: Prepares the platform for enterprise multi-team deployment and secure automations.
