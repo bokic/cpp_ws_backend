@@ -53,6 +53,7 @@ A full-stack Agile project and issue tracking application powered by `cpp_ws_bac
   * Supports Epics, Stories, Tasks, Subtasks, Bugs, and Issues with comments, issue links, and file uploads to `blobs/`.
   * Interactive Kanban State Board (`/board`) and Gantt / State Timeline Matrix (`/gantt`) with drag-and-drop workflow state transitions.
   * Packaging configurations for Docker (`docker/`), Ubuntu/Debian `.deb` (`Ubuntu/`), and Arch Linux / AUR (`Arch/`).
+  * Comprehensive Jira feature parity roadmap and gap analysis documented in [`demos/jiralike-demo/TODO.md`](demos/jiralike-demo/TODO.md).
 * **Running:**
   ```bash
   cd demos/jiralike-demo

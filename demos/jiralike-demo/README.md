@@ -63,6 +63,7 @@ Each work item supports:
 demos/jiralike-demo/
 ├── CMakeLists.txt          # CMake build configuration for the FastCGI backend
 ├── README.md               # Project documentation
+├── TODO.md                 # Roadmap and gap analysis for complete Jira feature parity
 ├── main.cpp                # FastCGI entry point, DB migration runner & route registration
 ├── db/
 │   ├── schema.sql          # Base SQLite schema definition (v1) and seed data
