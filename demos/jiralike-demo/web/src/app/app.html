@@ -26,11 +26,17 @@
           @if (user.role === 'Admin') {
             <a routerLink="/sprints" routerLinkActive="active">Sprint Editor</a>
           }
-          <a routerLink="/create" routerLinkActive="active" class="nav-create-btn">+ Create Item</a>
+          <button type="button" class="nav-create-btn" (click)="openCreateModal()" title="Create Issue (Press 'c')">+ Create (c)</button>
         </nav>
       </div>
 
       <div class="nav-right">
+        <!-- Live Realtime Sync Status Indicator -->
+        <div class="realtime-indicator" [title]="api.realtimeConnected() ? 'Real-Time SSE Sync Active' : 'Connecting Real-Time Sync...'">
+          <span class="realtime-pulse-dot" [class.disconnected]="!api.realtimeConnected()"></span>
+          <span>{{ api.realtimeConnected() ? 'Live' : 'Syncing' }}</span>
+        </div>
+
         @if (api.currentSprint(); as curSprint) {
           <span class="schema-badge" title="Active Current Sprint">
             ★ {{ curSprint.name }}
@@ -39,6 +45,39 @@
         <span class="schema-badge" title="SQLite Schema Version">
           DB Schema v{{ api.setupStatus()?.schema_version || 5 }}
         </span>
+
+        <!-- Theme Mode Switcher (Dark / Light / Auto) -->
+        <button
+          type="button"
+          class="nav-bell-btn"
+          (click)="api.toggleTheme()"
+          [title]="'Theme: ' + api.themeMode() + ' (Click to toggle Dark/Light/Auto)'"
+        >
+          @if (api.themeMode() === 'dark') { 🌙 }
+          @else if (api.themeMode() === 'light') { ☀️ }
+          @else { 🌓 }
+        </button>
+
+        <!-- Density Mode Switcher (Comfortable vs Compact) -->
+        <button
+          type="button"
+          class="nav-bell-btn"
+          (click)="api.toggleDensity()"
+          [title]="'Density: ' + api.densityMode() + ' (Click to toggle)'"
+        >
+          @if (api.densityMode() === 'compact') { ⇥⇤ }
+          @else { ⇤⇥ }
+        </button>
+
+        <!-- Keyboard Shortcuts Help -->
+        <button
+          type="button"
+          class="nav-bell-btn"
+          (click)="showCheatSheet.set(true)"
+          title="Keyboard Shortcuts Cheat Sheet (Press ?)"
+        >
+          ⌨️
+        </button>
 
         <!-- In-App Notification Center & Activity Bell -->
         <div class="notifications-wrapper" style="position: relative;">
@@ -124,7 +163,7 @@
                           <strong class="item-key-tag">{{ n.item_key || 'Issue' }}</strong>
                           <span class="notif-event-tag">{{ n.event_type }}</span>
                         </div>
-                        <div style="font-size: 13px; font-weight: 500; color: #172B4D; margin: 2px 0;">{{ n.title }}</div>
+                        <div style="font-size: 13px; font-weight: 500; color: var(--text-primary); margin: 2px 0;">{{ n.title }}</div>
                         @if (n.message) {
                           <div class="mention-snippet-text">{{ n.message }}</div>
                         }
@@ -155,7 +194,7 @@
                       </div>
                     </div>
                   } @empty {
-                    <div style="padding: 24px; text-align: center; color: #6b778c;">
+                    <div style="padding: 24px; text-align: center; color: var(--text-secondary);">
                       <div style="font-size: 24px; margin-bottom: 6px;">🔕</div>
                       <p style="margin: 0;">No notifications found</p>
                     </div>
@@ -195,15 +234,15 @@
                       </div>
                     </div>
                   } @empty {
-                    <div style="padding: 24px; text-align: center; color: #6b778c;">
+                    <div style="padding: 24px; text-align: center; color: var(--text-secondary);">
                       <div style="font-size: 24px; margin-bottom: 6px;">🔕</div>
                       <p style="margin: 0;">No mentions yet. Teammates can mention you with &#64;{{ user.username }}</p>
                     </div>
                   }
                 }
               </div>
-              <div style="padding: 8px 16px; background: #F4F5F7; border-top: 1px solid #DFE1E6; display: flex; justify-content: space-between; align-items: center; font-size: 12px;">
-                <a routerLink="/notifications" (click)="showNotificationsDropdown.set(false)" style="color: #0052CC; text-decoration: none; font-weight: 500;">
+              <div style="padding: 8px 16px; background: var(--bg-subtle); border-top: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; font-size: 12px;">
+                <a routerLink="/notifications" (click)="showNotificationsDropdown.set(false)" style="color: var(--brand-primary); text-decoration: none; font-weight: 500;">
                   Manage Notification Schemes &amp; Webhooks →
                 </a>
               </div>
@@ -226,4 +265,222 @@
   <main class="main-viewport">
     <router-outlet />
   </main>
+
+  <!-- ===================================================================== -->
+  <!-- MODALS: QUICK CREATE, COMMAND PALETTE, CHEAT SHEET, QUICK ASSIGN      -->
+  <!-- ===================================================================== -->
+
+  <!-- 1. Quick Create Issue Modal (Press 'c') -->
+  @if (showCreateModal()) {
+    <div class="modal-backdrop" (click)="showCreateModal.set(false)">
+      <div class="modal-card" style="max-width: 580px; width: 90vw;" (click)="$event.stopPropagation()">
+        <div class="modal-header">
+          <h3 style="margin: 0; font-size: 18px; font-weight: 600;">Create Work Item</h3>
+          <button type="button" class="btn-ghost" style="font-size: 18px; line-height: 1; padding: 4px 8px;" (click)="showCreateModal.set(false)">✕</button>
+        </div>
+        <div class="modal-body" style="padding: 16px 20px;">
+          @if (createModalError()) {
+            <div class="alert alert-danger" style="margin-bottom: 12px; padding: 8px 12px; border-radius: 4px; font-size: 13px;">
+              {{ createModalError() }}
+            </div>
+          }
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+            <div class="form-group">
+              <label style="display: block; font-weight: 600; margin-bottom: 4px; font-size: 12px;">Issue Type</label>
+              <select class="form-control" [(ngModel)]="createDraft.type">
+                @for (t of workItemTypes; track t) {
+                  <option [value]="t">{{ t }}</option>
+                }
+              </select>
+            </div>
+            <div class="form-group">
+              <label style="display: block; font-weight: 600; margin-bottom: 4px; font-size: 12px;">Priority</label>
+              <select class="form-control" [(ngModel)]="createDraft.priority">
+                @for (p of priorities; track p) {
+                  <option [value]="p">{{ p }}</option>
+                }
+              </select>
+            </div>
+          </div>
+          <div class="form-group" style="margin-bottom: 12px;">
+            <label style="display: block; font-weight: 600; margin-bottom: 4px; font-size: 12px;">Summary / Title <span style="color: #de350b;">*</span></label>
+            <input
+              id="quick-create-title"
+              type="text"
+              class="form-control"
+              placeholder="What needs to be done?"
+              [(ngModel)]="createDraft.title"
+              (keydown.enter)="submitQuickCreate()"
+            />
+          </div>
+          <div class="form-group" style="margin-bottom: 12px;">
+            <label style="display: block; font-weight: 600; margin-bottom: 4px; font-size: 12px;">Description</label>
+            <textarea
+              rows="3"
+              class="form-control"
+              placeholder="Add context, acceptance criteria, or details..."
+              [(ngModel)]="createDraft.description"
+            ></textarea>
+          </div>
+          <div class="form-group" style="margin-bottom: 12px;">
+            <label style="display: block; font-weight: 600; margin-bottom: 4px; font-size: 12px;">Assignee</label>
+            <select class="form-control" [(ngModel)]="createDraft.assignee_id">
+              <option [ngValue]="null">Unassigned</option>
+              @for (u of api.users(); track u.id) {
+                <option [ngValue]="u.id">{{ u.display_name }} ({{ u.role }})</option>
+              }
+            </select>
+          </div>
+        </div>
+        <div class="modal-footer" style="padding: 12px 20px; display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid var(--border-color);">
+          <button type="button" class="btn btn-secondary" (click)="showCreateModal.set(false)">Cancel</button>
+          <button
+            type="button"
+            class="btn btn-primary"
+            [disabled]="createModalSubmitting()"
+            (click)="submitQuickCreate()"
+          >
+            {{ createModalSubmitting() ? 'Creating...' : 'Create' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- 2. Command Palette / Quick Operations Modal (Press '.') -->
+  @if (showCommandPalette()) {
+    <div class="cmd-palette-backdrop" (click)="showCommandPalette.set(false)">
+      <div class="cmd-palette-modal" (click)="$event.stopPropagation()">
+        <div class="cmd-search-input-box">
+          <span style="font-size: 18px;">🔍</span>
+          <input
+            id="cmd-palette-input"
+            type="text"
+            placeholder="Type a command or jump to page... (Esc to dismiss)"
+            [ngModel]="commandQuery()"
+            (ngModelChange)="commandQuery.set($event); selectedCommandIdx.set(0)"
+          />
+          <kbd style="font-size: 11px;">ESC</kbd>
+        </div>
+        <div class="cmd-results-list">
+          @for (cmd of filteredCommands; track cmd.id; let i = $index) {
+            <div
+              class="cmd-item-row"
+              [class.active]="i === selectedCommandIdx()"
+              (mouseenter)="selectedCommandIdx.set(i)"
+              (click)="executeCommand(cmd)"
+            >
+              <div class="cmd-item-left">
+                <span class="cmd-item-icon">{{ cmd.icon }}</span>
+                <div>
+                  <div style="font-weight: 500;">{{ cmd.title }}</div>
+                  <div style="font-size: 11px; opacity: 0.7;">{{ cmd.category }}</div>
+                </div>
+              </div>
+              @if (cmd.shortcut) {
+                <kbd>{{ cmd.shortcut }}</kbd>
+              }
+            </div>
+          } @empty {
+            <div style="padding: 24px; text-align: center; color: var(--text-secondary);">
+              No matching commands found
+            </div>
+          }
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- 3. Keyboard Shortcuts Cheat Sheet Modal (Press '?') -->
+  @if (showCheatSheet()) {
+    <div class="modal-backdrop" (click)="showCheatSheet.set(false)">
+      <div class="modal-card" style="max-width: 640px; width: 90vw;" (click)="$event.stopPropagation()">
+        <div class="modal-header">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 20px;">⌨️</span>
+            <h3 style="margin: 0; font-size: 18px; font-weight: 600;">Jira Keyboard Shortcuts</h3>
+          </div>
+          <button type="button" class="btn-ghost" style="font-size: 18px; line-height: 1; padding: 4px 8px;" (click)="showCheatSheet.set(false)">✕</button>
+        </div>
+        <div class="modal-body" style="padding: 16px 20px;">
+          <div class="cheat-sheet-grid">
+            <div class="cheat-sheet-section">
+              <h4>Global Actions</h4>
+              <div class="cheat-row">
+                <span>Create work item</span>
+                <kbd>c</kbd>
+              </div>
+              <div class="cheat-row">
+                <span>Quick Search / JQL</span>
+                <kbd>/</kbd>
+              </div>
+              <div class="cheat-row">
+                <span>Command palette</span>
+                <kbd>.</kbd>
+              </div>
+              <div class="cheat-row">
+                <span>Open cheat sheet</span>
+                <kbd>?</kbd>
+              </div>
+              <div class="cheat-row">
+                <span>Dismiss modal / blur</span>
+                <kbd>Esc</kbd>
+              </div>
+            </div>
+            <div class="cheat-sheet-section">
+              <h4>Board &amp; Issue Actions</h4>
+              <div class="cheat-row">
+                <span>Next card / row</span>
+                <kbd>j</kbd>
+              </div>
+              <div class="cheat-row">
+                <span>Previous card / row</span>
+                <kbd>k</kbd>
+              </div>
+              <div class="cheat-row">
+                <span>Edit selected issue</span>
+                <kbd>e</kbd>
+              </div>
+              <div class="cheat-row">
+                <span>Assign selected issue</span>
+                <kbd>a</kbd>
+              </div>
+              <div class="cheat-row">
+                <span>Comment on issue</span>
+                <kbd>m</kbd>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer" style="padding: 12px 20px; display: flex; justify-content: flex-end; border-top: 1px solid var(--border-color);">
+          <button type="button" class="btn btn-primary" (click)="showCheatSheet.set(false)">Got it!</button>
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- 4. Quick Assign Modal (Press 'a' on selected card) -->
+  @if (showQuickAssignModal()) {
+    <div class="modal-backdrop" (click)="showQuickAssignModal.set(false)">
+      <div class="modal-card" style="max-width: 420px; width: 90vw;" (click)="$event.stopPropagation()">
+        <div class="modal-header">
+          <h3 style="margin: 0; font-size: 16px; font-weight: 600;">Assign Issue {{ selectedItemKey() }}</h3>
+          <button type="button" class="btn-ghost" (click)="showQuickAssignModal.set(false)">✕</button>
+        </div>
+        <div class="modal-body" style="padding: 16px 20px;">
+          <label style="display: block; font-weight: 600; margin-bottom: 6px;">Select Assignee</label>
+          <select class="form-control" [ngModel]="assignTargetUser()" (ngModelChange)="assignTargetUser.set($event)">
+            <option [ngValue]="null">Unassigned</option>
+            @for (u of api.users(); track u.id) {
+              <option [ngValue]="u.id">{{ u.display_name }} ({{ u.role }})</option>
+            }
+          </select>
+        </div>
+        <div class="modal-footer" style="padding: 12px 20px; display: flex; justify-content: flex-end; gap: 8px;">
+          <button type="button" class="btn btn-secondary" (click)="showQuickAssignModal.set(false)">Cancel</button>
+          <button type="button" class="btn btn-primary" (click)="submitQuickAssign()">Assign</button>
+        </div>
+      </div>
+    </div>
+  }
 </div>

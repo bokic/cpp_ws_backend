@@ -1,4 +1,4 @@
-import { Component, OnInit, computed, inject, signal } from '@angular/core';
+import { Component, OnInit, OnDestroy, computed, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
@@ -678,7 +678,9 @@ export interface SwimlaneRow {
       <!-- Reusable Issue Card Template -->
       <ng-template #issueCardTpl let-item let-col="col">
         <div
-          class="issue-card"
+          class="issue-card kanban-card"
+          [attr.data-item-key]="item.key"
+          [attr.data-item-id]="item.id"
           draggable="true"
           [style.border-left-color]="getCardColorStrip(item)"
           [class.dragging]="draggedItem()?.id === item.id"
@@ -1726,10 +1728,15 @@ export interface SwimlaneRow {
     </div>
   `,
 })
-export class BoardComponent implements OnInit {
+export class BoardComponent implements OnInit, OnDestroy {
   readonly api = inject(ApiService);
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
+
+  private realtimeUnsub: (() => void) | null = null;
+  private readonly boardRefreshHandler = () => {
+    this.loadBoardItems();
+  };
 
   readonly states = WORKFLOW_STATES;
   readonly itemTypes = WORK_ITEM_TYPES;
@@ -2059,6 +2066,37 @@ export class BoardComponent implements OnInit {
       }
     } catch {
       // ignore
+    }
+
+    // Step 16: Live Real-Time Board Reflection via SSE
+    this.realtimeUnsub = this.api.onLiveEvent(async (ev) => {
+      if (
+        ev.event_type === 'card_moved' ||
+        ev.event_type === 'board_update' ||
+        ev.event_type === 'item_created' ||
+        ev.event_type === 'item_deleted' ||
+        ev.event_type === 'item_transitioned' ||
+        ev.event_type === 'item_updated'
+      ) {
+        await this.loadBoardItems();
+        if (ev.actor_name && ev.actor_name !== this.api.currentUser()?.display_name) {
+          this.showToast(`⚡ Real-time update: ${ev.item_key || 'Card'} moved by ${ev.actor_name}`);
+        }
+      }
+    });
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('jira:refresh-board', this.boardRefreshHandler);
+    }
+  }
+
+  ngOnDestroy(): void {
+    if (this.realtimeUnsub) {
+      this.realtimeUnsub();
+      this.realtimeUnsub = null;
+    }
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('jira:refresh-board', this.boardRefreshHandler);
     }
   }
 

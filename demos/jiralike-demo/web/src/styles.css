@@ -3411,6 +3411,434 @@ input:focus, select:focus, textarea:focus {
   margin: 0 2px;
 }
 
+/* ========================================================================= */
+/* EPIC 14 / STEP 16: ATLASSIAN DARK MODE THEME & TOKENS                     */
+/* ========================================================================= */
+
+[data-theme='dark'],
+.dark,
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg-app: #181b1f;
+  --bg-surface: #22272b;
+  --bg-subtle: #2c333a;
+  --text-primary: #dee4ea;
+  --text-secondary: #8c9bab;
+  --brand-primary: #579dff;
+  --brand-hover: #85b8ff;
+  --border-color: #333c48;
+  --danger-color: #f87171;
+  --success-color: #4ade80;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --bg-app: #181b1f;
+    --bg-surface: #22272b;
+    --bg-subtle: #2c333a;
+    --text-primary: #dee4ea;
+    --text-secondary: #8c9bab;
+    --brand-primary: #579dff;
+    --brand-hover: #85b8ff;
+    --border-color: #333c48;
+    --danger-color: #f87171;
+    --success-color: #4ade80;
+  }
+}
+
+.dark .top-navbar,
+[data-theme='dark'] .top-navbar {
+  background: #1d2125;
+  border-bottom: 1px solid #333c48;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+}
+
+.dark .kanban-column,
+[data-theme='dark'] .kanban-column {
+  background: #1d2125;
+  border: 1px solid #333c48;
+}
+
+.dark .card-panel,
+.dark .kanban-card,
+.dark .issue-card,
+.dark .modal-card,
+.dark .mentions-dropdown-panel,
+[data-theme='dark'] .card-panel,
+[data-theme='dark'] .kanban-card,
+[data-theme='dark'] .issue-card,
+[data-theme='dark'] .modal-card,
+[data-theme='dark'] .mentions-dropdown-panel {
+  background: #22272b;
+  border-color: #333c48;
+  color: #dee4ea;
+}
+
+.dark .kanban-card:hover,
+[data-theme='dark'] .kanban-card:hover {
+  background: #282e33;
+  border-color: #579dff;
+}
+
+.dark .form-group input,
+.dark .form-group textarea,
+.dark .form-group select,
+.dark input[type="text"],
+.dark input[type="search"],
+.dark textarea,
+.dark select,
+[data-theme='dark'] .form-group input,
+[data-theme='dark'] .form-group textarea,
+[data-theme='dark'] .form-group select,
+[data-theme='dark'] input[type="text"],
+[data-theme='dark'] input[type="search"],
+[data-theme='dark'] textarea,
+[data-theme='dark'] select {
+  background: #1d2125;
+  border: 1px solid #39424e;
+  color: #dee4ea;
+}
+
+.dark .form-group input:focus,
+.dark .form-group textarea:focus,
+.dark .form-group select:focus,
+.dark input:focus,
+.dark textarea:focus,
+.dark select:focus,
+[data-theme='dark'] input:focus,
+[data-theme='dark'] textarea:focus,
+[data-theme='dark'] select:focus {
+  border-color: #579dff;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(87, 157, 255, 0.35);
+}
+
+.dark .btn-secondary,
+[data-theme='dark'] .btn-secondary {
+  background: #2c333a;
+  border-color: #39424e;
+  color: #dee4ea;
+}
+
+.dark .btn-secondary:hover,
+[data-theme='dark'] .btn-secondary:hover {
+  background: #333c48;
+}
+
+.dark .btn-ghost,
+[data-theme='dark'] .btn-ghost {
+  color: #dee4ea;
+}
+
+.dark .btn-ghost:hover,
+[data-theme='dark'] .btn-ghost:hover {
+  background: #2c333a;
+}
+
+.dark table th,
+[data-theme='dark'] table th {
+  background: #1d2125;
+  border-color: #333c48;
+  color: #8c9bab;
+}
+
+.dark table td,
+[data-theme='dark'] table td {
+  border-color: #2c333a;
+  color: #dee4ea;
+}
+
+.dark table tr:hover,
+[data-theme='dark'] table tr:hover {
+  background: #282e33;
+}
+
+.dark .mention-item-card,
+[data-theme='dark'] .mention-item-card {
+  background: #22272b;
+  border-color: #333c48;
+}
+
+.dark .mention-item-card.unread,
+[data-theme='dark'] .mention-item-card.unread {
+  background: #1d2b40;
+}
+
+.dark .badge-info,
+[data-theme='dark'] .badge-info {
+  background: #1c385c;
+  color: #579dff;
+}
+
+.dark code,
+.dark pre,
+[data-theme='dark'] code,
+[data-theme='dark'] pre {
+  background: #161a1d;
+  border-color: #333c48;
+  color: #e2e8f0;
+}
+
+/* ========================================================================= */
+/* EPIC 14 / STEP 16: DENSITY CONTROLS (COMPACT VS COMFORTABLE)              */
+/* ========================================================================= */
+
+[data-density='compact'],
+.density-compact {
+  font-size: 13px;
+}
+
+[data-density='compact'] .kanban-column,
+.density-compact .kanban-column {
+  padding: 6px;
+  min-width: 240px;
+}
+
+[data-density='compact'] .kanban-card,
+.density-compact .kanban-card {
+  padding: 8px 10px;
+  margin-bottom: 6px;
+}
+
+[data-density='compact'] .card-title,
+.density-compact .card-title {
+  font-size: 13px;
+  line-height: 1.35;
+  margin: 2px 0 4px;
+}
+
+[data-density='compact'] .card-top,
+.density-compact .card-top {
+  margin-bottom: 4px;
+}
+
+[data-density='compact'] .card-footer,
+.density-compact .card-footer {
+  margin-top: 4px;
+}
+
+[data-density='compact'] table th,
+[data-density='compact'] table td,
+.density-compact table th,
+.density-compact table td {
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+[data-density='compact'] .badge,
+.density-compact .badge {
+  padding: 1px 6px;
+  font-size: 11px;
+}
+
+/* ========================================================================= */
+/* KEYBOARD SHORTCUTS & SELECTION HIGHLIGHT                                  */
+/* ========================================================================= */
+
+.keyboard-selected {
+  outline: 2px solid var(--brand-primary) !important;
+  outline-offset: 2px !important;
+  box-shadow: 0 0 10px rgba(0, 82, 204, 0.45) !important;
+  transition: outline 0.1s ease;
+}
+
+kbd {
+  display: inline-block;
+  padding: 2px 6px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 14px;
+  color: #172b4d;
+  background-color: #f4f5f7;
+  border: 1px solid #dfe1e6;
+  border-radius: 4px;
+  box-shadow: 0 1px 1px rgba(9, 30, 66, 0.25);
+}
+
+.dark kbd,
+[data-theme='dark'] kbd {
+  color: #dee4ea;
+  background-color: #2c333a;
+  border-color: #39424e;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.5);
+}
+
+/* Command Palette Modal */
+.cmd-palette-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(9, 30, 66, 0.54);
+  backdrop-filter: blur(2px);
+  z-index: 1000;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 15vh;
+}
+
+.cmd-palette-modal {
+  width: 580px;
+  max-width: 90vw;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+  animation: modalPop 0.15s ease-out;
+}
+
+@keyframes modalPop {
+  from { opacity: 0; transform: scale(0.96) translateY(-8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.cmd-search-input-box {
+  display: flex;
+  align-items: center;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-color);
+  gap: 12px;
+}
+
+.cmd-search-input-box input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  font-size: 16px;
+  color: var(--text-primary);
+  outline: none;
+}
+
+.cmd-results-list {
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+.cmd-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 18px;
+  cursor: pointer;
+  color: var(--text-primary);
+  transition: background 0.12s;
+}
+
+.cmd-item-row.active,
+.cmd-item-row:hover {
+  background: var(--bg-subtle);
+  color: var(--brand-primary);
+}
+
+.cmd-item-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.cmd-item-icon {
+  font-size: 16px;
+  width: 24px;
+  text-align: center;
+}
+
+.cmd-item-shortcut {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* Cheat Sheet Modal */
+.cheat-sheet-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 18px;
+  padding: 12px 0;
+}
+
+.cheat-sheet-section h4 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.cheat-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+/* Concurrent Viewers Bar */
+.concurrent-viewers-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(87, 157, 255, 0.12);
+  border: 1px solid rgba(87, 157, 255, 0.35);
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  color: var(--text-primary);
+  animation: fadeIn 0.3s ease;
+}
+
+.viewers-avatars {
+  display: flex;
+  align-items: center;
+  margin-right: 4px;
+}
+
+.viewers-avatars .avatar-sm {
+  margin-left: -6px;
+  border: 2px solid var(--bg-surface);
+}
+
+.viewers-avatars .avatar-sm:first-child {
+  margin-left: 0;
+}
+
+/* Live Realtime Pulsing Dot */
+.realtime-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.realtime-pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #00875a;
+  box-shadow: 0 0 0 rgba(0, 135, 90, 0.4);
+  animation: pulseGreen 2s infinite;
+}
+
+.realtime-pulse-dot.disconnected {
+  background: #ffab00;
+  animation: none;
+}
+
+@keyframes pulseGreen {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(0, 135, 90, 0.7); }
+  70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(0, 135, 90, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(0, 135, 90, 0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+
 
 
 

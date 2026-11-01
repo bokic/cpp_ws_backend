@@ -1677,6 +1677,31 @@ export interface CustomerTicketDetail {
   slas: WorkItemSla[];
 }
 
+export type ThemeMode = 'light' | 'dark' | 'auto';
+export type DensityMode = 'comfortable' | 'compact';
+
+export interface LiveEventMessage {
+  id: number;
+  event_type: string;
+  created_at: string;
+  actor_user_id: number;
+  actor_name: string;
+  item_id: number;
+  item_key: string;
+  payload?: any;
+}
+
+export interface PresenceUser {
+  user_id: number;
+  username: string;
+  display_name: string;
+  avatar_color: string;
+  item_id: number;
+  item_key: string;
+  action: 'viewing' | 'editing' | 'typing';
+}
+
+
 
 
 

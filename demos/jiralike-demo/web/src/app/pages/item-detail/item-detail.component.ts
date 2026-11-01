@@ -1,4 +1,4 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnInit, OnDestroy, inject, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
@@ -63,6 +63,24 @@ import {
             </button>
           </div>
         </div>
+
+        <!-- Step 16 / Epic 14.3: Real-Time Concurrent Viewers Alert -->
+        @if (activeOtherViewers().length > 0) {
+          <div style="margin: 8px 0;">
+            <div class="concurrent-viewers-bar">
+              <div class="viewers-avatars">
+                @for (u of activeOtherViewers(); track u.user_id) {
+                  <span class="avatar-sm" [style.background]="u.avatar_color" [title]="u.display_name + ' is ' + u.action">
+                    {{ u.display_name.slice(0, 2).toUpperCase() }}
+                  </span>
+                }
+              </div>
+              <span class="viewers-text">
+                <strong>{{ formatViewersText() }}</strong>
+              </span>
+            </div>
+          </div>
+        }
 
         @if (toastMsg()) {
           <div class="toast-banner">{{ toastMsg() }}</div>
@@ -2175,10 +2193,44 @@ import {
     }
   `,
 })
-export class ItemDetailComponent implements OnInit {
+export class ItemDetailComponent implements OnInit, OnDestroy {
   readonly api = inject(ApiService);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
+
+  private presenceHeartbeat: any = null;
+
+  // Step 16 / Epic 14.3: Real-Time Concurrent Viewers
+  readonly activeOtherViewers = computed(() => {
+    const curItem = this.item();
+    const curUser = this.api.currentUser();
+    if (!curItem || !curUser) return [];
+    return this.api.activePresences().filter(
+      (p) => p.item_id === curItem.id && p.user_id !== curUser.id
+    );
+  });
+
+  formatViewersText(): string {
+    const viewers = this.activeOtherViewers();
+    if (viewers.length === 0) return '';
+    const names = viewers.map((v) => v.display_name).join(', ');
+    const editing = viewers.some((v) => v.action === 'editing' || v.action === 'typing');
+    if (editing) {
+      return `${names} is currently editing this issue`;
+    }
+    return `${names} is currently viewing this issue`;
+  }
+
+  ngOnDestroy(): void {
+    if (this.presenceHeartbeat) {
+      clearInterval(this.presenceHeartbeat);
+      this.presenceHeartbeat = null;
+    }
+    const cur = this.item();
+    if (cur) {
+      this.api.updatePresence(cur.id, cur.key, 'viewing', false);
+    }
+  }
 
   readonly states = WORKFLOW_STATES;
   readonly itemTypes = WORK_ITEM_TYPES;
@@ -2332,6 +2384,16 @@ export class ItemDetailComponent implements OnInit {
       this.securityLevels.set(secLevels);
     } catch {
       this.securityLevels.set([]);
+    }
+
+    this.api.updatePresence(d.id, d.key, 'viewing', true);
+    if (!this.presenceHeartbeat && typeof window !== 'undefined') {
+      this.presenceHeartbeat = setInterval(() => {
+        const cur = this.item();
+        if (cur) {
+          this.api.updatePresence(cur.id, cur.key, 'viewing', true);
+        }
+      }, 15000);
     }
   }
 

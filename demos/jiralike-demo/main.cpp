@@ -17,6 +17,7 @@
 #include "src/automation_engine.h"
 #include "src/vcs_engine.h"
 #include "src/itsm_engine.h"
+#include "src/realtime_engine.h"
 
 #include <algorithm>
 #include <atomic>
@@ -7918,6 +7919,11 @@ static void handle_items_rank(backend::wsworker *worker,
         }
 
         tx.commit();
+
+        auto ev_payload = json::json_value::make_object();
+        ev_payload.add_int("item_id", item_id);
+        ev_payload.add_int("updated_count", static_cast<int>(item_ids.empty() ? ordered_ids.size() : item_ids.size()));
+        realtime::get_engine().publish("card_moved", ev_payload.to_string(), u_auth.id, u_auth.display_name, item_id, "");
     } catch (const std::exception &ex) {
         send_error(worker, header, "500 Internal Server Error", ex.what());
         return;
@@ -8249,6 +8255,14 @@ static void handle_items(backend::wsworker *worker,
         a_ev.from_status = "";
         a_ev.to_status = status;
         automation::dispatch_event(conn, a_ev);
+
+        auto cr_payload = json::json_value::make_object();
+        cr_payload.add_int("id", new_item_id);
+        cr_payload.add_str("key", item_key);
+        cr_payload.add_str("title", title);
+        cr_payload.add_str("status", status);
+        cr_payload.add_str("priority", priority);
+        realtime::get_engine().publish("item_created", cr_payload.to_string(), u_auth.id, u_auth.display_name, new_item_id, item_key);
     } catch (const std::exception &ex) {
         send_error(worker, header, "500 Internal Server Error", ex.what());
         return;
@@ -8513,6 +8527,10 @@ static void handle_item_detail(backend::wsworker *worker,
             del.step_done();
             tx.commit();
         }
+
+        auto del_payload = json::json_value::make_object();
+        del_payload.add_int("id", item_id);
+        realtime::get_engine().publish("item_deleted", del_payload.to_string(), u_auth.id, u_auth.display_name, item_id, "");
 
         auto res = json::json_value::make_object();
         res.add_bool("deleted", true);
@@ -8812,6 +8830,12 @@ static void handle_item_detail(backend::wsworker *worker,
             a_ev.new_value = priority;
             automation::dispatch_event(conn, a_ev);
         }
+
+        auto upd_payload = json::json_value::make_object();
+        upd_payload.add_int("id", item_id);
+        upd_payload.add_str("key", cur_item_key);
+        upd_payload.add_str("status", status);
+        realtime::get_engine().publish(status != old_status ? "card_moved" : "item_updated", upd_payload.to_string(), u_auth.id, u_auth.display_name, item_id, cur_item_key);
     }
 
     auto q = conn.prepare(std::string(BASE_WORK_ITEM_SELECT) + " WHERE w.id = ?;");
@@ -9275,6 +9299,13 @@ static void handle_item_state_transition(backend::wsworker *worker,
             a_ev.from_status = old_status;
             a_ev.to_status = new_status;
             automation::dispatch_event(conn, a_ev);
+
+            auto tr_payload = json::json_value::make_object();
+            tr_payload.add_int("id", item_id);
+            tr_payload.add_str("key", cur_item_key);
+            tr_payload.add_str("from_status", old_status);
+            tr_payload.add_str("to_status", new_status);
+            realtime::get_engine().publish("card_moved", tr_payload.to_string(), u_auth.id, u_auth.display_name, item_id, cur_item_key);
         }
     }
 
@@ -9379,6 +9410,12 @@ static void handle_item_comments(backend::wsworker *worker,
         a_ev.comment_id = cid;
         a_ev.comment_body = text;
         automation::dispatch_event(conn, a_ev);
+
+        auto cm_payload = json::json_value::make_object();
+        cm_payload.add_int("id", cid);
+        cm_payload.add_int("item_id", item_id);
+        cm_payload.add_str("key", cur_item_key);
+        realtime::get_engine().publish("comment_added", cm_payload.to_string(), u_auth.id, u_auth.display_name, item_id, cur_item_key);
     }
 
     auto res = json::json_value::make_object();
@@ -10215,6 +10252,12 @@ static void handle_item_worklogs(backend::wsworker *worker,
         a_ev.user_username = u_auth.username;
         a_ev.user_display_name = u_auth.display_name;
         automation::dispatch_event(conn, a_ev);
+
+        auto wl_payload = json::json_value::make_object();
+        wl_payload.add_int("id", wl_id);
+        wl_payload.add_int("item_id", item_id);
+        wl_payload.add_str("key", uri_params.front());
+        realtime::get_engine().publish("worklog_added", wl_payload.to_string(), u_auth.id, u_auth.display_name, item_id, uri_params.front());
     }
 
     send_json(worker, header, "201 Created", res);
@@ -16992,6 +17035,192 @@ static void handle_servicedesk_portal_request_comment(backend::wsworker *worker,
     send_json(worker, header, "201 Created", res);
 }
 
+// GET /api/events/live
+static void handle_events_live(backend::wsworker *worker,
+                               const std::map<std::string, std::string> &header,
+                               const std::list<std::string> &) {
+    auto query = worker->parse_args(get_header(header, "QUERY_STRING"));
+    std::string accept = get_header(header, "HTTP_ACCEPT");
+    bool is_sse = (accept.find("text/event-stream") != std::string::npos) ||
+                  (query.find("stream") == query.end() || query["stream"] == "true" || query["stream"] == "1");
+
+    uint64_t since_id = 0;
+    std::string last_event_id_hdr = get_header(header, "HTTP_LAST_EVENT_ID");
+    if (!last_event_id_hdr.empty()) {
+        since_id = std::strtoull(last_event_id_hdr.c_str(), nullptr, 10);
+    } else if (query.find("since") != query.end()) {
+        since_id = std::strtoull(query["since"].c_str(), nullptr, 10);
+    }
+
+    if (!is_sse) {
+        auto events = realtime::get_engine().get_events_since(since_id);
+        auto arr = json::json_value::make_array();
+        for (const auto &ev : events) {
+            arr.add(ev.to_json());
+        }
+        auto res = json::json_value::make_object();
+        res.add("events", std::move(arr));
+        res.add_int("latest_event_id", static_cast<int>(realtime::get_engine().latest_id()));
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    std::string proto = get_header(header, "SERVER_PROTOCOL");
+    if (proto.empty()) proto = "HTTP/1.1";
+
+    int printed = FCGX_FPrintF(worker->out(),
+                 "%s 200 OK\r\n"
+                 "Status: 200 OK\r\n"
+                 "Content-Type: text/event-stream; charset=utf-8\r\n"
+                 "Cache-Control: no-cache, no-transform\r\n"
+                 "Connection: keep-alive\r\n"
+                 "X-Accel-Buffering: no\r\n\r\n",
+                 proto.c_str());
+    if (printed <= 0 || FCGX_FFlush(worker->out()) < 0) {
+        return;
+    }
+
+    auto init_obj = json::json_value::make_object();
+    init_obj.add_str("status", "connected");
+    init_obj.add_int("latest_event_id", static_cast<int>(realtime::get_engine().latest_id()));
+    FCGX_FPrintF(worker->out(), "event: connected\ndata: %s\n\n", init_obj.to_string());
+    if (FCGX_FFlush(worker->out()) < 0) {
+        return;
+    }
+
+    if (since_id > 0) {
+        auto missed = realtime::get_engine().get_events_since(since_id);
+        for (const auto &ev : missed) {
+            since_id = ev.id;
+            auto j = ev.to_json();
+            FCGX_FPrintF(worker->out(), "id: %llu\nevent: %s\ndata: %s\n\n",
+                         static_cast<unsigned long long>(ev.id),
+                         ev.event_type.c_str(),
+                         j.to_string());
+        }
+        if (FCGX_FFlush(worker->out()) < 0) {
+            return;
+        }
+    }
+
+    int max_events = 0;
+    if (query.find("max_events") != query.end()) {
+        max_events = std::atoi(query["max_events"].c_str());
+    }
+    int timeout_secs = 60;
+    if (query.find("timeout") != query.end()) {
+        timeout_secs = std::atoi(query["timeout"].c_str());
+    }
+
+    auto start_time = std::chrono::steady_clock::now();
+    int sent_events = 0;
+
+    while (!realtime::get_engine().is_shutdown()) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - start_time).count();
+        if (timeout_secs > 0 && elapsed >= timeout_secs) {
+            break;
+        }
+
+        realtime::get_engine().wait_for_events(since_id, std::chrono::milliseconds(5000));
+        if (realtime::get_engine().is_shutdown()) break;
+
+        auto events = realtime::get_engine().get_events_since(since_id);
+        if (!events.empty()) {
+            for (const auto &ev : events) {
+                since_id = ev.id;
+                auto j = ev.to_json();
+                FCGX_FPrintF(worker->out(), "id: %llu\nevent: %s\ndata: %s\n\n",
+                             static_cast<unsigned long long>(ev.id),
+                             ev.event_type.c_str(),
+                             j.to_string());
+                sent_events++;
+                if (max_events > 0 && sent_events >= max_events) break;
+            }
+            if (FCGX_FFlush(worker->out()) < 0) {
+                break;
+            }
+            if (max_events > 0 && sent_events >= max_events) break;
+        } else {
+            FCGX_FPrintF(worker->out(), ": keepalive %s\n\n", realtime::current_iso8601().c_str());
+            if (FCGX_FFlush(worker->out()) < 0) {
+                break;
+            }
+        }
+    }
+}
+
+// GET /api/events/poll
+static void handle_events_poll(backend::wsworker *worker,
+                               const std::map<std::string, std::string> &header,
+                               const std::list<std::string> &) {
+    auto query = worker->parse_args(get_header(header, "QUERY_STRING"));
+    uint64_t since_id = 0;
+    if (query.find("since") != query.end()) {
+        since_id = std::strtoull(query["since"].c_str(), nullptr, 10);
+    }
+    auto events = realtime::get_engine().get_events_since(since_id);
+    auto arr = json::json_value::make_array();
+    for (const auto &ev : events) {
+        arr.add(ev.to_json());
+    }
+    auto res = json::json_value::make_object();
+    res.add("events", std::move(arr));
+    res.add_int("latest_event_id", static_cast<int>(realtime::get_engine().latest_id()));
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET | POST /api/presence
+static void handle_presence(backend::wsworker *worker,
+                            const std::map<std::string, std::string> &header,
+                            const std::list<std::string> &) {
+    std::string method = get_header(header, "REQUEST_METHOD");
+    if (method == "POST") {
+        auto conn = acquire_db_connection();
+        auto u_auth = get_authenticated_user(conn, worker, header);
+        if (!u_auth.authenticated) {
+            send_error(worker, header, "401 Unauthorized", "Authentication required");
+            return;
+        }
+        auto body = json::json_value::parse(worker->body());
+        if (!body) {
+            send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+            return;
+        }
+        int item_id = body.get_int("item_id", 0);
+        std::string item_key = body.get_string("item_key");
+        std::string action = body.get_string("action", "viewing");
+        bool is_active = body.get_bool("is_active", true);
+
+        realtime::get_engine().update_presence(u_auth.id, u_auth.username, u_auth.display_name,
+                                               u_auth.avatar_color, item_id, item_key, action, is_active);
+
+        auto presences = realtime::get_engine().get_presences(item_id);
+        auto arr = json::json_value::make_array();
+        for (const auto &p : presences) {
+            arr.add(p.to_json());
+        }
+        auto res = json::json_value::make_object();
+        res.add_str("status", "ok");
+        res.add("active_users", std::move(arr));
+        send_json(worker, header, "200 OK", res);
+    } else {
+        auto query = worker->parse_args(get_header(header, "QUERY_STRING"));
+        int item_id = 0;
+        if (query.find("item_id") != query.end()) {
+            item_id = std::atoi(query["item_id"].c_str());
+        }
+        auto presences = realtime::get_engine().get_presences(item_id);
+        auto arr = json::json_value::make_array();
+        for (const auto &p : presences) {
+            arr.add(p.to_json());
+        }
+        auto res = json::json_value::make_object();
+        res.add("active_users", std::move(arr));
+        send_json(worker, header, "200 OK", res);
+    }
+}
+
 static constexpr auto DEFAULT_SOCKET_NAME = ":9002";
 static constexpr auto DEFAULT_BACKLOG = 100;
 
@@ -16999,6 +17228,7 @@ static std::atomic<backend::wsserver *> g_server{nullptr};
 
 static void signal_handler(int sig) {
     (void)sig;
+    realtime::get_engine().shutdown();
     backend::wsserver *server = g_server.load();
     if (server) {
         server->shutdown();
@@ -17008,7 +17238,7 @@ static void signal_handler(int sig) {
 int main(int argc, char *argv[]) {
     std::string socket_name = DEFAULT_SOCKET_NAME;
     int backlog = DEFAULT_BACKLOG;
-    int worker_num = 4;
+    int worker_num = 16;
     int opt = 0;
 
     while ((opt = getopt(argc, argv, "hn:b:w:d:u:")) != -1) {
@@ -17245,6 +17475,9 @@ int main(int argc, char *argv[]) {
         {"^/api/servicedesk/portal/requests$",          backend::GET | backend::POST,   handle_servicedesk_portal_requests},
         {"^/api/servicedesk/portal/requests/([^/]+)$",  backend::GET,                   handle_servicedesk_portal_request_detail},
         {"^/api/servicedesk/portal/requests/([^/]+)/comments$", backend::POST,          handle_servicedesk_portal_request_comment},
+        {"^/api/events/live$",                          backend::GET,                   handle_events_live          },
+        {"^/api/events/poll$",                          backend::GET,                   handle_events_poll          },
+        {"^/api/presence$",                             backend::GET | backend::POST,   handle_presence             },
     });
 
     server.init(socket_name.c_str(), backlog, worker_num);

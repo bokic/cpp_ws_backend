@@ -13,6 +13,7 @@ const fs = require('fs');
 const path = require('path');
 
 const HTTP_PORT = Number(process.env.PORT || 4200);
+const FCGI_SOCK = process.env.FCGI_SOCK;
 const FCGI_HOST = process.env.FCGI_HOST || '127.0.0.1';
 const FCGI_PORT = Number(process.env.FCGI_PORT || 9002);
 const STATIC_ROOT = path.join(__dirname, 'web', 'dist', 'web', 'browser');
@@ -109,12 +110,23 @@ function forwardFastCGI(req, res, bodyBuf) {
   }
   chunksToSend.push(makeRecord(FCGI_STDIN, reqId, Buffer.alloc(0)));
 
-  const sock = net.createConnection({ host: FCGI_HOST, port: FCGI_PORT }, () => {
-    sock.write(Buffer.concat(chunksToSend));
-  });
+  const sock = FCGI_SOCK
+    ? net.createConnection(FCGI_SOCK, () => {
+        sock.write(Buffer.concat(chunksToSend));
+      })
+    : net.createConnection({ host: FCGI_HOST, port: FCGI_PORT }, () => {
+        sock.write(Buffer.concat(chunksToSend));
+      });
 
   let rxBuf = Buffer.alloc(0);
-  const stdoutChunks = [];
+  let headersSent = false;
+  let headerBuf = Buffer.alloc(0);
+
+  res.on('close', () => {
+    if (!res.writableEnded) {
+      sock.destroy();
+    }
+  });
 
   sock.on('data', (chunk) => {
     rxBuf = Buffer.concat([rxBuf, chunk]);
@@ -129,7 +141,41 @@ function forwardFastCGI(req, res, bodyBuf) {
       rxBuf = rxBuf.subarray(totalLen);
 
       if (type === FCGI_STDOUT && contentLen > 0) {
-        stdoutChunks.push(content);
+        if (!headersSent) {
+          headerBuf = Buffer.concat([headerBuf, content]);
+          const sepIdx = headerBuf.indexOf('\r\n\r\n');
+          if (sepIdx !== -1) {
+            const rawHeaders = headerBuf.subarray(0, sepIdx).toString('utf8');
+            const remainder = headerBuf.subarray(sepIdx + 4);
+            let statusCode = 200;
+            const outHeaders = {};
+            for (const line of rawHeaders.split('\r\n')) {
+              if (line.startsWith('HTTP/')) {
+                const m = line.match(/^HTTP\/\d\.\d\s+(\d+)/);
+                if (m) statusCode = Number(m[1]);
+                continue;
+              }
+              const colon = line.indexOf(':');
+              if (colon > 0) {
+                const hk = line.slice(0, colon).trim();
+                const hv = line.slice(colon + 1).trim();
+                if (hk.toLowerCase() === 'status') {
+                  const m = hv.match(/^(\d+)/);
+                  if (m) statusCode = Number(m[1]);
+                } else {
+                  outHeaders[hk] = hv;
+                }
+              }
+            }
+            res.writeHead(statusCode, outHeaders);
+            headersSent = true;
+            if (remainder.length > 0) {
+              res.write(remainder);
+            }
+          }
+        } else {
+          res.write(content);
+        }
       } else if (type === FCGI_END_REQUEST) {
         sock.end();
       }
@@ -137,47 +183,20 @@ function forwardFastCGI(req, res, bodyBuf) {
   });
 
   sock.on('close', () => {
-    if (res.headersSent) return;
-    const fullOut = Buffer.concat(stdoutChunks);
-    const sepIdx = fullOut.indexOf('\r\n\r\n');
-    if (sepIdx === -1) {
+    if (!headersSent) {
       res.writeHead(502, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Invalid FastCGI response from backend' }));
-      return;
+    } else {
+      res.end();
     }
-
-    const rawHeaders = fullOut.subarray(0, sepIdx).toString('utf8');
-    const respBody = fullOut.subarray(sepIdx + 4);
-
-    let statusCode = 200;
-    const outHeaders = {};
-    for (const line of rawHeaders.split('\r\n')) {
-      if (line.startsWith('HTTP/')) {
-        const m = line.match(/^HTTP\/\d\.\d\s+(\d+)/);
-        if (m) statusCode = Number(m[1]);
-        continue;
-      }
-      const colon = line.indexOf(':');
-      if (colon > 0) {
-        const hk = line.slice(0, colon).trim();
-        const hv = line.slice(colon + 1).trim();
-        if (hk.toLowerCase() === 'status') {
-          const m = hv.match(/^(\d+)/);
-          if (m) statusCode = Number(m[1]);
-        } else {
-          outHeaders[hk] = hv;
-        }
-      }
-    }
-
-    res.writeHead(statusCode, outHeaders);
-    res.end(respBody);
   });
 
   sock.on('error', (err) => {
-    if (!res.headersSent) {
+    if (!headersSent && !res.headersSent) {
       res.writeHead(502, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: `FastCGI backend unreachable: ${err.message}` }));
+    } else {
+      res.end();
     }
   });
 }

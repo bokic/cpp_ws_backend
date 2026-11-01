@@ -93,6 +93,10 @@ import {
   CannedResponse,
   CustomerPortalHome,
   CustomerTicketDetail,
+  DensityMode,
+  LiveEventMessage,
+  PresenceUser,
+  ThemeMode,
 } from '../models/jira.models';
 
 @Injectable({
@@ -2563,5 +2567,265 @@ export class ApiService {
       method: 'POST',
       body: JSON.stringify(payload),
     });
+  }
+
+  // =========================================================================
+  // UI / UX: Theming & Density
+  // =========================================================================
+  private readonly THEME_KEY = 'jira_theme_mode';
+  private readonly DENSITY_KEY = 'jira_density';
+
+  readonly themeMode = signal<ThemeMode>(this.loadStoredTheme());
+  readonly isDarkMode = signal<boolean>(false);
+  readonly densityMode = signal<DensityMode>(this.loadStoredDensity());
+  readonly realtimeConnected = signal<boolean>(false);
+  readonly liveEvents = signal<LiveEventMessage[]>([]);
+  readonly activePresences = signal<PresenceUser[]>([]);
+
+  private eventSource: EventSource | null = null;
+  private sseReconnectTimeout: any = null;
+  private realtimeListeners: Array<(ev: LiveEventMessage) => void> = [];
+
+  private loadStoredTheme(): ThemeMode {
+    if (typeof localStorage === 'undefined') return 'auto';
+    const val = localStorage.getItem(this.THEME_KEY);
+    if (val === 'dark' || val === 'light' || val === 'auto') return val;
+    return 'auto';
+  }
+
+  private loadStoredDensity(): DensityMode {
+    if (typeof localStorage === 'undefined') return 'comfortable';
+    const val = localStorage.getItem(this.DENSITY_KEY);
+    if (val === 'compact' || val === 'comfortable') return val;
+    return 'comfortable';
+  }
+
+  initThemeAndDensity(): void {
+    this.applyTheme(this.themeMode());
+    this.applyDensity(this.densityMode());
+
+    if (typeof window !== 'undefined' && window.matchMedia) {
+      window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+        if (this.themeMode() === 'auto') {
+          this.applyTheme('auto');
+        }
+      });
+    }
+  }
+
+  setThemeMode(mode: ThemeMode): void {
+    this.themeMode.set(mode);
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(this.THEME_KEY, mode);
+    }
+    this.applyTheme(mode);
+  }
+
+  toggleTheme(): void {
+    const current = this.themeMode();
+    const next: ThemeMode = current === 'dark' ? 'light' : current === 'light' ? 'auto' : 'dark';
+    this.setThemeMode(next);
+  }
+
+  private applyTheme(mode: ThemeMode): void {
+    if (typeof document === 'undefined') return;
+    let dark = false;
+    if (mode === 'dark') {
+      dark = true;
+    } else if (mode === 'light') {
+      dark = false;
+    } else {
+      dark =
+        typeof window !== 'undefined' &&
+        !!window.matchMedia &&
+        window.matchMedia('(prefers-color-scheme: dark)').matches;
+    }
+    this.isDarkMode.set(dark);
+    if (dark) {
+      document.documentElement.setAttribute('data-theme', 'dark');
+      document.documentElement.classList.add('dark');
+      document.body?.classList.add('dark');
+    } else {
+      document.documentElement.setAttribute('data-theme', 'light');
+      document.documentElement.classList.remove('dark');
+      document.body?.classList.remove('dark');
+    }
+  }
+
+  setDensityMode(mode: DensityMode): void {
+    this.densityMode.set(mode);
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(this.DENSITY_KEY, mode);
+    }
+    this.applyDensity(mode);
+  }
+
+  toggleDensity(): void {
+    const next: DensityMode = this.densityMode() === 'compact' ? 'comfortable' : 'compact';
+    this.setDensityMode(next);
+  }
+
+  private applyDensity(mode: DensityMode): void {
+    if (typeof document === 'undefined') return;
+    document.documentElement.setAttribute('data-density', mode);
+    if (mode === 'compact') {
+      document.documentElement.classList.add('density-compact');
+      document.body?.classList.add('density-compact');
+    } else {
+      document.documentElement.classList.remove('density-compact');
+      document.body?.classList.remove('density-compact');
+    }
+  }
+
+  // =========================================================================
+  // Real-Time Collaborative SSE Gateway
+  // =========================================================================
+  initRealtimeSync(): void {
+    if (this.eventSource) return;
+    if (typeof window === 'undefined' || typeof EventSource === 'undefined') return;
+
+    try {
+      const tok = this.token();
+      const url = tok ? `/api/events/live?token=${encodeURIComponent(tok)}&stream=1` : '/api/events/live?stream=1';
+      this.eventSource = new EventSource(url);
+
+      this.eventSource.onopen = () => {
+        this.realtimeConnected.set(true);
+      };
+
+      this.eventSource.addEventListener('connected', () => {
+        this.realtimeConnected.set(true);
+      });
+
+      const handleEvent = (eventType: string, dataStr: string) => {
+        try {
+          const payload = JSON.parse(dataStr);
+          const liveMsg: LiveEventMessage = {
+            id: payload.id || Date.now(),
+            event_type: payload.event_type || eventType,
+            created_at: payload.created_at || new Date().toISOString(),
+            actor_user_id: payload.actor_user_id || 0,
+            actor_name: payload.actor_name || '',
+            item_id: payload.item_id || 0,
+            item_key: payload.item_key || '',
+            payload: payload.payload ?? payload,
+          };
+
+          this.liveEvents.update((list) => [liveMsg, ...list.slice(0, 50)]);
+
+          if (liveMsg.event_type === 'presence_updated' && liveMsg.payload) {
+            this.refreshPresences(liveMsg.payload);
+          }
+
+          for (const listener of this.realtimeListeners) {
+            listener(liveMsg);
+          }
+        } catch {
+          // parse error
+        }
+      };
+
+      this.eventSource.onmessage = (ev: MessageEvent) => {
+        handleEvent('message', ev.data);
+      };
+
+      const registeredEvents = [
+        'board_update',
+        'card_moved',
+        'item_updated',
+        'item_created',
+        'item_deleted',
+        'item_transitioned',
+        'comment_added',
+        'worklog_added',
+        'presence_updated',
+      ];
+      for (const evName of registeredEvents) {
+        this.eventSource.addEventListener(evName, (ev: MessageEvent) => {
+          handleEvent(evName, ev.data);
+        });
+      }
+
+      this.eventSource.onerror = () => {
+        this.realtimeConnected.set(false);
+        if (this.eventSource) {
+          this.eventSource.close();
+          this.eventSource = null;
+        }
+        if (!this.sseReconnectTimeout) {
+          this.sseReconnectTimeout = setTimeout(() => {
+            this.sseReconnectTimeout = null;
+            if (this.currentUser()) {
+              this.initRealtimeSync();
+            }
+          }, 3000);
+        }
+      };
+    } catch {
+      // EventSource failed
+    }
+  }
+
+  closeRealtimeSync(): void {
+    if (this.sseReconnectTimeout) {
+      clearTimeout(this.sseReconnectTimeout);
+      this.sseReconnectTimeout = null;
+    }
+    if (this.eventSource) {
+      this.eventSource.close();
+      this.eventSource = null;
+    }
+    this.realtimeConnected.set(false);
+  }
+
+  onLiveEvent(listener: (ev: LiveEventMessage) => void): () => void {
+    this.realtimeListeners.push(listener);
+    return () => {
+      this.realtimeListeners = this.realtimeListeners.filter((l) => l !== listener);
+    };
+  }
+
+  private refreshPresences(presencePayload: any): void {
+    if (!presencePayload) return;
+    this.activePresences.update((list) => {
+      const filtered = list.filter(
+        (p) => !(p.user_id === presencePayload.user_id && p.item_id === presencePayload.item_id)
+      );
+      if (presencePayload.is_active !== false) {
+        filtered.push({
+          user_id: presencePayload.user_id,
+          username: presencePayload.username || '',
+          display_name: presencePayload.display_name || 'Anonymous',
+          avatar_color: presencePayload.avatar_color || '#0052cc',
+          item_id: presencePayload.item_id || 0,
+          item_key: presencePayload.item_key || '',
+          action: presencePayload.action || 'viewing',
+        });
+      }
+      return filtered;
+    });
+  }
+
+  async updatePresence(
+    itemId: number,
+    itemKey: string,
+    action: 'viewing' | 'editing' | 'typing' = 'viewing',
+    isActive = true
+  ): Promise<void> {
+    if (!this.currentUser()) return;
+    try {
+      await this.request('/api/presence', {
+        method: 'POST',
+        body: JSON.stringify({ item_id: itemId, item_key: itemKey, action, is_active: isActive }),
+      });
+    } catch {
+      // ignore
+    }
+  }
+
+  async getPresences(itemId?: number): Promise<PresenceUser[]> {
+    const q = itemId ? `?item_id=${itemId}` : '';
+    const res = await this.request<{ active_users: PresenceUser[] }>(`/api/presence${q}`);
+    return res.active_users || [];
   }
 }

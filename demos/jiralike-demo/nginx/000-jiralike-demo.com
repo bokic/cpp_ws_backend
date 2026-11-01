@@ -17,6 +17,8 @@ server {
 	# FastCGI C++23 Backend API & Blobs
 	location /api/ {
 		fastcgi_pass 127.0.0.1:9002;
+		fastcgi_buffering off;
+		fastcgi_cache off;
 
 		fastcgi_param  GATEWAY_INTERFACE  CGI/1.1;
 		fastcgi_param  SERVER_SOFTWARE    nginx;

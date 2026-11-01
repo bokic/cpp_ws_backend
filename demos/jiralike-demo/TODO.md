@@ -546,16 +546,16 @@ This document provides a comprehensive gap analysis and exhaustive development r
 
 ---
 
-## 15. Epic 14: User Experience, Theming & Accessibility
+## 15. Epic 14: User Experience, Theming & Accessibility *(Completed)*
 
-### 15.1 Dark Mode & Design System
-- [ ] **Theme Switcher**:
-  - First-class Dark Mode matching Atlassian Dark Theme tokens.
-  - System preference detection (`prefers-color-scheme`) with manual toggle.
-- [ ] **Density Controls**: Compact vs Comfortable view modes for issue tables and boards.
+### 15.1 Dark Mode & Design System *(Completed)*
+- [x] **Theme Switcher**:
+  - First-class Dark Mode matching Atlassian Dark Theme tokens (`dark` class, `data-theme` attribute).
+  - System preference detection (`prefers-color-scheme`) with manual toggle (Dark / Light / Auto).
+- [x] **Density Controls**: Compact vs Comfortable view modes for issue tables and boards (`data-density="compact"`).
 
-### 15.2 Jira Keyboard Shortcuts
-- [ ] **Global Shortcut Listener**:
+### 15.2 Jira Keyboard Shortcuts *(Completed)*
+- [x] **Global Shortcut Listener**:
   - `c`: Open Create Issue modal from anywhere.
   - `/`: Focus search input bar.
   - `.`: Quick operation / Command palette modal.
@@ -565,10 +565,10 @@ This document provides a comprehensive gap analysis and exhaustive development r
   - `a`: Assign selected issue.
   - `m`: Add comment to selected issue.
 
-### 15.3 Real-Time Collaborative Sync
-- [ ] **WebSocket / Server-Sent Events (SSE) Push**:
-  - Instant board refresh when another user transitions, edits, or adds cards.
-  - Live typing indicator and concurrent viewing alerts ("*Marcus Vance is currently viewing/editing this issue*").
+### 15.3 Real-Time Collaborative Sync *(Completed)*
+- [x] **WebSocket / Server-Sent Events (SSE) Push**:
+  - Instant board refresh when another user transitions, edits, or adds cards via `/api/events/live` and `/api/events/poll`.
+  - Live typing indicator and concurrent viewing alerts ("*Marcus Vance is currently viewing/editing this issue*") via `/api/presence`.
 
 ### 15.4 Internationalization & Localization (i18n)
 - [ ] **Multi-Language Support**: Localized strings (EN, DE, FR, ES, JA, ZH) using Angular i18n or transloco.
@@ -916,15 +916,18 @@ flowchart TD
   - [x] Work Item Detail Integration: Sidebar SLA Targets & Service Desk panel, plus Canned Response insertion dropdown in comment editor.
 - **Verification**: Verified with 9/9 test suites in `verify_step15.py`: Submitting a support ticket starts SLA countdown; agent first reply pauses/completes First Response SLA timer; transition to 'Waiting for customer' pauses SLA; transition to 'Done' completes Resolution SLA; canned responses placeholder substitution and queue counts verified. Zero regressions across Steps 10-14.
 
-#### Step 16: UI/UX Modernization, Theming & SSE Real-Time Sync
+#### Step 16: UI/UX Modernization, Theming & SSE Real-Time Sync *(Completed)*
 - **Why Final Step**: Polishes the complete application for end-user delight once all features are functionally complete.
 - **Backend Deliverables**:
-  - Real-Time Push Gateway: Server-Sent Events (SSE) or WebSocket endpoint (`/api/events/live`) broadcasting board updates and live card movements.
+  - [x] Real-Time Push Gateway: Server-Sent Events (SSE) `/api/events/live` and fallback polling `/api/events/poll` broadcasting board updates, item creation, and live card movements.
+  - [x] Active Presence Registry: `/api/presence` tracking live viewers, active editors, and typing indicators.
 - **Frontend Deliverables**:
-  - Dark Mode Theme: Theme switcher complying with Atlassian Dark Theme tokens.
-  - Global Keyboard Shortcuts: Full listener for `c` (create), `/` (search), `.` (command palette), `j`/`k` (item navigation), `e` (edit), `a` (assign).
-  - Real-Time Board Reflection: Board updates automatically without page refresh when teammates drag cards.
-- **Verification**: Toggling dark mode persists preferences; pressing `c` launches Create modal; moving a card reflects on another browser window instantly.
+  - [x] Dark Mode Theme: Theme switcher complying with Atlassian Dark Theme tokens with Dark/Light/Auto preferences persisted to localStorage.
+  - [x] Density Mode Switcher: Compact vs Comfortable toggle for boards and tables.
+  - [x] Global Keyboard Shortcuts: Full listener for `c` (create modal), `/` (search), `.` (command palette), `?` (cheat sheet), `j`/`k` (item navigation), `e` (edit), `a` (assign), `m` (comment).
+  - [x] Real-Time Board Reflection: Board updates automatically without page refresh via live SSE when teammates drag cards, with non-intrusive floating sync toast.
+  - [x] Concurrent Viewers Alert: Live presence bar on Issue Detail displaying teammates viewing or editing the issue in real time.
+- **Verification**: Verified with 8/8 test suites in `verify_step16.py`: SSE handshake connects cleanly; card movement broadcasts `card_moved` over SSE stream; presence broadcasts `presence_updated`; dev-gateway.js FastCGI streaming forwarder validated; dark mode tokens and global shortcuts validated; zero regressions across Steps 10-15.
 
 ---
 
@@ -947,5 +950,5 @@ flowchart TD
 | **13** | Notifications, SMTP & Webhooks | Step 11, Step 12 | Medium | 2 weeks | C++ Async Workers & In-App Drawer |
 | **14** | Dev Tooling & Smart Commits | Step 4, Step 7 | Medium | 2 weeks | VCS Webhooks & Commit Parser |
 | **15** | ITSM & Service Desk | Step 4, Step 11 | High | 3 weeks | SLA Calendar Engine & Customer Portal |
-| **16** | UX Modernization & Real-Time Sync | Step 6, Step 9 | Medium | 2 weeks | SSE / WebSockets & Dark Mode |
+| **16** | UX Modernization & Real-Time Sync | Step 6, Step 9 | Medium | 2 weeks | SSE / WebSockets & Dark Mode *(Completed)* |
 
