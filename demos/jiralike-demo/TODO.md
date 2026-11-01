@@ -593,8 +593,8 @@ This document provides a comprehensive gap analysis and exhaustive development r
   - Enforce `PRAGMA journal_mode=WAL;`, `PRAGMA synchronous=NORMAL;`, and `PRAGMA busy_timeout=5000;`.
   - Prepared statement cache per pooled connection to eliminate SQL re-compilation overhead.
 
-### 16.3 Pluggable Storage & S3 Adapter
-- [ ] **Blob Storage Abstraction Layer**:
+### 16.3 Pluggable Storage & S3 Adapter *(Omitted by user request)*
+- [-] **Blob Storage Abstraction Layer**: *(Omitted by user request - local filesystem storage retained)*
   - Define `blob_storage` interface contract: `put()`, `get()`, `remove()`, `get_stream()`.
   - Implement **Local Filesystem Driver** (current `blobs/` directory).
   - Implement **S3 / MinIO Compatible Driver** for cloud-native distributed deployments.
