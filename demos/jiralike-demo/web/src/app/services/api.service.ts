@@ -106,6 +106,13 @@ import {
   LiveEventMessage,
   PresenceUser,
   ThemeMode,
+  SsoConfig,
+  SsoLoginResponse,
+  TwoFactorStatus,
+  TwoFactorSetup,
+  TwoFactorVerifyResponse,
+  InboundMailHandler,
+  InboundMailLog,
 } from '../models/jira.models';
 
 @Injectable({
@@ -249,14 +256,28 @@ export class ApiService {
     return res;
   }
 
-  async login(username: string, password: string): Promise<User> {
-    const res = await this.request<{ token: string; user: User }>('/api/auth/login', {
+  async login(
+    username: string,
+    password: string,
+    totp_code?: string,
+    recovery_code?: string
+  ): Promise<{ token?: string; user?: User; mfa_required?: boolean; mfa_token?: string; user_id?: number; username?: string }> {
+    const res = await this.request<{
+      token?: string;
+      user?: User;
+      mfa_required?: boolean;
+      mfa_token?: string;
+      user_id?: number;
+      username?: string;
+    }>('/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, totp_code, recovery_code }),
     });
-    this.setAuth(res.token, res.user);
-    await this.loadReferenceData();
-    return res.user;
+    if (res.token && res.user) {
+      this.setAuth(res.token, res.user);
+      await this.loadReferenceData();
+    }
+    return res;
   }
 
   async logout(): Promise<void> {
@@ -3024,5 +3045,113 @@ export class ApiService {
         body: JSON.stringify(payload),
       }
     );
+  }
+
+  // ============================================================================
+  // Step 19: Enterprise Security (SSO, 2FA/MFA) & Inbound Mail Processing
+  // ============================================================================
+
+  // 2FA / TOTP
+  async verify2faLogin(mfa_token: string, code: string): Promise<User> {
+    const res = await this.request<{ token: string; user: User }>('/api/auth/2fa/verify', {
+      method: 'POST',
+      body: JSON.stringify({ mfa_token, code }),
+    });
+    this.setAuth(res.token, res.user);
+    await this.loadReferenceData();
+    return res.user;
+  }
+
+  async recovery2faLogin(mfa_token: string, recovery_code: string): Promise<User> {
+    const res = await this.request<{ token: string; user: User; remaining_recovery_codes: number }>('/api/auth/2fa/recovery', {
+      method: 'POST',
+      body: JSON.stringify({ mfa_token, recovery_code }),
+    });
+    this.setAuth(res.token, res.user);
+    await this.loadReferenceData();
+    return res.user;
+  }
+
+  async get2faStatus(): Promise<TwoFactorStatus> {
+    return this.request<TwoFactorStatus>('/api/auth/2fa/status');
+  }
+
+  async setup2fa(): Promise<TwoFactorSetup> {
+    return this.request<TwoFactorSetup>('/api/auth/2fa/setup', { method: 'POST' });
+  }
+
+  async verifyAndEnable2fa(code: string): Promise<TwoFactorVerifyResponse> {
+    return this.request<TwoFactorVerifyResponse>('/api/auth/2fa/verify', {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+    });
+  }
+
+  async disable2fa(): Promise<{ success: boolean; message: string }> {
+    return this.request<{ success: boolean; message: string }>('/api/auth/2fa/disable', {
+      method: 'POST',
+    });
+  }
+
+  // Enterprise SSO
+  async getSsoConfig(): Promise<SsoConfig> {
+    return this.request<SsoConfig>('/api/auth/sso/config');
+  }
+
+  async updateSsoConfig(config: Partial<SsoConfig>): Promise<SsoConfig> {
+    return this.request<SsoConfig>('/api/auth/sso/config', {
+      method: 'PUT',
+      body: JSON.stringify(config),
+    });
+  }
+
+  async initiateSso(domain?: string): Promise<SsoLoginResponse> {
+    return this.request<SsoLoginResponse>(`/api/auth/sso/login${domain ? '?domain=' + encodeURIComponent(domain) : ''}`);
+  }
+
+  async ssoCallback(payload: any): Promise<{ token: string; user: User }> {
+    const res = await this.request<{ token: string; user: User }>('/api/auth/sso/callback', {
+      method: 'POST',
+      body: typeof payload === 'string' ? payload : JSON.stringify(payload),
+    });
+    this.setAuth(res.token, res.user);
+    await this.loadReferenceData();
+    return res;
+  }
+
+  // Inbound Mail Handlers
+  async getMailHandlers(): Promise<InboundMailHandler[]> {
+    return this.request<InboundMailHandler[]>('/api/mail/handlers');
+  }
+
+  async createMailHandler(handler: Partial<InboundMailHandler>): Promise<InboundMailHandler> {
+    return this.request<InboundMailHandler>('/api/mail/handlers', {
+      method: 'POST',
+      body: JSON.stringify(handler),
+    });
+  }
+
+  async updateMailHandler(id: number, handler: Partial<InboundMailHandler>): Promise<InboundMailHandler> {
+    return this.request<InboundMailHandler>(`/api/mail/handlers/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(handler),
+    });
+  }
+
+  async deleteMailHandler(id: number): Promise<{ success: boolean; deleted_id: number }> {
+    return this.request<{ success: boolean; deleted_id: number }>(`/api/mail/handlers/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getMailLogs(limit: number = 50): Promise<InboundMailLog[]> {
+    return this.request<InboundMailLog[]>(`/api/mail/logs?limit=${limit}`);
+  }
+
+  async simulateInboundMail(payload: any): Promise<any> {
+    return this.request<any>('/api/mail/inbound', {
+      method: 'POST',
+      body: typeof payload === 'string' ? payload : JSON.stringify(payload),
+    });
   }
 }

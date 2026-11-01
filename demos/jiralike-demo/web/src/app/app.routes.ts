@@ -20,6 +20,8 @@ import { ServiceDeskPortalComponent } from './pages/servicedesk-portal/servicede
 import { ServiceDeskAgentComponent } from './pages/servicedesk-agent/servicedesk-agent.component';
 import { TrashComponent } from './pages/trash/trash.component';
 import { RoadmapAdvancedComponent } from './pages/roadmap-advanced/roadmap-advanced.component';
+import { SecuritySettingsComponent } from './pages/security-settings/security-settings.component';
+import { MailHandlersComponent } from './pages/mail-handlers/mail-handlers.component';
 
 export const routes: Routes = [
   { path: '', pathMatch: 'full', redirectTo: 'dashboards' },
@@ -28,6 +30,10 @@ export const routes: Routes = [
   { path: 'dashboards', component: DashboardsComponent },
   { path: 'roadmap/advanced', component: RoadmapAdvancedComponent },
   { path: 'roadmap', component: RoadmapAdvancedComponent },
+  { path: 'profile', component: SecuritySettingsComponent },
+  { path: 'settings/security', component: SecuritySettingsComponent },
+  { path: 'settings/mail-handlers', component: MailHandlersComponent },
+  { path: 'mail-handlers', component: MailHandlersComponent },
   { path: 'servicedesk', component: ServiceDeskPortalComponent },
   { path: 'servicedesk/request/:key', component: ServiceDeskPortalComponent },
   { path: 'servicedesk/agent', component: ServiceDeskAgentComponent },

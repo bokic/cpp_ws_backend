@@ -20,6 +20,7 @@
 #include "src/realtime_engine.h"
 #include "src/bulk_and_trash_engine.h"
 #include "src/portfolio_roadmap_engine.h"
+#include "src/enterprise_security_engine.h"
 
 #include <algorithm>
 #include <atomic>
@@ -119,6 +120,22 @@ static void send_csv(backend::wsworker *worker,
                  "Cache-Control: no-store\r\n"
                  "Content-Length: %d\r\n\r\n%s",
                  proto.c_str(), filename.c_str(), len, csv_content.c_str());
+}
+
+static void send_xml(backend::wsworker *worker,
+                     const std::map<std::string, std::string> &header,
+                     const std::string &xml_content) {
+    std::string proto = get_header(header, "SERVER_PROTOCOL");
+    if (proto.empty()) proto = "HTTP/1.1";
+    int len = static_cast<int>(xml_content.size());
+    FCGX_FPrintF(worker->out(),
+                 "%s 200 OK\r\n"
+                 "Status: 200 OK\r\n"
+                 "Content-Type: application/xml; charset=utf-8\r\n"
+                 "X-Content-Type-Options: nosniff\r\n"
+                 "Cache-Control: no-store\r\n"
+                 "Content-Length: %d\r\n\r\n%s",
+                 proto.c_str(), len, xml_content.c_str());
 }
 
 struct auth_user {
@@ -1000,6 +1017,58 @@ static void handle_auth_login(backend::wsworker *worker,
     u.avatar_color = stmt.column_str(6);
     u.authenticated = true;
     stmt.reset();
+
+    // Check if 2FA (RFC 6238 TOTP) is enabled for this user
+    int mfa_enabled = 0;
+    {
+        auto m_stmt = conn.prepare("SELECT is_enabled FROM user_2fa WHERE user_id = ?;");
+        m_stmt.bind_int(1, u.id);
+        if (m_stmt.step() == SQLITE_ROW) {
+            mfa_enabled = m_stmt.column_int(0);
+        }
+    }
+
+    if (mfa_enabled == 1) {
+        std::string totp_code = body.get_string("totp_code");
+        if (totp_code.empty()) totp_code = body.get_string("code");
+        std::string recovery_code = body.get_string("recovery_code");
+
+        if (!totp_code.empty()) {
+            std::string secret;
+            auto s_stmt = conn.prepare("SELECT secret FROM user_2fa WHERE user_id = ?;");
+            s_stmt.bind_int(1, u.id);
+            if (s_stmt.step() == SQLITE_ROW) secret = s_stmt.column_str(0);
+            uint64_t now_ts = static_cast<uint64_t>(std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()));
+            if (!utils::verify_totp(secret, totp_code, now_ts, 1, 30)) {
+                send_error(worker, header, "401 Unauthorized", "Invalid 2FA TOTP code");
+                return;
+            }
+        } else if (!recovery_code.empty()) {
+            int dummy_user = 0, dummy_rem = 0;
+            std::string dummy_sess, dummy_err;
+            if (enterprise_sec::verify_mfa_recovery_login(conn, "", u.id, recovery_code, dummy_user, dummy_sess, dummy_rem, dummy_err)) {
+                auto res = json::json_value::make_object();
+                res.add_str("token", dummy_sess);
+                res.add("user", user_to_json(u));
+                res.add_int("remaining_recovery_codes", dummy_rem);
+                send_json(worker, header, "200 OK", res);
+                return;
+            } else {
+                send_error(worker, header, "401 Unauthorized", dummy_err.c_str());
+                return;
+            }
+        } else {
+            // Require 2FA challenge
+            std::string pending_token = enterprise_sec::create_pending_mfa_login(conn, u.id);
+            auto res = json::json_value::make_object();
+            res.add_bool("mfa_required", true);
+            res.add_str("mfa_token", pending_token);
+            res.add_int("user_id", u.id);
+            res.add_str("username", u.username);
+            send_json(worker, header, "200 OK", res);
+            return;
+        }
+    }
 
     std::string token = utils::generate_random_hex(32);
     {
@@ -9442,6 +9511,516 @@ static void handle_portfolio_reschedule(backend::wsworker *worker,
     res.add_int("item_id", item_id);
     res.add_str("start_date", start_date);
     res.add_str("due_date", due_date);
+    send_json(worker, header, "200 OK", res);
+}
+
+// ============================================================================
+// STEP 19: ENTERPRISE SECURITY (SSO & 2FA/MFA) & INBOUND EMAIL PROCESSING
+// ============================================================================
+
+// GET, PUT, POST /api/auth/sso/config
+static void handle_sso_config(backend::wsworker *worker,
+                              const std::map<std::string, std::string> &header,
+                              const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto u_auth = get_authenticated_user(conn, worker, header);
+        bool is_admin = (u_auth.authenticated && u_auth.role == "Admin");
+        enterprise_sec::sso_config cfg = enterprise_sec::get_sso_config(conn);
+        send_json(worker, header, "200 OK", enterprise_sec::sso_config_to_json(cfg, !is_admin));
+        return;
+    }
+
+    if (method == "PUT" || method == "POST") {
+        auto u_auth = get_authenticated_user(conn, worker, header);
+        if (!u_auth.authenticated || u_auth.role != "Admin") {
+            send_error(worker, header, "403 Forbidden", "Admin privileges required to configure Enterprise SSO");
+            return;
+        }
+
+        auto body = json::json_value::parse(worker->body());
+        if (!body) {
+            send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+            return;
+        }
+
+        enterprise_sec::sso_config cfg = enterprise_sec::get_sso_config(conn);
+        if (body.has_key("is_enabled")) cfg.is_enabled = body.get_bool("is_enabled");
+        if (body.has_key("protocol")) cfg.protocol = body.get_string("protocol", cfg.protocol);
+        if (body.has_key("provider_name")) cfg.provider_name = body.get_string("provider_name", cfg.provider_name);
+        if (body.has_key("entity_id")) cfg.entity_id = body.get_string("entity_id", cfg.entity_id);
+        if (body.has_key("sso_url")) cfg.sso_url = body.get_string("sso_url", cfg.sso_url);
+        if (body.has_key("issuer")) cfg.issuer = body.get_string("issuer", cfg.issuer);
+        if (body.has_key("client_id")) cfg.client_id = body.get_string("client_id", cfg.client_id);
+        if (body.has_key("client_secret")) cfg.client_secret = body.get_string("client_secret", cfg.client_secret);
+        if (body.has_key("certificate")) cfg.certificate = body.get_string("certificate", cfg.certificate);
+        if (body.has_key("email_domain")) cfg.email_domain = body.get_string("email_domain", cfg.email_domain);
+        if (body.has_key("auto_provision")) cfg.auto_provision = body.get_bool("auto_provision", cfg.auto_provision);
+        if (body.has_key("default_role")) cfg.default_role = body.get_string("default_role", cfg.default_role);
+
+        enterprise_sec::save_sso_config(conn, cfg);
+        send_json(worker, header, "200 OK", enterprise_sec::sso_config_to_json(cfg, false));
+        return;
+    }
+
+    send_error(worker, header, "405 Method Not Allowed", "Method not allowed");
+}
+
+// GET /api/auth/sso/metadata
+static void handle_sso_metadata(backend::wsworker *worker,
+                                const std::map<std::string, std::string> &header,
+                                const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    enterprise_sec::sso_config cfg = enterprise_sec::get_sso_config(conn);
+    std::string host = get_header(header, "HTTP_HOST");
+    if (host.empty()) host = "localhost:8080";
+    std::string base_url = "http://" + host;
+    std::string xml = enterprise_sec::get_sp_metadata_xml(cfg, base_url);
+    send_xml(worker, header, xml);
+}
+
+// GET & POST /api/auth/sso/login
+static void handle_sso_login(backend::wsworker *worker,
+                             const std::map<std::string, std::string> &header,
+                             const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    std::string domain;
+    std::string qs = get_header(header, "QUERY_STRING");
+    if (!qs.empty()) {
+        auto args = worker->parse_args(qs);
+        domain = args["domain"];
+    }
+    if (domain.empty() && !worker->body().empty()) {
+        auto body = json::json_value::parse(worker->body());
+        if (body) domain = body.get_string("domain");
+    }
+
+    std::string host = get_header(header, "HTTP_HOST");
+    if (host.empty()) host = "localhost:8080";
+    std::string base_url = "http://" + host;
+
+    auto res = enterprise_sec::initiate_sso_login(conn, domain, base_url);
+    send_json(worker, header, "200 OK", res);
+}
+
+// POST /api/auth/sso/callback
+static void handle_sso_callback(backend::wsworker *worker,
+                                const std::map<std::string, std::string> &header,
+                                const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    std::string raw_body = worker->body();
+    std::string payload_to_parse = raw_body;
+
+    std::string ct = get_header(header, "CONTENT_TYPE");
+    if (ct.find("application/x-www-form-urlencoded") != std::string::npos) {
+        auto args = worker->parse_args(raw_body);
+        if (!args["SAMLResponse"].empty()) {
+            payload_to_parse = args["SAMLResponse"];
+        } else if (!args["claims"].empty()) {
+            payload_to_parse = args["claims"];
+        }
+    }
+
+    auto claims = enterprise_sec::parse_sso_payload(payload_to_parse);
+    int user_id = 0;
+    std::string session_token, err_msg;
+    if (!enterprise_sec::process_sso_callback(conn, claims, user_id, session_token, err_msg)) {
+        send_error(worker, header, "400 Bad Request", err_msg.empty() ? "SSO authentication failed" : err_msg.c_str());
+        return;
+    }
+
+    auth_user u;
+    auto u_stmt = conn.prepare("SELECT id, username, email, display_name, role, avatar_color FROM users WHERE id = ?;");
+    u_stmt.bind_int(1, user_id);
+    if (u_stmt.step() == SQLITE_ROW) {
+        u.id = u_stmt.column_int(0);
+        u.username = u_stmt.column_str(1);
+        u.email = u_stmt.column_str(2);
+        u.display_name = u_stmt.column_str(3);
+        u.role = u_stmt.column_str(4);
+        u.avatar_color = u_stmt.column_str(5);
+        u.authenticated = true;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_str("token", session_token);
+    res.add("user", user_to_json(u));
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET /api/auth/2fa/status
+static void handle_2fa_status(backend::wsworker *worker,
+                              const std::map<std::string, std::string> &header,
+                              const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto res = enterprise_sec::get_2fa_status(conn, u_auth.id);
+    send_json(worker, header, "200 OK", res);
+}
+
+// POST /api/auth/2fa/setup
+static void handle_2fa_setup(backend::wsworker *worker,
+                             const std::map<std::string, std::string> &header,
+                             const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto setup = enterprise_sec::initiate_2fa_setup(conn, u_auth.id, u_auth.username, "JiraLike");
+
+    auto res = json::json_value::make_object();
+    res.add_str("secret", setup.secret);
+    res.add_str("otpauth_url", setup.otpauth_url);
+    res.add_str("qr_svg", setup.qr_svg);
+
+    auto rec_arr = json::json_value::make_array();
+    for (const auto &rc : setup.recovery_codes) {
+        rec_arr.add_string(rc);
+    }
+    res.add("recovery_codes", std::move(rec_arr));
+    send_json(worker, header, "200 OK", res);
+}
+
+// POST /api/auth/2fa/verify
+static void handle_2fa_verify(backend::wsworker *worker,
+                              const std::map<std::string, std::string> &header,
+                              const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string mfa_token = body.get_string("mfa_token");
+    std::string code = body.get_string("code");
+    if (code.empty()) code = body.get_string("totp_code");
+
+    if (code.empty()) {
+        send_error(worker, header, "400 Bad Request", "Verification code is required");
+        return;
+    }
+
+    // 1. Two-step login challenge completion
+    if (!mfa_token.empty()) {
+        int user_id = 0;
+        std::string session_token, err_msg;
+        if (!enterprise_sec::verify_mfa_login(conn, mfa_token, code, user_id, session_token, err_msg)) {
+            send_error(worker, header, "401 Unauthorized", err_msg.empty() ? "Invalid verification code" : err_msg.c_str());
+            return;
+        }
+
+        auth_user u;
+        auto u_stmt = conn.prepare("SELECT id, username, email, display_name, role, avatar_color FROM users WHERE id = ?;");
+        u_stmt.bind_int(1, user_id);
+        if (u_stmt.step() == SQLITE_ROW) {
+            u.id = u_stmt.column_int(0);
+            u.username = u_stmt.column_str(1);
+            u.email = u_stmt.column_str(2);
+            u.display_name = u_stmt.column_str(3);
+            u.role = u_stmt.column_str(4);
+            u.avatar_color = u_stmt.column_str(5);
+            u.authenticated = true;
+        }
+
+        auto res = json::json_value::make_object();
+        res.add_str("token", session_token);
+        res.add("user", user_to_json(u));
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    // 2. Setup verification for authenticated user
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    if (!enterprise_sec::verify_and_enable_2fa(conn, u_auth.id, code)) {
+        send_error(worker, header, "400 Bad Request", "Invalid 6-digit verification code");
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_bool("success", true);
+    res.add_str("message", "Two-factor authentication successfully enabled");
+    send_json(worker, header, "200 OK", res);
+}
+
+// POST /api/auth/2fa/recovery
+static void handle_2fa_recovery(backend::wsworker *worker,
+                                const std::map<std::string, std::string> &header,
+                                const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string mfa_token = body.get_string("mfa_token");
+    std::string recovery_code = body.get_string("recovery_code");
+    if (recovery_code.empty()) recovery_code = body.get_string("code");
+
+    if (recovery_code.empty()) {
+        send_error(worker, header, "400 Bad Request", "Recovery code is required");
+        return;
+    }
+
+    int user_id = 0;
+    if (mfa_token.empty()) {
+        auto u_auth = get_authenticated_user(conn, worker, header);
+        if (u_auth.authenticated) user_id = u_auth.id;
+    }
+
+    std::string session_token, err_msg;
+    int remaining = 0;
+    if (!enterprise_sec::verify_mfa_recovery_login(conn, mfa_token, user_id, recovery_code, user_id, session_token, remaining, err_msg)) {
+        send_error(worker, header, "401 Unauthorized", err_msg.empty() ? "Invalid recovery code" : err_msg.c_str());
+        return;
+    }
+
+    auth_user u;
+    auto u_stmt = conn.prepare("SELECT id, username, email, display_name, role, avatar_color FROM users WHERE id = ?;");
+    u_stmt.bind_int(1, user_id);
+    if (u_stmt.step() == SQLITE_ROW) {
+        u.id = u_stmt.column_int(0);
+        u.username = u_stmt.column_str(1);
+        u.email = u_stmt.column_str(2);
+        u.display_name = u_stmt.column_str(3);
+        u.role = u_stmt.column_str(4);
+        u.avatar_color = u_stmt.column_str(5);
+        u.authenticated = true;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_bool("success", true);
+    res.add_str("token", session_token);
+    res.add("user", user_to_json(u));
+    res.add_int("remaining_recovery_codes", remaining);
+    send_json(worker, header, "200 OK", res);
+}
+
+// POST /api/auth/2fa/disable
+static void handle_2fa_disable(backend::wsworker *worker,
+                               const std::map<std::string, std::string> &header,
+                               const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    enterprise_sec::disable_2fa(conn, u_auth.id);
+    auto res = json::json_value::make_object();
+    res.add_bool("success", true);
+    res.add_str("message", "Two-factor authentication has been disabled");
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET & POST /api/mail/handlers
+static void handle_mail_handlers(backend::wsworker *worker,
+                                 const std::map<std::string, std::string> &header,
+                                 const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto handlers = enterprise_sec::list_mail_handlers(conn);
+        auto arr = json::json_value::make_array();
+        for (const auto &h : handlers) {
+            arr.add(enterprise_sec::mail_handler_to_json(h));
+        }
+        send_json(worker, header, "200 OK", arr);
+        return;
+    }
+
+    if (method == "POST") {
+        auto u_auth = get_authenticated_user(conn, worker, header);
+        if (!u_auth.authenticated || u_auth.role != "Admin") {
+            send_error(worker, header, "403 Forbidden", "Admin privileges required to create mail handlers");
+            return;
+        }
+
+        auto body = json::json_value::parse(worker->body());
+        if (!body) {
+            send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+            return;
+        }
+
+        enterprise_sec::inbound_mail_handler h;
+        h.name = body.get_string("name");
+        h.incoming_address = body.get_string("incoming_address");
+        h.target_project_id = body.get_int("target_project_id", 1);
+        h.issue_type_id = body.get_int("issue_type_id", 0);
+        h.default_reporter_id = body.get_int("default_reporter_id", u_auth.id);
+        h.handler_type = body.get_string("handler_type", "CREATE_OR_COMMENT");
+        h.spam_keywords = body.get_string("spam_keywords", "out of office,auto-reply,unsubscribe,mailer-daemon,delivery status notification");
+        h.is_active = body.get_bool("is_active", true);
+
+        if (h.name.empty() || h.incoming_address.empty()) {
+            send_error(worker, header, "400 Bad Request", "name and incoming_address are required");
+            return;
+        }
+
+        int new_id = enterprise_sec::create_mail_handler(conn, h);
+        h.id = new_id;
+        send_json(worker, header, "201 Created", enterprise_sec::mail_handler_to_json(h));
+        return;
+    }
+
+    send_error(worker, header, "405 Method Not Allowed", "Method not allowed");
+}
+
+// PUT & DELETE /api/mail/handlers/([0-9]+)
+static void handle_mail_handler_detail(backend::wsworker *worker,
+                                       const std::map<std::string, std::string> &header,
+                                       const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing handler ID");
+        return;
+    }
+    int handler_id = std::atoi(uri_params.front().c_str());
+    if (handler_id <= 0) {
+        send_error(worker, header, "400 Bad Request", "Invalid handler ID");
+        return;
+    }
+
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || u_auth.role != "Admin") {
+        send_error(worker, header, "403 Forbidden", "Admin privileges required to manage mail handlers");
+        return;
+    }
+
+    std::string method = get_header(header, "REQUEST_METHOD");
+    if (method == "DELETE") {
+        enterprise_sec::delete_mail_handler(conn, handler_id);
+        auto res = json::json_value::make_object();
+        res.add_bool("success", true);
+        res.add_int("deleted_id", handler_id);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    if (method == "PUT") {
+        auto body = json::json_value::parse(worker->body());
+        if (!body) {
+            send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+            return;
+        }
+
+        enterprise_sec::inbound_mail_handler h;
+        h.id = handler_id;
+        h.name = body.get_string("name");
+        h.incoming_address = body.get_string("incoming_address");
+        h.target_project_id = body.get_int("target_project_id", 1);
+        h.issue_type_id = body.get_int("issue_type_id", 0);
+        h.default_reporter_id = body.get_int("default_reporter_id", u_auth.id);
+        h.handler_type = body.get_string("handler_type", "CREATE_OR_COMMENT");
+        h.spam_keywords = body.get_string("spam_keywords", "out of office,auto-reply,unsubscribe,mailer-daemon,delivery status notification");
+        h.is_active = body.get_bool("is_active", true);
+
+        enterprise_sec::update_mail_handler(conn, h);
+        send_json(worker, header, "200 OK", enterprise_sec::mail_handler_to_json(h));
+        return;
+    }
+
+    send_error(worker, header, "405 Method Not Allowed", "Method not allowed");
+}
+
+// GET /api/mail/logs
+static void handle_mail_logs(backend::wsworker *worker,
+                             const std::map<std::string, std::string> &header,
+                             const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    int limit = 50;
+    std::string qs = get_header(header, "QUERY_STRING");
+    if (!qs.empty()) {
+        auto args = worker->parse_args(qs);
+        if (!args["limit"].empty()) limit = std::atoi(args["limit"].c_str());
+    }
+
+    auto logs = enterprise_sec::list_mail_logs(conn, limit);
+    send_json(worker, header, "200 OK", logs);
+}
+
+// POST /api/mail/inbound
+static void handle_mail_inbound(backend::wsworker *worker,
+                                const std::map<std::string, std::string> &header,
+                                const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    std::string content_type = get_header(header, "CONTENT_TYPE");
+    std::string raw_body = worker->body();
+
+    enterprise_sec::parsed_email em;
+
+    // Check if JSON body
+    if (content_type.find("application/json") != std::string::npos || (!raw_body.empty() && raw_body.front() == '{')) {
+        auto json_val = json::json_value::parse(raw_body);
+        if (json_val) {
+            em.from = json_val.get_string("from");
+            em.to = json_val.get_string("to");
+            em.subject = json_val.get_string("subject");
+            em.body_plain = json_val.get_string("body_plain");
+            if (em.body_plain.empty()) em.body_plain = json_val.get_string("text");
+            if (em.body_plain.empty()) em.body_plain = json_val.get_string("body");
+            em.body_html = json_val.get_string("body_html");
+            if (em.body_html.empty()) em.body_html = json_val.get_string("html");
+
+            auto atts = json_val.get_array("attachments");
+            if (atts && atts.is_array()) {
+                size_t sz = atts.array_length();
+                for (size_t i = 0; i < sz; ++i) {
+                    auto item = atts.array_get(i);
+                    enterprise_sec::email_attachment ea;
+                    ea.filename = item.get_string("filename", "attachment.bin");
+                    ea.mime_type = item.get_string("mime_type", "application/octet-stream");
+                    std::string b64 = item.get_string("content_base64");
+                    if (b64.empty()) b64 = item.get_string("data");
+                    if (!b64.empty()) {
+                        ea.content_bytes = utils::base64_decode(b64);
+                    } else {
+                        ea.content_bytes = item.get_string("content");
+                    }
+                    em.attachments.push_back(std::move(ea));
+                }
+            }
+        }
+    } else {
+        // Parse raw MIME / RFC 822 email
+        em = enterprise_sec::parse_mime_email(raw_body);
+    }
+
+    json::json_value res(nullptr);
+    std::string err_msg;
+    if (!enterprise_sec::process_inbound_email(conn, g_blobs_dir, em, res, err_msg)) {
+        send_error(worker, header, "400 Bad Request", err_msg.c_str());
+        return;
+    }
+
+    // Fire real-time broadcast if comment added or issue created
+    std::string action = res.get_string("action");
+    int wid = res.get_int("work_item_id");
+    std::string wkey = res.get_string("work_item_key");
+    if (action == "comment_added") {
+        realtime::get_engine().publish("comment_added", res.to_string(), 0, "Email Processor", wid, wkey);
+    } else if (action == "issue_created") {
+        realtime::get_engine().publish("item_created", res.to_string(), 0, "Email Processor", wid, wkey);
+    }
+
     send_json(worker, header, "200 OK", res);
 }
 
@@ -18105,6 +18684,19 @@ int main(int argc, char *argv[]) {
         {"^/api/portfolio/capacity$",                   backend::GET,                   handle_portfolio_capacity   },
         {"^/api/portfolio/capacity/configs$",           backend::GET | backend::PUT | backend::POST, handle_portfolio_capacity_configs },
         {"^/api/portfolio/reschedule$",                 backend::PUT | backend::POST,   handle_portfolio_reschedule },
+        {"^/api/auth/sso/config$",                      backend::GET | backend::PUT | backend::POST, handle_sso_config },
+        {"^/api/auth/sso/metadata$",                    backend::GET,                   handle_sso_metadata         },
+        {"^/api/auth/sso/login$",                       backend::GET | backend::POST,   handle_sso_login            },
+        {"^/api/auth/sso/callback$",                    backend::POST,                  handle_sso_callback         },
+        {"^/api/auth/2fa/status$",                      backend::GET,                   handle_2fa_status           },
+        {"^/api/auth/2fa/setup$",                       backend::POST,                  handle_2fa_setup            },
+        {"^/api/auth/2fa/verify$",                      backend::POST,                  handle_2fa_verify           },
+        {"^/api/auth/2fa/recovery$",                    backend::POST,                  handle_2fa_recovery         },
+        {"^/api/auth/2fa/disable$",                     backend::POST,                  handle_2fa_disable          },
+        {"^/api/mail/handlers$",                        backend::GET | backend::POST,   handle_mail_handlers        },
+        {"^/api/mail/handlers/([0-9]+)$",               backend::PUT | backend::DELETE, handle_mail_handler_detail  },
+        {"^/api/mail/logs$",                            backend::GET,                   handle_mail_logs            },
+        {"^/api/mail/inbound$",                         backend::POST,                  handle_mail_inbound         },
     });
 
     server.init(socket_name.c_str(), backlog, worker_num);

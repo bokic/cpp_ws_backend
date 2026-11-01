@@ -1942,6 +1942,90 @@ export interface BulkOperationRequest {
   soft_delete?: boolean;
 }
 
+// ============================================================================
+// Step 19: Enterprise Security (SSO, 2FA/MFA) & Inbound Mail Models
+// ============================================================================
+
+export interface SsoConfig {
+  id: number;
+  is_enabled: boolean;
+  protocol: 'SAML2' | 'OIDC';
+  provider_name: string;
+  entity_id: string;
+  sso_url: string;
+  issuer: string;
+  client_id: string;
+  client_secret: string;
+  certificate: string;
+  email_domain: string;
+  auto_provision: boolean;
+  default_role: string;
+  updated_at?: string;
+}
+
+export interface SsoLoginResponse {
+  is_enabled: boolean;
+  protocol?: string;
+  provider_name?: string;
+  redirect_url?: string;
+  relay_state?: string;
+  error?: string;
+}
+
+export interface TwoFactorStatus {
+  is_enabled: boolean;
+  has_setup: boolean;
+  remaining_recovery_codes: number;
+}
+
+export interface TwoFactorSetup {
+  secret: string;
+  otpauth_url: string;
+  qr_svg: string;
+  recovery_codes: string[];
+}
+
+export interface TwoFactorVerifyResponse {
+  success?: boolean;
+  ok?: boolean;
+  message?: string;
+  token?: string;
+  user?: User;
+  remaining_recovery_codes?: number;
+}
+
+export interface InboundMailHandler {
+  id: number;
+  name: string;
+  incoming_address: string;
+  target_project_id: number;
+  target_project_key?: string;
+  issue_type_id: number;
+  issue_type_name?: string;
+  default_reporter_id: number;
+  default_reporter_name?: string;
+  handler_type: 'CREATE_OR_COMMENT' | 'COMMENT_ONLY' | 'CREATE_ONLY';
+  spam_keywords: string;
+  is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface InboundMailLog {
+  id: number;
+  handler_id: number;
+  handler_name?: string;
+  from_address: string;
+  to_address: string;
+  subject: string;
+  status: 'PROCESSED' | 'REJECTED_SPAM' | 'REJECTED_UNKNOWN' | 'REJECTED_NO_ISSUE' | 'ERROR';
+  work_item_id?: number | null;
+  work_item_key?: string;
+  comment_id?: number | null;
+  error_message?: string;
+  created_at: string;
+}
+
 
 
 

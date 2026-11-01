@@ -293,4 +293,245 @@ inline multipart_file parse_multipart_file(const std::string &content_type, cons
     return result;
 }
 
+// Standalone SHA-1 implementation (FIPS 180-1 / RFC 3174)
+inline std::array<uint8_t, 20> sha1_bytes(const uint8_t *data, size_t len) {
+    auto rol = [](uint32_t val, uint32_t bits) noexcept -> uint32_t {
+        return (val << bits) | (val >> (32 - bits));
+    };
+
+    uint32_t h0 = 0x67452301;
+    uint32_t h1 = 0xEFCDAB89;
+    uint32_t h2 = 0x98BADCFE;
+    uint32_t h3 = 0x10325476;
+    uint32_t h4 = 0xC3D2E1F0;
+
+    std::vector<uint8_t> msg(data, data + len);
+    uint64_t bit_len = static_cast<uint64_t>(len) * 8;
+    msg.push_back(0x80);
+    while ((msg.size() % 64) != 56) {
+        msg.push_back(0x00);
+    }
+    for (int i = 7; i >= 0; --i) {
+        msg.push_back(static_cast<uint8_t>((bit_len >> (i * 8)) & 0xFF));
+    }
+
+    for (size_t offset = 0; offset < msg.size(); offset += 64) {
+        uint32_t w[80];
+        for (int i = 0; i < 16; ++i) {
+            w[i] = (static_cast<uint32_t>(msg[offset + i * 4]) << 24) |
+                   (static_cast<uint32_t>(msg[offset + i * 4 + 1]) << 16) |
+                   (static_cast<uint32_t>(msg[offset + i * 4 + 2]) << 8) |
+                   (static_cast<uint32_t>(msg[offset + i * 4 + 3]));
+        }
+        for (int i = 16; i < 80; ++i) {
+            w[i] = rol(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
+        }
+
+        uint32_t a = h0, b = h1, c = h2, d = h3, e = h4;
+
+        for (int i = 0; i < 80; ++i) {
+            uint32_t f = 0, k = 0;
+            if (i <= 19) {
+                f = (b & c) | ((~b) & d);
+                k = 0x5A827999;
+            } else if (i <= 39) {
+                f = b ^ c ^ d;
+                k = 0x6ED9EBA1;
+            } else if (i <= 59) {
+                f = (b & c) | (b & d) | (c & d);
+                k = 0x8F1BBCDC;
+            } else {
+                f = b ^ c ^ d;
+                k = 0xCA62C1D6;
+            }
+
+            uint32_t temp = rol(a, 5) + f + e + k + w[i];
+            e = d;
+            d = c;
+            c = rol(b, 30);
+            b = a;
+            a = temp;
+        }
+
+        h0 += a;
+        h1 += b;
+        h2 += c;
+        h3 += d;
+        h4 += e;
+    }
+
+    std::array<uint8_t, 20> out{};
+    uint32_t hs[5] = { h0, h1, h2, h3, h4 };
+    for (int i = 0; i < 5; ++i) {
+        out[i * 4 + 0] = static_cast<uint8_t>((hs[i] >> 24) & 0xFF);
+        out[i * 4 + 1] = static_cast<uint8_t>((hs[i] >> 16) & 0xFF);
+        out[i * 4 + 2] = static_cast<uint8_t>((hs[i] >> 8) & 0xFF);
+        out[i * 4 + 3] = static_cast<uint8_t>(hs[i] & 0xFF);
+    }
+    return out;
+}
+
+// HMAC-SHA1 implementation (RFC 2104)
+inline std::array<uint8_t, 20> hmac_sha1_bytes(const uint8_t *key_data, size_t key_len,
+                                               const uint8_t *msg_data, size_t msg_len) {
+    std::array<uint8_t, 64> k_pad{};
+    if (key_len > 64) {
+        auto kh = sha1_bytes(key_data, key_len);
+        std::memcpy(k_pad.data(), kh.data(), 20);
+    } else {
+        std::memcpy(k_pad.data(), key_data, key_len);
+    }
+
+    std::vector<uint8_t> inner(64 + msg_len);
+    for (size_t i = 0; i < 64; ++i) {
+        inner[i] = k_pad[i] ^ 0x36;
+    }
+    std::memcpy(inner.data() + 64, msg_data, msg_len);
+    auto inner_digest = sha1_bytes(inner.data(), inner.size());
+
+    std::array<uint8_t, 64 + 20> outer{};
+    for (size_t i = 0; i < 64; ++i) {
+        outer[i] = k_pad[i] ^ 0x5c;
+    }
+    std::memcpy(outer.data() + 64, inner_digest.data(), 20);
+    return sha1_bytes(outer.data(), outer.size());
+}
+
+// Base32 RFC 4648 encoding
+inline std::string base32_encode(const uint8_t *data, size_t len, bool pad = false) {
+    static const char *b32_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    std::string out;
+    out.reserve(((len + 4) / 5) * 8);
+
+    size_t i = 0;
+    while (i < len) {
+        uint64_t buffer = 0;
+        int count = 0;
+        for (int j = 0; j < 5; ++j) {
+            buffer <<= 8;
+            if (i < len) {
+                buffer |= data[i++];
+                count++;
+            }
+        }
+
+        int bits = count * 8;
+        int out_chars = (bits + 4) / 5;
+        for (int j = 0; j < 8; ++j) {
+            if (j < out_chars) {
+                int shift = 40 - (j + 1) * 5;
+                out.push_back(b32_chars[(buffer >> shift) & 0x1F]);
+            } else if (pad) {
+                out.push_back('=');
+            }
+        }
+    }
+    return out;
+}
+
+// Base32 RFC 4648 decoding
+inline std::vector<uint8_t> base32_decode(const std::string &in) {
+    std::vector<uint8_t> out;
+    uint32_t buffer = 0;
+    int bits_left = 0;
+
+    for (char c : in) {
+        if (c == ' ' || c == '-' || c == '=') continue;
+        int val = -1;
+        if (c >= 'A' && c <= 'Z') val = c - 'A';
+        else if (c >= 'a' && c <= 'z') val = c - 'a';
+        else if (c >= '2' && c <= '7') val = c - '2' + 26;
+        if (val < 0) continue;
+
+        buffer = (buffer << 5) | static_cast<uint32_t>(val);
+        bits_left += 5;
+        if (bits_left >= 8) {
+            bits_left -= 8;
+            out.push_back(static_cast<uint8_t>((buffer >> bits_left) & 0xFF));
+        }
+    }
+    return out;
+}
+
+// Generate RFC 6238 TOTP secret (default 20 bytes = 160 bits Base32 string)
+inline std::string generate_totp_secret(size_t num_bytes = 20) {
+    static thread_local std::random_device rd;
+    static thread_local std::mt19937_64 gen(rd());
+    std::uniform_int_distribution<uint32_t> dist(0, 255);
+
+    std::vector<uint8_t> bytes(num_bytes);
+    for (size_t i = 0; i < num_bytes; ++i) {
+        bytes[i] = static_cast<uint8_t>(dist(gen));
+    }
+    return base32_encode(bytes.data(), bytes.size(), false);
+}
+
+// Compute 6-digit TOTP code for timestamp (RFC 6238)
+inline std::string compute_totp(const std::string &base32_secret, uint64_t timestamp, int period = 30, int digits = 6) {
+    auto key_bytes = base32_decode(base32_secret);
+    if (key_bytes.empty()) return "000000";
+
+    uint64_t counter = timestamp / static_cast<uint64_t>(period);
+    uint8_t msg[8];
+    for (int i = 7; i >= 0; --i) {
+        msg[i] = static_cast<uint8_t>(counter & 0xFF);
+        counter >>= 8;
+    }
+
+    auto hash = hmac_sha1_bytes(key_bytes.data(), key_bytes.size(), msg, 8);
+    size_t offset = hash[19] & 0x0F;
+    uint32_t binary = ((static_cast<uint32_t>(hash[offset] & 0x7F)) << 24) |
+                      ((static_cast<uint32_t>(hash[offset + 1] & 0xFF)) << 16) |
+                      ((static_cast<uint32_t>(hash[offset + 2] & 0xFF)) << 8) |
+                      (static_cast<uint32_t>(hash[offset + 3] & 0xFF));
+
+    uint32_t mod = 1;
+    for (int i = 0; i < digits; ++i) mod *= 10;
+    uint32_t otp = binary % mod;
+
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%0*u", digits, otp);
+    return std::string(buf);
+}
+
+// Verify TOTP code with clock drift window (+/- window periods)
+inline bool verify_totp(const std::string &base32_secret, const std::string &input_code,
+                        uint64_t timestamp, int window = 1, int period = 30) {
+    if (input_code.empty()) return false;
+    std::string clean_code;
+    for (char c : input_code) {
+        if (std::isdigit(static_cast<unsigned char>(c))) clean_code.push_back(c);
+    }
+    if (clean_code.size() != 6) return false;
+
+    for (int step = -window; step <= window; ++step) {
+        int64_t adj_time = static_cast<int64_t>(timestamp) + (step * period);
+        if (adj_time < 0) continue;
+        if (compute_totp(base32_secret, static_cast<uint64_t>(adj_time), period) == clean_code) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Generate 10 one-time emergency backup recovery codes
+inline std::vector<std::string> generate_recovery_codes(size_t count = 10) {
+    static const char *chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    static thread_local std::random_device rd;
+    static thread_local std::mt19937_64 gen(rd());
+    std::uniform_int_distribution<size_t> dist(0, 31);
+
+    std::vector<std::string> codes;
+    codes.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        std::string c;
+        for (int j = 0; j < 8; ++j) {
+            if (j == 4) c.push_back('-');
+            c.push_back(chars[dist(gen)]);
+        }
+        codes.push_back(c);
+    }
+    return codes;
+}
+
 } // namespace utils

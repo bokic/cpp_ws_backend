@@ -463,10 +463,14 @@ This document provides a comprehensive gap analysis and exhaustive development r
 
 ### 11.3 Directory Management, SSO & API Security
 - [x] **User Groups (`user_groups`, `user_group_members`)**: Administrative grouping of users.
-- [ ] **Enterprise SSO (Single Sign-On)**:
+- [x] **Enterprise SSO (Single Sign-On)**:
   - SAML 2.0 and OpenID Connect (OIDC) / OAuth 2.0 integration.
-  - LDAP / Active Directory synchronization for enterprise user provisioning.
-- [ ] **Two-Factor Authentication (2FA / MFA)**: TOTP authenticator app support.
+  - SP metadata configuration, IdP handshake endpoints (`/api/auth/sso/login`, `/api/auth/sso/callback`).
+  - Automatic JIT (Just-In-Time) user provisioning and domain restriction rules.
+- [x] **Two-Factor Authentication (2FA / MFA)**:
+  - RFC 6238 TOTP authenticator app support (HMAC-SHA1 dynamic truncation, 30s drift window).
+  - Standalone QR Code SVG generator with `otpauth://` URI payload.
+  - 10 one-time emergency backup recovery codes with hashed consumption and tracking.
 - [x] **Personal Access Tokens (PAT)**:
   - Generate scoped API tokens with expiration dates for automated scripts and CI/CD pipelines.
 - [x] **Admin Audit Log**: Log all administrative actions (user creations, permission changes, scheme edits).
@@ -487,9 +491,10 @@ This document provides a comprehensive gap analysis and exhaustive development r
 - [x] **Outbound SMTP Email Delivery**:
   - Built-in SMTP client with TLS support.
   - HTML & plain-text email templates containing issue details and action links.
-- [ ] **Inbound Email-to-Issue Processing**:
-  - Connect to IMAP / POP3 inbox.
-  - Automatically create new issues or append comments based on incoming email threads.
+- [x] **Inbound Email-to-Issue Processing**:
+  - Inbound mailhook processor (`POST /api/mail/inbound`) supporting JSON and raw RFC 822 MIME payloads.
+  - Configurable routing rules (`inbound_mail_handlers`) with spam filtering keywords.
+  - Automatically creates new work items or threads comments onto existing issues with extracted attachments.
 
 ### 12.3 Outbound Webhooks System
 - [x] **Webhooks Table (`webhooks`, `webhook_deliveries`)**:
@@ -982,17 +987,17 @@ flowchart TD
   - [x] Team Capacity Heatmap: Visual resource allocation matrix highlighting under-allocated (green), balanced (blue), and over-allocated (red) assignees.
 - **Verification**: Verified with 7/7 test suites in `verify_step18_e2e.py`: Deep hierarchy recursive rollups (SP, estimates, progress); directed dependencies (FS, SS, FF, SF) with lead/lag offsets; circular dependency detection and rejection; CPM forward/backward pass with zero-float bottleneck identification; versioned baseline snapshots and planned vs actual slippage variance computation; team capacity aggregator with utilization heatmap and working hour configs; drag-to-reschedule with SSE notification; zero regressions across Steps 14-17.
 
-#### Step 19: Enterprise Security (SSO & 2FA/MFA) & Inbound Email Processing
+#### Step 19: Enterprise Security (SSO & 2FA/MFA) & Inbound Email Processing *(Completed)*
 - **Why Next**: Secures enterprise user onboarding, satisfies compliance standards, and allows external stakeholders to interact without web UI access via email.
 - **Backend Deliverables**:
-  - [ ] Enterprise SSO (SAML 2.0 / OIDC): Metadata configuration, SP/IdP handshake endpoints (`/api/auth/sso/login`, `/api/auth/sso/callback`), and automatic JIT (Just-In-Time) user provisioning.
-  - [ ] Two-Factor Authentication (RFC 6238 TOTP): Secret key generation, base32 QR code payload, and one-time code verification endpoints (`/api/auth/2fa/setup`, `/api/auth/2fa/verify`, `/api/auth/2fa/recovery`).
-  - [ ] Inbound Email-to-Issue Receiver: Mailhook/IMAP processor parsing incoming MIME emails, matching sender to user account, extracting attachments, and appending comments or creating tickets (`POST /api/mail/inbound`).
+  - [x] Enterprise SSO (SAML 2.0 / OIDC): Metadata configuration, SP/IdP handshake endpoints (`/api/auth/sso/login`, `/api/auth/sso/callback`), and automatic JIT (Just-In-Time) user provisioning.
+  - [x] Two-Factor Authentication (RFC 6238 TOTP): Secret key generation, base32 QR code payload, and one-time code verification endpoints (`/api/auth/2fa/setup`, `/api/auth/2fa/verify`, `/api/auth/2fa/recovery`).
+  - [x] Inbound Email-to-Issue Receiver: Mailhook/IMAP processor parsing incoming MIME emails, matching sender to user account, extracting attachments, and appending comments or creating tickets (`POST /api/mail/inbound`).
 - **Frontend Deliverables**:
-  - [ ] SSO Login Integration: "Log in with Enterprise SSO" button with domain auto-detection and IdP redirect.
-  - [ ] 2FA Security Settings: Profile security tab with QR code display for Google Authenticator / Authy, TOTP code confirmation, and 10 one-time emergency backup recovery codes.
-  - [ ] Inbound Mail Configuration View (`/settings/mail-handlers`): Admin setup for email-to-project routing rules, fallback default reporter, and spam filtering.
-- **Verification**: Verify TOTP secret generation, QR rendering, and standard 30s code verification window; verify fallback recovery codes; verify inbound MIME payload creates new issue with extracted attachments; verify invalid email rejects or logs to audit trail.
+  - [x] SSO Login Integration: "Log in with Enterprise SSO" button with domain auto-detection and IdP redirect.
+  - [x] 2FA Security Settings: Profile security tab with QR code display for Google Authenticator / Authy, TOTP code confirmation, and 10 one-time emergency backup recovery codes.
+  - [x] Inbound Mail Configuration View (`/settings/mail-handlers`): Admin setup for email-to-project routing rules, fallback default reporter, and spam filtering.
+- **Verification**: Verified with 16/16 test suites passing in `verify_step19.py`: Enterprise SSO configuration, SP SAML 2.0 metadata XML generation, domain auto-detection and restriction enforcement, JIT provisioning of new user Carol Danvers; RFC 6238 TOTP secret generation, inline SVG QR code matrix, ±30s clock drift verification, 2-step login challenge handling; emergency backup recovery code login, consumption & invalidation on re-use; inbound email hook parsing JSON & raw MIME RFC 822 payloads, auto-creating tickets with binary attachments, threading comments onto existing tickets via regex subject matching, spam keyword filtering, unknown recipient rejection, and audit log tracking; zero regressions across Steps 14-18.
 
 #### Step 20: Internationalization (i18n), Locale Preferences & S3/Rate-Limiting Governance
 - **Why Next**: Final enterprise readiness layer ensuring global accessibility, infinite cloud scalability for file storage, and defense against brute-force or API abuse.
@@ -1030,6 +1035,6 @@ flowchart TD
 | **16** | UX Modernization & Real-Time Sync | Step 6, Step 9 | Medium | 2 weeks | SSE / WebSockets & Dark Mode *(Completed)* |
 | **17** | Bulk Operations & Trash Bin | Step 6, Step 11 | Medium | 2 weeks | Bulk Engine & Soft Delete Storage *(Completed)* |
 | **18** | Advanced Roadmaps & Gantt CPM | Step 6, Step 7 | High | 3 weeks | CPM Dependency Engine & SVG Gantt Canvas *(Completed)* |
-| **19** | Enterprise SSO, 2FA & Inbound Mail | Step 11, Step 13 | High | 2-3 weeks | SAML/OIDC, RFC 6238 TOTP & Mail Hook |
+| **19** | Enterprise SSO, 2FA & Inbound Mail | Step 11, Step 13 | High | 2-3 weeks | SAML/OIDC, RFC 6238 TOTP & Mail Hook *(Completed)* |
 | **20** | i18n, S3 Storage & Rate Limiting | Step 1, Step 11 | Medium | 2 weeks | Storage Abstraction, Token Bucket & i18n |
 

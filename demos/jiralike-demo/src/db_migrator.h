@@ -11,7 +11,7 @@
 
 namespace db {
 
-static constexpr int LATEST_SCHEMA_VERSION = 22;
+static constexpr int LATEST_SCHEMA_VERSION = 23;
 
 struct migration_step {
     int version;
@@ -2278,6 +2278,89 @@ CREATE INDEX IF NOT EXISTS idx_user_capacities_user ON user_capacities(user_id);
 
 INSERT OR IGNORE INTO user_capacities (user_id, project_id, weekly_capacity_hours)
 SELECT id, NULL, 40.0 FROM users;
+)SQL"
+        },
+        {
+            23,
+            "db/migrations/023_enterprise_security_and_mail.sql",
+            "Enterprise SSO (SAML/OIDC), RFC 6238 TOTP 2FA, and Inbound Mail Processing",
+            R"SQL(
+CREATE TABLE IF NOT EXISTS sso_configurations (
+    id                    INTEGER PRIMARY KEY CHECK (id = 1),
+    is_enabled            INTEGER NOT NULL DEFAULT 0,
+    protocol              TEXT NOT NULL DEFAULT 'SAML2',
+    provider_name         TEXT NOT NULL DEFAULT 'Enterprise IdP',
+    entity_id             TEXT NOT NULL DEFAULT 'urn:jiralike:sp',
+    sso_url               TEXT NOT NULL DEFAULT 'https://idp.example.com/sso/login',
+    issuer                TEXT NOT NULL DEFAULT 'https://idp.example.com',
+    client_id             TEXT NOT NULL DEFAULT 'jiralike-enterprise-client',
+    client_secret         TEXT NOT NULL DEFAULT '',
+    certificate           TEXT NOT NULL DEFAULT '',
+    email_domain          TEXT NOT NULL DEFAULT 'company.com',
+    auto_provision        INTEGER NOT NULL DEFAULT 1,
+    default_role          TEXT NOT NULL DEFAULT 'Developer',
+    created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at            TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+INSERT OR IGNORE INTO sso_configurations (id, is_enabled, protocol, provider_name, entity_id, sso_url, issuer, client_id, email_domain, auto_provision, default_role)
+VALUES (1, 0, 'SAML2', 'Corporate Okta / Azure AD', 'urn:jiralike:sp', 'https://idp.example.com/sso/login', 'https://idp.example.com', 'jiralike-enterprise-client', 'example.com', 1, 'Developer');
+
+CREATE TABLE IF NOT EXISTS user_2fa (
+    user_id         INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    secret          TEXT NOT NULL,
+    is_enabled      INTEGER NOT NULL DEFAULT 0,
+    recovery_codes  TEXT NOT NULL DEFAULT '[]',
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_2fa_status ON user_2fa(user_id, is_enabled);
+
+CREATE TABLE IF NOT EXISTS mfa_pending_logins (
+    token           TEXT PRIMARY KEY,
+    user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at      TEXT NOT NULL,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_mfa_pending_user ON mfa_pending_logins(user_id);
+
+CREATE TABLE IF NOT EXISTS inbound_mail_handlers (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    name                  TEXT NOT NULL,
+    incoming_address      TEXT NOT NULL UNIQUE,
+    target_project_id     INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    issue_type_id         INTEGER REFERENCES issue_types(id) ON DELETE SET NULL,
+    default_reporter_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    handler_type          TEXT NOT NULL DEFAULT 'CREATE_OR_COMMENT',
+    spam_keywords         TEXT NOT NULL DEFAULT 'out of office,auto-reply,unsubscribe,mailer-daemon,delivery status notification',
+    is_active             INTEGER NOT NULL DEFAULT 1,
+    created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at            TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_inbound_mail_addr ON inbound_mail_handlers(incoming_address);
+
+CREATE TABLE IF NOT EXISTS inbound_mail_logs (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    handler_id           INTEGER REFERENCES inbound_mail_handlers(id) ON DELETE SET NULL,
+    from_address          TEXT NOT NULL,
+    to_address            TEXT NOT NULL,
+    subject               TEXT NOT NULL,
+    status                TEXT NOT NULL,
+    work_item_id          INTEGER REFERENCES work_items(id) ON DELETE SET NULL,
+    comment_id            INTEGER REFERENCES comments(id) ON DELETE SET NULL,
+    error_message         TEXT DEFAULT '',
+    created_at            TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_inbound_mail_logs_status ON inbound_mail_logs(status);
+CREATE INDEX IF NOT EXISTS idx_inbound_mail_logs_created ON inbound_mail_logs(created_at DESC);
+
+INSERT OR IGNORE INTO inbound_mail_handlers (name, incoming_address, target_project_id, default_reporter_id, handler_type)
+SELECT 'Default Project Mailhook', 'support@example.com', id, (SELECT id FROM users ORDER BY id ASC LIMIT 1), 'CREATE_OR_COMMENT'
+FROM projects ORDER BY id ASC LIMIT 1;
 )SQL"
         }
     };

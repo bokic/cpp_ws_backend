@@ -22,6 +22,7 @@
           <a routerLink="/permissions" routerLinkActive="active">Permissions &amp; Security</a>
           <a routerLink="/automation" routerLinkActive="active">Automation</a>
           <a routerLink="/notifications" routerLinkActive="active">Webhooks &amp; Notifications</a>
+          <a routerLink="/settings/mail-handlers" routerLinkActive="active" title="Inbound Email-to-Issue Handlers &amp; Mailhooks">Mail Handlers</a>
           <a routerLink="/servicedesk/agent" routerLinkActive="active">Service Desk</a>
           <a routerLink="/servicedesk" routerLinkActive="active" target="_blank" title="Customer Help Center Portal">Customer Portal ↗</a>
           <a routerLink="/trash" routerLinkActive="active" title="Trash Bin (30-day retention)">Trash Bin</a>
@@ -252,13 +253,13 @@
           }
         </div>
 
-        <div class="user-pill">
+        <a routerLink="/settings/security" class="user-pill" style="text-decoration: none; cursor: pointer;" title="Security, 2FA &amp; SSO Settings">
           <span class="avatar-sm" [style.background]="user.avatar_color">
             {{ user.display_name.slice(0, 2).toUpperCase() }}
           </span>
           <span class="user-name">{{ user.display_name }}</span>
           <span class="user-role">({{ user.role }})</span>
-        </div>
+        </a>
         <button type="button" class="btn btn-ghost btn-sm" (click)="signOut()">Logout</button>
       </div>
     </header>
