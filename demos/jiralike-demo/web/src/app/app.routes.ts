@@ -19,12 +19,15 @@ import { NotificationsAdminComponent } from './pages/notifications-admin/notific
 import { ServiceDeskPortalComponent } from './pages/servicedesk-portal/servicedesk-portal.component';
 import { ServiceDeskAgentComponent } from './pages/servicedesk-agent/servicedesk-agent.component';
 import { TrashComponent } from './pages/trash/trash.component';
+import { RoadmapAdvancedComponent } from './pages/roadmap-advanced/roadmap-advanced.component';
 
 export const routes: Routes = [
   { path: '', pathMatch: 'full', redirectTo: 'dashboards' },
   { path: 'setup', component: SetupComponent },
   { path: 'login', component: LoginComponent },
   { path: 'dashboards', component: DashboardsComponent },
+  { path: 'roadmap/advanced', component: RoadmapAdvancedComponent },
+  { path: 'roadmap', component: RoadmapAdvancedComponent },
   { path: 'servicedesk', component: ServiceDeskPortalComponent },
   { path: 'servicedesk/request/:key', component: ServiceDeskPortalComponent },
   { path: 'servicedesk/agent', component: ServiceDeskAgentComponent },

@@ -19,6 +19,7 @@
 #include "src/itsm_engine.h"
 #include "src/realtime_engine.h"
 #include "src/bulk_and_trash_engine.h"
+#include "src/portfolio_roadmap_engine.h"
 
 #include <algorithm>
 #include <atomic>
@@ -9127,6 +9128,323 @@ static void handle_trash_detail(backend::wsworker *worker,
     send_error(worker, header, "405 Method Not Allowed", "Method not allowed");
 }
 
+// GET /api/portfolio/rollups
+static void handle_portfolio_rollups(backend::wsworker *worker,
+                                     const std::map<std::string, std::string> &header,
+                                     const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+    int project_id = 0;
+    auto it = args.find("project_id");
+    if (it != args.end()) {
+        project_id = std::atoi(it->second.c_str());
+    }
+    auto res = portfolio::compute_portfolio_rollups(conn, project_id);
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET /api/portfolio/critical-path
+static void handle_portfolio_critical_path(backend::wsworker *worker,
+                                           const std::map<std::string, std::string> &header,
+                                           const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+    int project_id = 0;
+    auto it = args.find("project_id");
+    if (it != args.end()) {
+        project_id = std::atoi(it->second.c_str());
+    }
+    auto res = portfolio::calculate_critical_path(conn, project_id);
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET & POST /api/portfolio/baselines
+static void handle_portfolio_baselines(backend::wsworker *worker,
+                                       const std::map<std::string, std::string> &header,
+                                       const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "POST") {
+        auto u_auth = get_authenticated_user(conn, worker, header);
+        if (!u_auth.authenticated) {
+            send_error(worker, header, "401 Unauthorized", "Authentication required");
+            return;
+        }
+
+        auto body = json::json_value::parse(worker->body());
+        if (!body) {
+            send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+            return;
+        }
+
+        int project_id = body.get_int("project_id", 0);
+        std::string name = body.get_string("name", "");
+        std::string description = body.get_string("description", "");
+
+        if (project_id <= 0 || name.empty()) {
+            send_error(worker, header, "400 Bad Request", "project_id and name are required");
+            return;
+        }
+
+        std::string err_msg;
+        int baseline_id = portfolio::create_timeline_baseline(conn, project_id, name, description, u_auth.id, err_msg);
+        if (baseline_id <= 0) {
+            send_error(worker, header, "400 Bad Request", err_msg.empty() ? "Failed to create baseline" : err_msg);
+            return;
+        }
+
+        auto res = portfolio::get_baseline_detail(conn, baseline_id);
+        send_json(worker, header, "201 Created", res);
+        return;
+    }
+
+    // GET
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+    int project_id = 0;
+    auto it = args.find("project_id");
+    if (it != args.end()) {
+        project_id = std::atoi(it->second.c_str());
+    }
+    auto res = portfolio::list_timeline_baselines(conn, project_id);
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET & DELETE /api/portfolio/baselines/([0-9]+)
+static void handle_portfolio_baseline_detail(backend::wsworker *worker,
+                                             const std::map<std::string, std::string> &header,
+                                             const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing baseline ID");
+        return;
+    }
+    int baseline_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "DELETE") {
+        auto u_auth = get_authenticated_user(conn, worker, header);
+        if (!u_auth.authenticated) {
+            send_error(worker, header, "401 Unauthorized", "Authentication required");
+            return;
+        }
+        portfolio::delete_timeline_baseline(conn, baseline_id);
+        auto res = json::json_value::make_object();
+        res.add_bool("success", true);
+        res.add_int("deleted_id", baseline_id);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    auto res = portfolio::get_baseline_detail(conn, baseline_id);
+    if (!res) {
+        send_error(worker, header, "404 Not Found", "Baseline not found");
+        return;
+    }
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET /api/portfolio/capacity
+static void handle_portfolio_capacity(backend::wsworker *worker,
+                                      const std::map<std::string, std::string> &header,
+                                      const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+
+    int project_id = 0;
+    int sprint_id = 0;
+    std::string start_date, end_date;
+
+    auto it = args.find("project_id");
+    if (it != args.end()) project_id = std::atoi(it->second.c_str());
+
+    it = args.find("sprint_id");
+    if (it != args.end()) sprint_id = std::atoi(it->second.c_str());
+
+    it = args.find("start_date");
+    if (it != args.end()) start_date = it->second;
+
+    it = args.find("end_date");
+    if (it != args.end()) end_date = it->second;
+
+    auto res = portfolio::calculate_team_capacity(conn, project_id, sprint_id, start_date, end_date);
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET, PUT, POST /api/portfolio/capacity/configs
+static void handle_portfolio_capacity_configs(backend::wsworker *worker,
+                                              const std::map<std::string, std::string> &header,
+                                              const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "PUT" || method == "POST") {
+        auto u_auth = get_authenticated_user(conn, worker, header);
+        if (!u_auth.authenticated) {
+            send_error(worker, header, "401 Unauthorized", "Authentication required");
+            return;
+        }
+
+        auto body = json::json_value::parse(worker->body());
+        if (!body) {
+            send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+            return;
+        }
+
+        int user_id = body.get_int("user_id", 0);
+        int project_id = body.get_int("project_id", 0);
+        double weekly_hours = body.get_double("weekly_capacity_hours", 40.0);
+
+        if (user_id <= 0 || weekly_hours <= 0.0) {
+            send_error(worker, header, "400 Bad Request", "user_id and valid weekly_capacity_hours are required");
+            return;
+        }
+
+        portfolio::set_capacity_config(conn, user_id, project_id, weekly_hours);
+        auto res = json::json_value::make_object();
+        res.add_bool("success", true);
+        res.add_int("user_id", user_id);
+        res.add_double("weekly_capacity_hours", weekly_hours);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+    int project_id = 0;
+    auto it = args.find("project_id");
+    if (it != args.end()) project_id = std::atoi(it->second.c_str());
+
+    auto res = portfolio::get_capacity_configs(conn, project_id);
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET & POST /api/portfolio/dependencies
+static void handle_portfolio_dependencies(backend::wsworker *worker,
+                                          const std::map<std::string, std::string> &header,
+                                          const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "POST") {
+        auto u_auth = get_authenticated_user(conn, worker, header);
+        if (!u_auth.authenticated) {
+            send_error(worker, header, "401 Unauthorized", "Authentication required");
+            return;
+        }
+
+        auto body = json::json_value::parse(worker->body());
+        if (!body) {
+            send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+            return;
+        }
+
+        int source_id = body.get_int("source_item_id", 0);
+        int target_id = body.get_int("target_item_id", 0);
+        std::string link_type = body.get_string("link_type", "FS");
+        int lag_days = body.get_int("lag_days", 0);
+
+        std::string err_msg;
+        int dep_id = portfolio::create_dependency(conn, source_id, target_id, link_type, lag_days, err_msg);
+        if (dep_id == -2) {
+            send_error(worker, header, "400 Bad Request", err_msg);
+            return;
+        } else if (dep_id <= 0) {
+            send_error(worker, header, "400 Bad Request", err_msg.empty() ? "Failed to create dependency" : err_msg);
+            return;
+        }
+
+        auto res = json::json_value::make_object();
+        res.add_int("id", dep_id);
+        res.add_int("source_item_id", source_id);
+        res.add_int("target_item_id", target_id);
+        res.add_str("link_type", portfolio::normalize_dep_type(link_type));
+        res.add_int("lag_days", lag_days);
+        send_json(worker, header, "201 Created", res);
+        return;
+    }
+
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+    int project_id = 0;
+    int item_id = 0;
+    auto it = args.find("project_id");
+    if (it != args.end()) project_id = std::atoi(it->second.c_str());
+    it = args.find("item_id");
+    if (it != args.end()) item_id = std::atoi(it->second.c_str());
+
+    auto res = portfolio::list_dependencies(conn, project_id, item_id);
+    send_json(worker, header, "200 OK", res);
+}
+
+// DELETE /api/portfolio/dependencies/([0-9]+)
+static void handle_portfolio_dependency_delete(backend::wsworker *worker,
+                                               const std::map<std::string, std::string> &header,
+                                               const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing dependency ID");
+        return;
+    }
+    int dep_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    {
+        db::sqlite_transaction tx(conn);
+        auto del = conn.prepare("DELETE FROM work_item_links WHERE id = ?;");
+        del.bind_int(1, dep_id);
+        del.step_done();
+        tx.commit();
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_bool("success", true);
+    res.add_int("deleted_id", dep_id);
+    send_json(worker, header, "200 OK", res);
+}
+
+// PUT & POST /api/portfolio/reschedule
+static void handle_portfolio_reschedule(backend::wsworker *worker,
+                                        const std::map<std::string, std::string> &header,
+                                        const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    int item_id = body.get_int("item_id", 0);
+    std::string start_date = body.get_string("start_date", "");
+    std::string due_date = body.get_string("due_date", "");
+
+    if (item_id <= 0) {
+        send_error(worker, header, "400 Bad Request", "item_id is required");
+        return;
+    }
+
+    std::string err_msg;
+    if (!portfolio::reschedule_item(conn, item_id, start_date, due_date, u_auth.id, u_auth.display_name, err_msg)) {
+        send_error(worker, header, "400 Bad Request", err_msg.empty() ? "Failed to reschedule" : err_msg);
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_bool("success", true);
+    res.add_int("item_id", item_id);
+    res.add_str("start_date", start_date);
+    res.add_str("due_date", due_date);
+    send_json(worker, header, "200 OK", res);
+}
+
 // PATCH | POST /api/items/([A-Za-z0-9_-]+)/state & POST /api/items/([A-Za-z0-9_-]+)/transitions
 static void handle_item_state_transition(backend::wsworker *worker,
                                          const std::map<std::string, std::string> &header,
@@ -9737,18 +10055,28 @@ static void handle_item_links(backend::wsworker *worker,
 
     int target_id = body.get_int("target_item_id", 0);
     std::string link_type = body.get_string("link_type", "relates_to");
+    int lag_days = body.get_int("lag_days", 0);
     if (target_id <= 0 || target_id == source_id) {
         send_error(worker, header, "400 Bad Request", "Valid target_item_id is required");
         return;
     }
 
+    if (portfolio::is_valid_dependency_type(link_type)) {
+        std::string cycle_info;
+        if (portfolio::check_cyclic_dependency(conn, source_id, target_id, 0, &cycle_info)) {
+            send_error(worker, header, "400 Bad Request", "Cyclic dependency detected: " + cycle_info);
+            return;
+        }
+    }
+
     int link_id = 0;
     {
         db::sqlite_transaction tx(conn);
-        auto ins = conn.prepare("INSERT INTO work_item_links (source_item_id, target_item_id, link_type) VALUES (?, ?, ?);");
+        auto ins = conn.prepare("INSERT INTO work_item_links (source_item_id, target_item_id, link_type, lag_days) VALUES (?, ?, ?, ?);");
         ins.bind_int(1, source_id);
         ins.bind_int(2, target_id);
         ins.bind_text(3, link_type);
+        ins.bind_int(4, lag_days);
         ins.step_done();
         link_id = static_cast<int>(conn.last_insert_rowid());
         tx.commit();
@@ -9759,6 +10087,7 @@ static void handle_item_links(backend::wsworker *worker,
     res.add_int("source_item_id", source_id);
     res.add_int("target_item_id", target_id);
     res.add_str("link_type", link_type);
+    res.add_int("lag_days", lag_days);
     send_json(worker, header, "201 Created", res);
 }
 
@@ -9768,7 +10097,7 @@ static void handle_all_links(backend::wsworker *worker,
                              const std::list<std::string> &) {
     auto conn = acquire_db_connection();
     auto stmt = conn.prepare(R"SQL(
-        SELECT l.id, l.source_item_id, l.target_item_id, l.link_type,
+        SELECT l.id, l.source_item_id, l.target_item_id, l.link_type, COALESCE(l.lag_days, 0),
                ws.key, ws.title, ws.status, ws.type,
                wt.key, wt.title, wt.status, wt.type
         FROM work_item_links l
@@ -9783,14 +10112,15 @@ static void handle_all_links(backend::wsworker *worker,
         lk.add_int("source_item_id", stmt.column_int(1));
         lk.add_int("target_item_id", stmt.column_int(2));
         lk.add_str("link_type", stmt.column_str(3));
-        lk.add_str("source_key", stmt.column_str(4));
-        lk.add_str("source_title", stmt.column_str(5));
-        lk.add_str("source_status", stmt.column_str(6));
-        lk.add_str("source_type", stmt.column_str(7));
-        lk.add_str("target_key", stmt.column_str(8));
-        lk.add_str("target_title", stmt.column_str(9));
-        lk.add_str("target_status", stmt.column_str(10));
-        lk.add_str("target_type", stmt.column_str(11));
+        lk.add_int("lag_days", stmt.column_int(4));
+        lk.add_str("source_key", stmt.column_str(5));
+        lk.add_str("source_title", stmt.column_str(6));
+        lk.add_str("source_status", stmt.column_str(7));
+        lk.add_str("source_type", stmt.column_str(8));
+        lk.add_str("target_key", stmt.column_str(9));
+        lk.add_str("target_title", stmt.column_str(10));
+        lk.add_str("target_status", stmt.column_str(11));
+        lk.add_str("target_type", stmt.column_str(12));
         arr.add(std::move(lk));
     }
     send_json(worker, header, "200 OK", arr);
@@ -17766,6 +18096,15 @@ int main(int argc, char *argv[]) {
         {"^/api/trash/([0-9]+)/restore$",               backend::POST,                  handle_trash_restore        },
         {"^/api/trash/([0-9]+)/purge$",                 backend::POST | backend::DELETE,handle_trash_purge          },
         {"^/api/trash/([0-9]+)$",                       backend::GET | backend::DELETE, handle_trash_detail         },
+        {"^/api/portfolio/rollups$",                    backend::GET,                   handle_portfolio_rollups    },
+        {"^/api/portfolio/critical-path$",              backend::GET,                   handle_portfolio_critical_path },
+        {"^/api/portfolio/dependencies$",               backend::GET | backend::POST,   handle_portfolio_dependencies },
+        {"^/api/portfolio/dependencies/([0-9]+)$",      backend::DELETE,                handle_portfolio_dependency_delete },
+        {"^/api/portfolio/baselines$",                  backend::GET | backend::POST,   handle_portfolio_baselines  },
+        {"^/api/portfolio/baselines/([0-9]+)$",         backend::GET | backend::DELETE, handle_portfolio_baseline_detail },
+        {"^/api/portfolio/capacity$",                   backend::GET,                   handle_portfolio_capacity   },
+        {"^/api/portfolio/capacity/configs$",           backend::GET | backend::PUT | backend::POST, handle_portfolio_capacity_configs },
+        {"^/api/portfolio/reschedule$",                 backend::PUT | backend::POST,   handle_portfolio_reschedule },
     });
 
     server.init(socket_name.c_str(), backlog, worker_num);

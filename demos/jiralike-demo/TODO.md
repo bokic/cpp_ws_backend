@@ -14,7 +14,7 @@ This document provides a comprehensive gap analysis and exhaustive development r
 - [6. Epic 5: Agile Analytics & Reporting Suite](#6-epic-5-agile-analytics--reporting-suite)
 - [7. Epic 6: Time Tracking, Worklogs & Estimation Schemes](#7-epic-6-time-tracking-worklogs--estimation-schemes)
 - [8. Epic 7: Configurable Dashboards & Gadgets Framework](#8-epic-7-configurable-dashboards--gadgets-framework)
-- [9. Epic 8: Advanced Roadmaps, Gantt & Portfolio Planning](#9-epic-8-advanced-roadmaps-gantt--portfolio-planning)
+- [9. Epic 8: Advanced Roadmaps, Gantt & Portfolio Planning *(Completed)*](#9-epic-8-advanced-roadmaps-gantt--portfolio-planning-completed)
 - [10. Epic 9: Rich Text, WYSIWYG Editing & Collaboration](#10-epic-9-rich-text-wysiwyg-editing--collaboration)
 - [11. Epic 10: Security, Granular Permissions & Directory Management](#11-epic-10-security-granular-permissions--directory-management)
 - [12. Epic 11: Notifications, Webhooks & Email Integration](#12-epic-11-notifications-webhooks--email-integration)
@@ -54,7 +54,7 @@ This document provides a comprehensive gap analysis and exhaustive development r
 | **Agile Reports & Metrics** | Burndown, Burnup, Velocity, CFD, Cycle time | None | **High** (Analytics suite missing) |
 | **Time Tracking & Worklogs** | Original/remaining estimates, worklogs, log adjustment | Basic integer story points | **Medium** (Worklogs & time tracking missing) |
 | **Dashboards & Gadgets** | Multi-dashboard layout, 30+ interactive gadgets | None | **High** (Dashboard framework missing) |
-| **Roadmaps & Dependencies** | FS/SS/FF/SF dependencies, critical path, capacity | Simple bar Gantt view | **Medium** (Advanced dependencies & capacity missing) |
+| **Roadmaps & Dependencies** | FS/SS/FF/SF dependencies, critical path, capacity | Advanced Roadmaps, CPM engine, baselines, and capacity planning | **Complete** (Full CPM dependencies, baselines, and capacity engine) |
 | **Rich Text & Mentions** | ADF / Markdown WYSIWYG, `@mentions`, paste images | Plain text strings | **Medium** (WYSIWYG & mentions missing) |
 | **Permission Schemes** | Granular permission schemes, issue security levels | 4 hardcoded role strings | **High** (Granular RBAC missing) |
 | **Notifications & Webhooks** | Notification matrix, outbound webhooks, SMTP | None | **Medium** (Notification engine missing) |
@@ -390,26 +390,26 @@ This document provides a comprehensive gap analysis and exhaustive development r
 
 ---
 
-## 9. Epic 8: Advanced Roadmaps, Gantt & Portfolio Planning
+## 9. Epic 8: Advanced Roadmaps, Gantt & Portfolio Planning *(Completed)*
 
 ### 9.1 Multi-Tier Hierarchy Visualization
-- [ ] **Deep Hierarchy Tree**: Expand/collapse from Portfolio Initiatives down through Epics, Stories, and Subtasks.
-- [ ] **Progress Rollups**: Automatic roll-up calculation of Story Points, Time Spent, and Completion Percentage from child tasks to parent Epics.
+- [x] **Deep Hierarchy Tree**: Expand/collapse from Portfolio Initiatives down through Epics, Stories, and Subtasks.
+- [x] **Progress Rollups**: Automatic roll-up calculation of Story Points, Time Spent, and Completion Percentage from child tasks to parent Epics.
 
 ### 9.2 Dependency Modeling & Critical Path
-- [ ] **Dependency Link Types**:
+- [x] **Dependency Link Types**:
   - *Finish-to-Start (FS)*: Task B cannot start until Task A finishes.
   - *Start-to-Start (SS)*: Task B cannot start until Task A starts.
   - *Finish-to-Finish (FF)*: Task B cannot finish until Task A finishes.
   - *Start-to-Finish (SF)*: Task B cannot finish until Task A starts.
   - Lead and Lag offsets (e.g., $\text{FS} + 2\text{d}$).
-- [ ] **Interactive Visual Connectors**: Drag dependency lines directly between bars on the Gantt chart.
-- [ ] **Critical Path Engine**: Automatically compute and visually highlight the sequence of dependent tasks that determine project duration.
+- [x] **Interactive Visual Connectors**: Drag dependency lines directly between bars on the Gantt chart.
+- [x] **Critical Path Engine**: Automatically compute and visually highlight the sequence of dependent tasks that determine project duration.
 
 ### 9.3 Baselines & Capacity Planning
-- [ ] **Baseline Snapshots (`timeline_baselines`)**:
+- [x] **Baseline Snapshots (`timeline_baselines`)**:
   - Capture plan snapshots to visually compare scheduled vs actual progress and detect slips.
-- [ ] **Team Capacity & Workload Heatmap**:
+- [x] **Team Capacity & Workload Heatmap**:
   - Define user/team weekly hours capacity.
   - Visualize over-allocated vs available bandwidth across sprints.
 
@@ -967,20 +967,20 @@ flowchart TD
   - [x] Trash Bin Management View (`/settings/trash`): Dedicated administrative interface to review deleted items, inspect days remaining before purge, and trigger single-item or bulk restore/permanent deletion.
 - **Verification**: Verified with 7/7 test suites in `verify_step17_e2e.py`: Cloning duplicate issue with clones link; cross-project move with key re-allocation (JIRA to OPS) and audit trail; atomic bulk edit, transition, and assign on 50 items; bulk soft delete to trash with 30-day retention countdown; item restore with original ID and key; individual and bulk purge; zero regressions across Steps 14-16.
 
-#### Step 18: Advanced Roadmaps, Gantt Dependencies, Critical Path & Capacity Planning
+#### Step 18: Advanced Roadmaps, Gantt Dependencies, Critical Path & Capacity Planning *(Completed)*
 - **Why Next**: Complements Agile Multi-board and Time Tracking with enterprise-grade portfolio scheduling, cross-issue dependencies, and team capacity balancing.
 - **Backend Deliverables**:
-  - [ ] Deep Hierarchy & Rollup Calculations: Recursive calculation engine aggregating Story Points, Original/Remaining Estimates, and Time Spent up from subtasks to Stories, Epics, and Portfolio Initiatives (`GET /api/portfolio/rollups`).
-  - [ ] Dependency Scheduling Engine: Directed dependency graph supporting Finish-to-Start (FS), Start-to-Start (SS), Finish-to-Finish (FF), and Start-to-Finish (SF) links with lag/lead offsets.
-  - [ ] Critical Path Engine: Topological sort and CPM (Critical Path Method) algorithm computing earliest/latest start/finish dates, identifying zero-float bottleneck tasks (`GET /api/portfolio/critical-path`).
-  - [ ] Baseline Snapshots: Versioned timeline snapshots table (`timeline_baselines`) capturing planned vs actual dates with deviation metrics (`POST /api/portfolio/baselines`).
-  - [ ] Capacity & Allocation Aggregator: Team member workload distribution calculator computing allocated hours vs working capacity per sprint/calendar window.
+  - [x] Deep Hierarchy & Rollup Calculations: Recursive calculation engine aggregating Story Points, Original/Remaining Estimates, and Time Spent up from subtasks to Stories, Epics, and Portfolio Initiatives (`GET /api/portfolio/rollups`).
+  - [x] Dependency Scheduling Engine: Directed dependency graph supporting Finish-to-Start (FS), Start-to-Start (SS), Finish-to-Finish (FF), and Start-to-Finish (SF) links with lag/lead offsets.
+  - [x] Critical Path Engine: Topological sort and CPM (Critical Path Method) algorithm computing earliest/latest start/finish dates, identifying zero-float bottleneck tasks (`GET /api/portfolio/critical-path`).
+  - [x] Baseline Snapshots: Versioned timeline snapshots table (`timeline_baselines`) capturing planned vs actual dates with deviation metrics (`POST /api/portfolio/baselines`).
+  - [x] Capacity & Allocation Aggregator: Team member workload distribution calculator computing allocated hours vs working capacity per sprint/calendar window.
 - **Frontend Deliverables**:
-  - [ ] Gantt Timeline & Dependency Canvas (`/roadmap/advanced`): Interactive SVG/Canvas timeline with drag-to-reschedule bars and interactive dependency line connectors.
-  - [ ] Critical Path Highlighting: Toggleable visual glow/color indicator identifying critical path sequence directly on the Gantt chart.
-  - [ ] Baseline Comparison View: Multi-bar overlay comparing initial baseline schedule against live project progress with slippage indicators.
-  - [ ] Team Capacity Heatmap: Visual resource allocation matrix highlighting under-allocated (green), balanced (blue), and over-allocated (red) assignees.
-- **Verification**: Verify rollup endpoint aggregates child story points to epics accurately; verify cyclic dependency detection prevents circular links; verify CPM critical path calculation correctly flags zero-float tasks; verify baseline snapshot captures point-in-time dates and computes variance.
+  - [x] Gantt Timeline & Dependency Canvas (`/roadmap/advanced`): Interactive SVG/Canvas timeline with drag-to-reschedule bars and interactive dependency line connectors.
+  - [x] Critical Path Highlighting: Toggleable visual glow/color indicator identifying critical path sequence directly on the Gantt chart.
+  - [x] Baseline Comparison View: Multi-bar overlay comparing initial baseline schedule against live project progress with slippage indicators.
+  - [x] Team Capacity Heatmap: Visual resource allocation matrix highlighting under-allocated (green), balanced (blue), and over-allocated (red) assignees.
+- **Verification**: Verified with 7/7 test suites in `verify_step18_e2e.py`: Deep hierarchy recursive rollups (SP, estimates, progress); directed dependencies (FS, SS, FF, SF) with lead/lag offsets; circular dependency detection and rejection; CPM forward/backward pass with zero-float bottleneck identification; versioned baseline snapshots and planned vs actual slippage variance computation; team capacity aggregator with utilization heatmap and working hour configs; drag-to-reschedule with SSE notification; zero regressions across Steps 14-17.
 
 #### Step 19: Enterprise Security (SSO & 2FA/MFA) & Inbound Email Processing
 - **Why Next**: Secures enterprise user onboarding, satisfies compliance standards, and allows external stakeholders to interact without web UI access via email.
@@ -1029,7 +1029,7 @@ flowchart TD
 | **15** | ITSM & Service Desk | Step 4, Step 11 | High | 3 weeks | SLA Calendar Engine & Customer Portal |
 | **16** | UX Modernization & Real-Time Sync | Step 6, Step 9 | Medium | 2 weeks | SSE / WebSockets & Dark Mode *(Completed)* |
 | **17** | Bulk Operations & Trash Bin | Step 6, Step 11 | Medium | 2 weeks | Bulk Engine & Soft Delete Storage *(Completed)* |
-| **18** | Advanced Roadmaps & Gantt CPM | Step 6, Step 7 | High | 3 weeks | CPM Dependency Engine & SVG Gantt Canvas |
+| **18** | Advanced Roadmaps & Gantt CPM | Step 6, Step 7 | High | 3 weeks | CPM Dependency Engine & SVG Gantt Canvas *(Completed)* |
 | **19** | Enterprise SSO, 2FA & Inbound Mail | Step 11, Step 13 | High | 2-3 weeks | SAML/OIDC, RFC 6238 TOTP & Mail Hook |
 | **20** | i18n, S3 Storage & Rate Limiting | Step 1, Step 11 | Medium | 2 weeks | Storage Abstraction, Token Bucket & i18n |
 

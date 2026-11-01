@@ -303,6 +303,13 @@ export class App implements OnInit, OnDestroy {
         action: () => this.router.navigate(['/reports']),
       },
       {
+        id: 'go_roadmap',
+        title: 'Go to Advanced Roadmaps & Gantt CPM',
+        category: 'Navigation',
+        icon: '🗺️',
+        action: () => this.router.navigate(['/roadmap/advanced']),
+      },
+      {
         id: 'go_gantt',
         title: 'Go to Gantt Roadmap',
         category: 'Navigation',

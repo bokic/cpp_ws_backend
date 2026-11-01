@@ -64,7 +64,8 @@ INSERT OR IGNORE INTO issue_type_scheme_items (scheme_id, issue_type_id, sort_or
     (1, 4, 40),
     (1, 5, 50);
 
-ALTER TABLE projects ADD COLUMN issue_type_scheme_id INTEGER DEFAULT 1 REFERENCES issue_type_schemes(id) ON DELETE SET NULL;
+ALTER TABLE projects ADD COLUMN issue_type_scheme_id INTEGER REFERENCES issue_type_schemes(id) ON DELETE SET NULL DEFAULT NULL;
+UPDATE projects SET issue_type_scheme_id = 1 WHERE issue_type_scheme_id IS NULL;
 
 -- 3. Project Components & Work Item Component Mappings
 CREATE TABLE IF NOT EXISTS components (

@@ -435,7 +435,8 @@ export interface WorkItemLink {
   id: number;
   source_item_id: number;
   target_item_id: number;
-  link_type: 'blocks' | 'is_blocked_by' | 'relates_to' | 'duplicates';
+  link_type: 'blocks' | 'is_blocked_by' | 'relates_to' | 'duplicates' | 'clones' | 'FS' | 'SS' | 'FF' | 'SF' | string;
+  lag_days?: number;
   source_key: string;
   source_title: string;
   source_status: string;
@@ -444,6 +445,208 @@ export interface WorkItemLink {
   target_title: string;
   target_status: string;
   target_type: string;
+}
+
+export interface RollupItem {
+  id: number;
+  project_id: number;
+  project_key: string;
+  key: string;
+  type: string;
+  status: string;
+  priority: string;
+  title: string;
+  parent_id?: number | null;
+  sprint_id?: number | null;
+  sprint_name?: string;
+  assignee_id?: number | null;
+  assignee_name?: string;
+  start_date: string;
+  due_date: string;
+  story_points: number;
+  progress: number;
+  original_estimate_seconds: number;
+  remaining_estimate_seconds: number;
+  time_spent_seconds: number;
+  hierarchy_level: number;
+  rollup_story_points: number;
+  rollup_original_estimate_seconds: number;
+  rollup_remaining_estimate_seconds: number;
+  rollup_time_spent_seconds: number;
+  rollup_progress: number;
+  rollup_start_date: string;
+  rollup_due_date: string;
+  child_count: number;
+  completed_child_count: number;
+  children?: RollupItem[];
+}
+
+export interface RollupSummary {
+  initiatives_count: number;
+  epics_count: number;
+  stories_count: number;
+  completed_items_count: number;
+  total_story_points: number;
+  total_original_hours: number;
+  total_remaining_hours: number;
+  total_spent_hours: number;
+  overall_progress: number;
+}
+
+export interface PortfolioRollupsResponse {
+  project_id: number;
+  total_items: number;
+  summary: RollupSummary;
+  items: RollupItem[];
+  tree: RollupItem[];
+}
+
+export interface CriticalPathNode {
+  id: number;
+  key: string;
+  title: string;
+  type: string;
+  status: string;
+  duration_days: number;
+  es: number;
+  ef: number;
+  ls: number;
+  lf: number;
+  total_float: number;
+  free_float: number;
+  is_critical: boolean;
+  earliest_start_date: string;
+  earliest_finish_date: string;
+  latest_start_date: string;
+  latest_finish_date: string;
+}
+
+export interface CriticalPathResponse {
+  project_id: number;
+  project_name: string;
+  total_duration_days: number;
+  project_start_date: string;
+  project_end_date: string;
+  dependency_count: number;
+  critical_path: CriticalPathNode[];
+  bottlenecks: { id: number; key: string; title: string; status: string }[];
+  nodes: CriticalPathNode[];
+}
+
+export interface TimelineBaseline {
+  id: number;
+  project_id: number;
+  project_name: string;
+  name: string;
+  description: string;
+  created_by?: number | null;
+  created_by_name: string;
+  created_at: string;
+  item_count: number;
+}
+
+export interface BaselineItemVariance {
+  id: number;
+  work_item_id: number;
+  item_key: string;
+  title: string;
+  baseline_start_date: string;
+  baseline_due_date: string;
+  baseline_duration_days: number;
+  baseline_story_points: number;
+  baseline_status: string;
+  current_start_date: string;
+  current_due_date: string;
+  current_status: string;
+  current_progress: number;
+  start_variance_days: number;
+  due_variance_days: number;
+  variance_status: 'on_track' | 'slipped' | 'ahead';
+}
+
+export interface BaselineDetailResponse {
+  id: number;
+  project_id: number;
+  project_name: string;
+  name: string;
+  description: string;
+  created_by?: number | null;
+  created_by_name: string;
+  created_at: string;
+  total_items: number;
+  slipped_items_count: number;
+  ahead_items_count: number;
+  on_track_items_count: number;
+  average_slip_days: number;
+  items: BaselineItemVariance[];
+}
+
+export interface CapacityUserItem {
+  id: number;
+  key: string;
+  title: string;
+  type: string;
+  status: string;
+  estimate_hours: number;
+  start_date: string;
+  due_date: string;
+}
+
+export interface CapacityUser {
+  user_id: number;
+  username: string;
+  display_name: string;
+  avatar_color: string;
+  weekly_capacity_hours: number;
+  total_capacity_hours: number;
+  allocated_hours: number;
+  completed_hours: number;
+  utilization_percentage: number;
+  allocation_status: 'under_allocated' | 'balanced' | 'over_allocated';
+  assigned_items: CapacityUserItem[];
+}
+
+export interface CapacityResponse {
+  project_id: number;
+  sprint_id: number;
+  start_date: string;
+  end_date: string;
+  weeks_count: number;
+  team_total_capacity_hours: number;
+  team_total_allocated_hours: number;
+  team_total_completed_hours: number;
+  team_utilization_percentage: number;
+  users: CapacityUser[];
+}
+
+export interface UserCapacityConfig {
+  id: number;
+  user_id: number;
+  display_name: string;
+  username: string;
+  project_id?: number | null;
+  weekly_capacity_hours: number;
+  updated_at: string;
+}
+
+export interface DependencyLink {
+  id: number;
+  source_item_id: number;
+  target_item_id: number;
+  link_type: 'FS' | 'SS' | 'FF' | 'SF' | 'blocks' | string;
+  lag_days: number;
+  source_key: string;
+  source_title: string;
+  source_status: string;
+  source_type: string;
+  source_start_date: string;
+  source_due_date: string;
+  target_key: string;
+  target_title: string;
+  target_status: string;
+  target_type: string;
+  target_start_date: string;
+  target_due_date: string;
 }
 
 export interface CommentItem {

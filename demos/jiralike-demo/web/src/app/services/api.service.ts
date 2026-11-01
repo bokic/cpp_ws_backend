@@ -86,6 +86,13 @@ import {
   TrashItem,
   BulkOperationRequest,
   WorkflowTransitionRule,
+  PortfolioRollupsResponse,
+  CriticalPathResponse,
+  TimelineBaseline,
+  BaselineDetailResponse,
+  CapacityResponse,
+  UserCapacityConfig,
+  DependencyLink,
   ServiceDesk,
   RequestType,
   ServiceDeskQueue,
@@ -2905,5 +2912,117 @@ export class ApiService {
     return this.request<{ success: boolean; purged_count: number }>('/api/trash/purge-all', {
       method: 'POST',
     });
+  }
+
+  // --- Step 18: Advanced Roadmaps, Gantt CPM, Baselines & Capacity Planning ---
+
+  async getPortfolioRollups(projectId?: number): Promise<PortfolioRollupsResponse> {
+    const q = projectId ? `?project_id=${projectId}` : '';
+    return this.request<PortfolioRollupsResponse>(`/api/portfolio/rollups${q}`);
+  }
+
+  async getCriticalPath(projectId?: number): Promise<CriticalPathResponse> {
+    const q = projectId ? `?project_id=${projectId}` : '';
+    return this.request<CriticalPathResponse>(`/api/portfolio/critical-path${q}`);
+  }
+
+  async getPortfolioDependencies(projectId?: number, itemId?: number): Promise<DependencyLink[]> {
+    const params = new URLSearchParams();
+    if (projectId) params.set('project_id', String(projectId));
+    if (itemId) params.set('item_id', String(itemId));
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    return this.request<DependencyLink[]>(`/api/portfolio/dependencies${qs}`);
+  }
+
+  async createPortfolioDependency(payload: {
+    source_item_id: number;
+    target_item_id: number;
+    link_type: string;
+    lag_days?: number;
+  }): Promise<DependencyLink> {
+    return this.request<DependencyLink>('/api/portfolio/dependencies', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deletePortfolioDependency(id: number): Promise<{ success: boolean; deleted_id: number }> {
+    return this.request<{ success: boolean; deleted_id: number }>(`/api/portfolio/dependencies/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getTimelineBaselines(projectId?: number): Promise<TimelineBaseline[]> {
+    const q = projectId ? `?project_id=${projectId}` : '';
+    return this.request<TimelineBaseline[]>(`/api/portfolio/baselines${q}`);
+  }
+
+  async createTimelineBaseline(payload: {
+    project_id: number;
+    name: string;
+    description?: string;
+  }): Promise<BaselineDetailResponse> {
+    return this.request<BaselineDetailResponse>('/api/portfolio/baselines', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getTimelineBaselineDetail(id: number): Promise<BaselineDetailResponse> {
+    return this.request<BaselineDetailResponse>(`/api/portfolio/baselines/${id}`);
+  }
+
+  async deleteTimelineBaseline(id: number): Promise<{ success: boolean; deleted_id: number }> {
+    return this.request<{ success: boolean; deleted_id: number }>(`/api/portfolio/baselines/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getTeamCapacity(options?: {
+    project_id?: number;
+    sprint_id?: number;
+    start_date?: string;
+    end_date?: string;
+  }): Promise<CapacityResponse> {
+    const params = new URLSearchParams();
+    if (options?.project_id) params.set('project_id', String(options.project_id));
+    if (options?.sprint_id) params.set('sprint_id', String(options.sprint_id));
+    if (options?.start_date) params.set('start_date', options.start_date);
+    if (options?.end_date) params.set('end_date', options.end_date);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    return this.request<CapacityResponse>(`/api/portfolio/capacity${qs}`);
+  }
+
+  async getUserCapacityConfigs(projectId?: number): Promise<UserCapacityConfig[]> {
+    const q = projectId ? `?project_id=${projectId}` : '';
+    return this.request<UserCapacityConfig[]>(`/api/portfolio/capacity/configs${q}`);
+  }
+
+  async setUserCapacityConfig(payload: {
+    user_id: number;
+    project_id?: number;
+    weekly_capacity_hours: number;
+  }): Promise<{ success: boolean; user_id: number; weekly_capacity_hours: number }> {
+    return this.request<{ success: boolean; user_id: number; weekly_capacity_hours: number }>(
+      '/api/portfolio/capacity/configs',
+      {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }
+    );
+  }
+
+  async rescheduleItem(payload: {
+    item_id: number;
+    start_date: string;
+    due_date: string;
+  }): Promise<{ success: boolean; item_id: number; start_date: string; due_date: string }> {
+    return this.request<{ success: boolean; item_id: number; start_date: string; due_date: string }>(
+      '/api/portfolio/reschedule',
+      {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }
+    );
   }
 }

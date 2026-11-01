@@ -11,7 +11,7 @@
 
 namespace db {
 
-static constexpr int LATEST_SCHEMA_VERSION = 21;
+static constexpr int LATEST_SCHEMA_VERSION = 22;
 
 struct migration_step {
     int version;
@@ -319,7 +319,8 @@ CREATE TABLE IF NOT EXISTS issue_type_scheme_items (
 INSERT OR IGNORE INTO issue_type_scheme_items (scheme_id, issue_type_id, sort_order) VALUES
     (1, 1, 10), (1, 2, 20), (1, 3, 30), (1, 4, 40), (1, 5, 50);
 
-ALTER TABLE projects ADD COLUMN issue_type_scheme_id INTEGER DEFAULT 1 REFERENCES issue_type_schemes(id) ON DELETE SET NULL;
+ALTER TABLE projects ADD COLUMN issue_type_scheme_id INTEGER REFERENCES issue_type_schemes(id) ON DELETE SET NULL DEFAULT NULL;
+UPDATE projects SET issue_type_scheme_id = 1 WHERE issue_type_scheme_id IS NULL;
 
 CREATE TABLE IF NOT EXISTS components (
     id                    INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2226,6 +2227,57 @@ CREATE TABLE IF NOT EXISTS trash_bin (
 
 CREATE INDEX IF NOT EXISTS idx_trash_bin_purge ON trash_bin(purge_at);
 CREATE INDEX IF NOT EXISTS idx_trash_bin_project ON trash_bin(project_id);
+)SQL"
+        },
+        {
+            22,
+            "db/migrations/022_advanced_roadmaps_and_gantt.sql",
+            "Advanced Roadmaps, Gantt Dependencies, Critical Path & Capacity Planning",
+            R"SQL(
+ALTER TABLE work_item_links ADD COLUMN lag_days INTEGER NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS timeline_baselines (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_timeline_baselines_proj ON timeline_baselines(project_id);
+
+CREATE TABLE IF NOT EXISTS timeline_baseline_items (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    baseline_id     INTEGER NOT NULL REFERENCES timeline_baselines(id) ON DELETE CASCADE,
+    work_item_id    INTEGER NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+    item_key        TEXT NOT NULL,
+    title           TEXT NOT NULL,
+    start_date      TEXT DEFAULT '',
+    due_date        TEXT DEFAULT '',
+    duration_days   INTEGER NOT NULL DEFAULT 1,
+    story_points    INTEGER NOT NULL DEFAULT 0,
+    status          TEXT NOT NULL DEFAULT '',
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_timeline_baseline_items_base ON timeline_baseline_items(baseline_id);
+CREATE INDEX IF NOT EXISTS idx_timeline_baseline_items_item ON timeline_baseline_items(work_item_id);
+
+CREATE TABLE IF NOT EXISTS user_capacities (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id               INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    project_id            INTEGER REFERENCES projects(id) ON DELETE CASCADE,
+    weekly_capacity_hours REAL NOT NULL DEFAULT 40.0,
+    created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at            TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(user_id, project_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_capacities_user ON user_capacities(user_id);
+
+INSERT OR IGNORE INTO user_capacities (user_id, project_id, weekly_capacity_hours)
+SELECT id, NULL, 40.0 FROM users;
 )SQL"
         }
     };
