@@ -61,6 +61,14 @@ export interface SetupStatus {
   migrations: MigrationInfo[];
 }
 
+export interface UserPreferences {
+  user_id?: number;
+  language: string;
+  timezone: string;
+  date_format: string;
+  time_format: string;
+}
+
 export interface User {
   id: number;
   username: string;
@@ -69,6 +77,7 @@ export interface User {
   role: string;
   avatar_color: string;
   created_at?: string;
+  preferences?: UserPreferences;
 }
 
 export interface Project {
@@ -2024,6 +2033,27 @@ export interface InboundMailLog {
   comment_id?: number | null;
   error_message?: string;
   created_at: string;
+}
+
+export interface RateLimitStatus {
+  enabled: boolean;
+  client_key: string;
+  entity_type: string;
+  identifier: string;
+  limit: number;
+  remaining: number;
+  tokens: number;
+  reset: number;
+  refill_rate_per_sec: number;
+  client_total_requests: number;
+  client_blocked_requests: number;
+  active_tracked_buckets: number;
+  limits: {
+    ip_capacity: number;
+    ip_refill_rate: number;
+    token_capacity: number;
+    token_refill_rate: number;
+  };
 }
 
 

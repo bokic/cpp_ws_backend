@@ -31,6 +31,8 @@ public:
     }
     void add_routes(std::initializer_list<route> routes);
 
+    void use(middleware_handler mw);
+
     std::shared_ptr<const router> get_router() const;
 
 private:

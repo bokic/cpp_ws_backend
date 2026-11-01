@@ -48,6 +48,11 @@ void backend::wsserver::add_routes(std::initializer_list<route> routes)
     m_router->add_routes(routes);
 }
 
+void backend::wsserver::use(middleware_handler mw)
+{
+    m_router->use(std::move(mw));
+}
+
 std::shared_ptr<const backend::router> backend::wsserver::get_router() const
 {
     return m_router;

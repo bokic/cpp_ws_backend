@@ -11,7 +11,7 @@
 
 namespace db {
 
-static constexpr int LATEST_SCHEMA_VERSION = 23;
+static constexpr int LATEST_SCHEMA_VERSION = 24;
 
 struct migration_step {
     int version;
@@ -2361,6 +2361,26 @@ CREATE INDEX IF NOT EXISTS idx_inbound_mail_logs_created ON inbound_mail_logs(cr
 INSERT OR IGNORE INTO inbound_mail_handlers (name, incoming_address, target_project_id, default_reporter_id, handler_type)
 SELECT 'Default Project Mailhook', 'support@example.com', id, (SELECT id FROM users ORDER BY id ASC LIMIT 1), 'CREATE_OR_COMMENT'
 FROM projects ORDER BY id ASC LIMIT 1;
+)SQL"
+        },
+        {
+            24,
+            "db/migrations/024_user_preferences_and_governance.sql",
+            "User Preferences, Localization & Governance",
+            R"SQL(
+CREATE TABLE IF NOT EXISTS user_preferences (
+    user_id     INTEGER PRIMARY KEY,
+    language    TEXT NOT NULL DEFAULT 'en',
+    timezone    TEXT NOT NULL DEFAULT 'UTC',
+    date_format TEXT NOT NULL DEFAULT 'YYYY-MM-DD',
+    time_format TEXT NOT NULL DEFAULT '24h',
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+INSERT OR IGNORE INTO user_preferences (user_id, language, timezone, date_format, time_format)
+SELECT id, 'en', 'UTC', 'YYYY-MM-DD', '24h' FROM users;
 )SQL"
         }
     };

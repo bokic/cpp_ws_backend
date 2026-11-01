@@ -21,6 +21,8 @@
 #include "src/bulk_and_trash_engine.h"
 #include "src/portfolio_roadmap_engine.h"
 #include "src/enterprise_security_engine.h"
+#include "src/rate_limiter.h"
+#include "src/openapi_spec.h"
 
 #include <algorithm>
 #include <atomic>
@@ -45,6 +47,7 @@
 static std::string g_db_path = "db/jiralike.db";
 static std::string g_blobs_dir = "blobs";
 static std::shared_ptr<db::connection_pool<db::sqlite_db>> g_db_pool;
+static governance::token_bucket_rate_limiter g_rate_limiter;
 
 static void init_db_pool(int worker_num) {
     size_t workers = worker_num > 0 ? static_cast<size_t>(worker_num) : 4;
@@ -1117,7 +1120,27 @@ static void handle_auth_me(backend::wsworker *worker,
         send_error(worker, header, "401 Unauthorized", "Not authenticated");
         return;
     }
-    send_json(worker, header, "200 OK", user_to_json(u));
+    auto user_obj = user_to_json(u);
+
+    // Retrieve user preferences
+    std::string lang = "en", tz = "UTC", df = "YYYY-MM-DD", tf = "24h";
+    auto p_stmt = conn.prepare("SELECT language, timezone, date_format, time_format FROM user_preferences WHERE user_id = ?;");
+    p_stmt.bind_int64(1, u.id);
+    if (p_stmt.step() == SQLITE_ROW) {
+        lang = p_stmt.column_text(0);
+        tz = p_stmt.column_text(1);
+        df = p_stmt.column_text(2);
+        tf = p_stmt.column_text(3);
+    }
+    auto pref_obj = json::json_value::make_object();
+    pref_obj.add_int("user_id", u.id);
+    pref_obj.add_str("language", lang);
+    pref_obj.add_str("timezone", tz);
+    pref_obj.add_str("date_format", df);
+    pref_obj.add_str("time_format", tf);
+    user_obj.add("preferences", std::move(pref_obj));
+
+    send_json(worker, header, "200 OK", user_obj);
 }
 
 // GET /api/users & POST /api/users
@@ -18410,6 +18433,205 @@ static void handle_presence(backend::wsworker *worker,
     }
 }
 
+// GET /api/user/preferences & PUT /api/user/preferences
+static void handle_user_preferences(backend::wsworker *worker,
+                                    const std::map<std::string, std::string> &header,
+                                    const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto u = get_authenticated_user(conn, worker, header);
+    if (!u.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Not authenticated");
+        return;
+    }
+
+    std::string method = get_header(header, "REQUEST_METHOD");
+    if (method == "GET") {
+        std::string lang = "en", tz = "UTC", df = "YYYY-MM-DD", tf = "24h";
+        auto stmt = conn.prepare("SELECT language, timezone, date_format, time_format FROM user_preferences WHERE user_id = ?;");
+        stmt.bind_int64(1, u.id);
+        if (stmt.step() == SQLITE_ROW) {
+            lang = stmt.column_text(0);
+            tz = stmt.column_text(1);
+            df = stmt.column_text(2);
+            tf = stmt.column_text(3);
+        }
+        auto obj = json::json_value::make_object();
+        obj.add_int("user_id", u.id);
+        obj.add_str("language", lang);
+        obj.add_str("timezone", tz);
+        obj.add_str("date_format", df);
+        obj.add_str("time_format", tf);
+        send_json(worker, header, "200 OK", obj);
+        return;
+    } else if (method == "PUT") {
+        json::json_value body;
+        try {
+            body = json::json_value::parse(worker->body());
+        } catch (...) {
+            send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+            return;
+        }
+
+        std::string cur_lang = "en", cur_tz = "UTC", cur_df = "YYYY-MM-DD", cur_tf = "24h";
+        auto sel = conn.prepare("SELECT language, timezone, date_format, time_format FROM user_preferences WHERE user_id = ?;");
+        sel.bind_int64(1, u.id);
+        if (sel.step() == SQLITE_ROW) {
+            cur_lang = sel.column_text(0);
+            cur_tz = sel.column_text(1);
+            cur_df = sel.column_text(2);
+            cur_tf = sel.column_text(3);
+        }
+
+        std::string lang = body.get_string("language", "");
+        std::string tz = body.get_string("timezone", "");
+        std::string df = body.get_string("date_format", "");
+        std::string tf = body.get_string("time_format", "");
+
+        if (!lang.empty()) {
+            if (lang != "en" && lang != "de" && lang != "fr" && lang != "es" && lang != "ja" && lang != "zh") {
+                send_error(worker, header, "400 Bad Request", "Unsupported language. Supported: en, de, fr, es, ja, zh");
+                return;
+            }
+            cur_lang = lang;
+        }
+        if (!tz.empty()) cur_tz = tz;
+        if (!df.empty()) {
+            if (df != "YYYY-MM-DD" && df != "DD/MM/YYYY" && df != "MM/DD/YYYY") {
+                send_error(worker, header, "400 Bad Request", "Unsupported date format. Supported: YYYY-MM-DD, DD/MM/YYYY, MM/DD/YYYY");
+                return;
+            }
+            cur_df = df;
+        }
+        if (!tf.empty()) {
+            if (tf != "12h" && tf != "24h") {
+                send_error(worker, header, "400 Bad Request", "Unsupported time format. Supported: 12h, 24h");
+                return;
+            }
+            cur_tf = tf;
+        }
+
+        auto upsert = conn.prepare(R"SQL(
+            INSERT INTO user_preferences (user_id, language, timezone, date_format, time_format, updated_at)
+            VALUES (?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(user_id) DO UPDATE SET
+                language = excluded.language,
+                timezone = excluded.timezone,
+                date_format = excluded.date_format,
+                time_format = excluded.time_format,
+                updated_at = datetime('now');
+        )SQL");
+        upsert.bind_int64(1, u.id);
+        upsert.bind_text(2, cur_lang);
+        upsert.bind_text(3, cur_tz);
+        upsert.bind_text(4, cur_df);
+        upsert.bind_text(5, cur_tf);
+        upsert.step();
+
+        auto obj = json::json_value::make_object();
+        obj.add_int("user_id", u.id);
+        obj.add_str("language", cur_lang);
+        obj.add_str("timezone", cur_tz);
+        obj.add_str("date_format", cur_df);
+        obj.add_str("time_format", cur_tf);
+        send_json(worker, header, "200 OK", obj);
+        return;
+    }
+    send_error(worker, header, "405 Method Not Allowed", "Method not allowed");
+}
+
+// GET /api/rate-limits & PUT /api/rate-limits
+static void handle_rate_limits(backend::wsworker *worker,
+                               const std::map<std::string, std::string> &header,
+                               const std::list<std::string> &) {
+    std::string method = get_header(header, "REQUEST_METHOD");
+    if (method == "GET") {
+        send_json(worker, header, "200 OK", g_rate_limiter.get_status(header));
+        return;
+    } else if (method == "PUT") {
+        json::json_value body;
+        try {
+            body = json::json_value::parse(worker->body());
+        } catch (...) {
+            send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+            return;
+        }
+        bool enabled = body.get_bool("enabled", g_rate_limiter.is_enabled());
+        double ip_cap = body.get_double("ip_capacity", 60.0);
+        double ip_rate = body.get_double("ip_refill_rate", 1.0);
+        double token_cap = body.get_double("token_capacity", 180.0);
+        double token_rate = body.get_double("token_refill_rate", 3.0);
+        g_rate_limiter.update_config(enabled, ip_cap, ip_rate, token_cap, token_rate);
+        send_json(worker, header, "200 OK", g_rate_limiter.get_status(header));
+        return;
+    }
+    send_error(worker, header, "405 Method Not Allowed", "Method not allowed");
+}
+
+// POST /api/rate-limits/reset
+static void handle_rate_limits_reset(backend::wsworker *worker,
+                                     const std::map<std::string, std::string> &header,
+                                     const std::list<std::string> &) {
+    std::string client_key, entity_type, raw_id;
+    g_rate_limiter.extract_client_info(header, client_key, entity_type, raw_id);
+
+    bool reset_all = false;
+    std::string query = get_header(header, "QUERY_STRING");
+    if (query.find("all=true") != std::string::npos) reset_all = true;
+    if (!reset_all && !worker->body().empty()) {
+        try {
+            auto b = json::json_value::parse(worker->body());
+            if (b.get_bool("all", false)) reset_all = true;
+        } catch (...) {}
+    }
+
+    if (reset_all) {
+        g_rate_limiter.reset();
+    } else {
+        g_rate_limiter.reset_key(client_key);
+    }
+
+    auto obj = json::json_value::make_object();
+    obj.add_bool("success", true);
+    obj.add_str("message", reset_all ? "All rate limit buckets reset" : "Client rate limit bucket reset");
+    obj.add_str("client_key", client_key);
+    send_json(worker, header, "200 OK", obj);
+}
+
+// GET /api/openapi.json
+static void handle_openapi_spec(backend::wsworker *worker,
+                                const std::map<std::string, std::string> &header,
+                                const std::list<std::string> &) {
+    std::string proto = get_header(header, "SERVER_PROTOCOL");
+    if (proto.empty()) proto = "HTTP/1.1";
+    const std::string &json_str = openapi::get_openapi_json();
+    int len = static_cast<int>(json_str.size());
+    FCGX_FPrintF(worker->out(),
+                 "%s 200 OK\r\n"
+                 "Status: 200 OK\r\n"
+                 "Content-Type: application/json; charset=utf-8\r\n"
+                 "Access-Control-Allow-Origin: *\r\n"
+                 "Access-Control-Allow-Methods: GET, OPTIONS\r\n"
+                 "Cache-Control: public, max-age=3600\r\n"
+                 "Content-Length: %d\r\n\r\n%s",
+                 proto.c_str(), len, json_str.c_str());
+}
+
+// GET /api/docs
+static void handle_swagger_docs(backend::wsworker *worker,
+                                const std::map<std::string, std::string> &header,
+                                const std::list<std::string> &) {
+    std::string proto = get_header(header, "SERVER_PROTOCOL");
+    if (proto.empty()) proto = "HTTP/1.1";
+    std::string html_str = openapi::get_swagger_ui_html();
+    int len = static_cast<int>(html_str.size());
+    FCGX_FPrintF(worker->out(),
+                 "%s 200 OK\r\n"
+                 "Status: 200 OK\r\n"
+                 "Content-Type: text/html; charset=utf-8\r\n"
+                 "Content-Length: %d\r\n\r\n%s",
+                 proto.c_str(), len, html_str.c_str());
+}
+
 static constexpr auto DEFAULT_SOCKET_NAME = ":9002";
 static constexpr auto DEFAULT_BACKLOG = 100;
 
@@ -18697,6 +18919,15 @@ int main(int argc, char *argv[]) {
         {"^/api/mail/handlers/([0-9]+)$",               backend::PUT | backend::DELETE, handle_mail_handler_detail  },
         {"^/api/mail/logs$",                            backend::GET,                   handle_mail_logs            },
         {"^/api/mail/inbound$",                         backend::POST,                  handle_mail_inbound         },
+        {"^/api/user/preferences$",                     backend::GET | backend::PUT,    handle_user_preferences     },
+        {"^/api/rate-limits$",                          backend::GET | backend::PUT,    handle_rate_limits          },
+        {"^/api/rate-limits/reset$",                    backend::POST,                  handle_rate_limits_reset    },
+        {"^/api/openapi.json$",                         backend::GET,                   handle_openapi_spec         },
+        {"^/api/docs$",                                 backend::GET,                   handle_swagger_docs         },
+    });
+
+    server.use([](backend::wsworker *worker, const std::map<std::string, std::string> &header) -> bool {
+        return g_rate_limiter.process(worker, header);
     });
 
     server.init(socket_name.c_str(), backlog, worker_num);

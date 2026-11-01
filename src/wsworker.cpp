@@ -175,6 +175,15 @@ void backend::wsworker::process(std::shared_ptr<FCGX_Request> request)
 
         if (m_router)
         {
+            for (const auto &mw : m_router->middlewares())
+            {
+                if (!mw(this, header))
+                {
+                    FCGX_Finish_r(request.get());
+                    return;
+                }
+            }
+
             for(const auto &route: m_router->routes())
             {
                 if (std::regex_match(path.c_str(), cm, route.uri))

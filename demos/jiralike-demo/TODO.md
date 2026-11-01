@@ -575,9 +575,9 @@ This document provides a comprehensive gap analysis and exhaustive development r
   - Instant board refresh when another user transitions, edits, or adds cards via `/api/events/live` and `/api/events/poll`.
   - Live typing indicator and concurrent viewing alerts ("*Marcus Vance is currently viewing/editing this issue*") via `/api/presence`.
 
-### 15.4 Internationalization & Localization (i18n)
-- [ ] **Multi-Language Support**: Localized strings (EN, DE, FR, ES, JA, ZH) using Angular i18n or transloco.
-- [ ] **Timezone & Locale Preferences**: User-configurable date formatting (e.g., `DD/MM/YYYY` vs `MM/DD/YYYY`) and timezone offsets.
+### 15.4 Internationalization & Localization (i18n) *(Completed)*
+- [x] **Multi-Language Support**: Localized strings (EN, DE, FR, ES, JA, ZH) with instant runtime language switching, reactive dictionary translation, and language selector dropdown.
+- [x] **Timezone & Locale Preferences**: User-configurable date formatting (`YYYY-MM-DD`, `DD/MM/YYYY`, `MM/DD/YYYY`), time formatting (`12h` vs `24h`), and timezone offsets persisted in database and synchronized with user sessions.
 
 ---
 
@@ -599,9 +599,9 @@ This document provides a comprehensive gap analysis and exhaustive development r
   - Implement **Local Filesystem Driver** (current `blobs/` directory).
   - Implement **S3 / MinIO Compatible Driver** for cloud-native distributed deployments.
 
-### 16.4 Performance & API Governance
-- [ ] **Rate Limiting & Throttling**: Token-bucket algorithm per IP / API token to protect against abuse.
-- [ ] **Comprehensive API Documentation**: OpenAPI 3.0 / Swagger specification covering all endpoints.
+### 16.4 Performance & API Governance *(Completed)*
+- [x] **Rate Limiting & Throttling**: Token-bucket algorithm per IP and per API token middleware in C++ FastCGI server returning standard HTTP 429 Too Many Requests with `Retry-After` and `X-RateLimit-*` headers.
+- [x] **Comprehensive API Documentation**: OpenAPI 3.0 / Swagger specification covering all REST and streaming endpoints (`GET /api/openapi.json`), served via interactive Swagger UI (`GET /api/docs`).
 
 ---
 
@@ -676,7 +676,7 @@ Below is the definitive, dependency-driven chronological execution plan.
                [Step 19: Enterprise Security (SSO, 2FA) & Inbound Email]
                             │
                             ▼
-               [Step 20: Internationalization, S3 Storage & Rate Limiting]
+               [Step 20: Internationalization, Governance & Rate Limiting]
 ```
 
 ---
@@ -727,7 +727,7 @@ flowchart TD
     S17["<b>Step 17: Bulk Operations & Trash Bin</b><br/>Batch edits, move/clone wizard, soft delete & 30-day purge"]
     S18["<b>Step 18: Advanced Roadmaps & Gantt CPM</b><br/>Deep hierarchy, critical path method, baselines, capacity heatmap"]
     S19["<b>Step 19: Enterprise SSO, 2FA & Inbound Mail</b><br/>SAML 2.0 / OIDC, RFC 6238 TOTP authenticator, inbound email hook"]
-    S20["<b>Step 20: i18n, S3 Storage & Rate Limiting</b><br/>Multi-language i18n, S3 blob abstraction, token-bucket rate limiter, OpenAPI"]
+    S20["<b>Step 20: i18n, Governance & Rate Limiting</b><br/>Multi-language i18n, user preferences, token-bucket rate limiter, OpenAPI 3.0"]
 
     S06 --> S17
     S11 --> S17
@@ -999,17 +999,18 @@ flowchart TD
   - [x] Inbound Mail Configuration View (`/settings/mail-handlers`): Admin setup for email-to-project routing rules, fallback default reporter, and spam filtering.
 - **Verification**: Verified with 16/16 test suites passing in `verify_step19.py`: Enterprise SSO configuration, SP SAML 2.0 metadata XML generation, domain auto-detection and restriction enforcement, JIT provisioning of new user Carol Danvers; RFC 6238 TOTP secret generation, inline SVG QR code matrix, ±30s clock drift verification, 2-step login challenge handling; emergency backup recovery code login, consumption & invalidation on re-use; inbound email hook parsing JSON & raw MIME RFC 822 payloads, auto-creating tickets with binary attachments, threading comments onto existing tickets via regex subject matching, spam keyword filtering, unknown recipient rejection, and audit log tracking; zero regressions across Steps 14-18.
 
-#### Step 20: Internationalization (i18n), Locale Preferences & S3/Rate-Limiting Governance
-- **Why Next**: Final enterprise readiness layer ensuring global accessibility, infinite cloud scalability for file storage, and defense against brute-force or API abuse.
+#### Step 20: Internationalization (i18n), Locale Preferences & Rate-Limiting Governance *(Completed)*
+- **Why Next**: Final enterprise readiness layer ensuring global accessibility, standardized machine-readable API documentation, and robust defense against brute-force or API abuse.
 - **Backend Deliverables**:
-  - [ ] Pluggable Blob Storage Abstraction: Unified storage interface with local filesystem driver and S3-compatible cloud storage driver (AWS S3, MinIO, Cloudflare R2) supporting pre-signed upload/download URLs (`/api/storage/upload-url`).
-  - [ ] Token-Bucket Rate Limiter: Per-IP and per-API-token rate limiting middleware in C++ FastCGI server returning standard `429 Too Many Requests` with `Retry-After` headers.
-  - [ ] OpenAPI 3.0 / Swagger Specification: Complete machine-readable OpenAPI specification documenting all REST and streaming endpoints (`GET /api/openapi.json`), served via interactive Swagger UI.
+  - [-] Pluggable Blob Storage Abstraction: *(Omitted by user request - local filesystem storage retained)*.
+  - [x] Token-Bucket Rate Limiter: Per-IP and per-API-token rate limiting middleware in C++ FastCGI server returning standard `429 Too Many Requests` with `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset` headers (`/api/rate-limits`, `/api/rate-limits/reset`).
+  - [x] OpenAPI 3.0 / Swagger Specification: Complete machine-readable OpenAPI specification documenting all REST and streaming endpoints (`GET /api/openapi.json`), served via interactive Swagger UI (`GET /api/docs`).
+  - [x] User Preferences & Locale Engine: SQLite schema migration 024 storing user display language, regional timezone, date format (`YYYY-MM-DD`, `DD/MM/YYYY`, `MM/DD/YYYY`), and time format (`12h`, `24h`) with validation (`GET|PUT /api/user/preferences`).
 - **Frontend Deliverables**:
-  - [ ] Multi-Language Localization (i18n): Translation bundles for EN, DE, FR, ES, JA, ZH with instant runtime locale switching.
-  - [ ] User Locale & Timezone Preferences: User profile controls for display timezone, 12h/24h time, and date format strings (`DD/MM/YYYY`, `MM/DD/YYYY`, `YYYY-MM-DD`).
-  - [ ] Interactive API Documentation Page (`/developer/docs`): Swagger UI embedded in the developer portal for live testing of all backend endpoints.
-- **Verification**: Verify switching language immediately updates UI strings across navigation and modals; verify date formatting honors user locale; verify file upload transparently delegates to S3 backend; verify hitting API beyond rate limit returns HTTP 429 with correct headers; verify OpenAPI schema validates against openapi-generator.
+  - [x] Multi-Language Localization (i18n): Translation bundles for EN, DE, FR, ES, JA, ZH with instant runtime locale switching via reactive `I18nService` and `I18nPipe`.
+  - [x] User Locale & Timezone Preferences (`/settings/preferences`, `/profile`): User profile controls for display timezone, 12h/24h time, and date format strings with real-time preview card.
+  - [x] Interactive API Documentation Page (`/developer/docs`): Swagger UI embedded in developer portal, interactive endpoint explorer with live execution console, and token-bucket burst rate limiter simulator.
+- **Verification**: Verified with 81/81 test suites passing in `verify_step20.py`: Database schema migration 024 applying `user_preferences` table; authenticated user preferences retrieval with defaults, dynamic updates, and validation against unsupported language/formats; user preferences reflected in `/api/auth/me`; complete OpenAPI 3.0.0 specification served at `/api/openapi.json` with components, tags, and bearer authentication; interactive Swagger UI page served at `/api/docs`; token-bucket rate limiter tracking IP and API token buckets, returning HTTP 429 Too Many Requests with `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining: 0`, and `X-RateLimit-Reset` headers; exempt endpoints (`/api/health`, `/api/openapi.json`, `/api/docs`, `/api/rate-limits`) bypassing limits; bucket reset endpoint restoring immediate service; and zero regressions across existing subsystems (work items, transitions, agile boards, JQL search, trash bin, SSO SAML metadata, 2FA, and inbound mailhooks).
 
 ---
 
@@ -1036,5 +1037,5 @@ flowchart TD
 | **17** | Bulk Operations & Trash Bin | Step 6, Step 11 | Medium | 2 weeks | Bulk Engine & Soft Delete Storage *(Completed)* |
 | **18** | Advanced Roadmaps & Gantt CPM | Step 6, Step 7 | High | 3 weeks | CPM Dependency Engine & SVG Gantt Canvas *(Completed)* |
 | **19** | Enterprise SSO, 2FA & Inbound Mail | Step 11, Step 13 | High | 2-3 weeks | SAML/OIDC, RFC 6238 TOTP & Mail Hook *(Completed)* |
-| **20** | i18n, S3 Storage & Rate Limiting | Step 1, Step 11 | Medium | 2 weeks | Storage Abstraction, Token Bucket & i18n |
+| **20** | i18n, Governance & Rate Limiting | Step 1, Step 11 | Medium | 2 weeks | Token Bucket, OpenAPI & i18n *(Completed)* |
 

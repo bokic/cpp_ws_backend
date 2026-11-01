@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { ApiService } from './services/api.service';
+import { I18nService, SUPPORTED_LANGUAGES, I18nPipe, LocaleDatePipe } from './services/i18n.service';
 import {
   InAppNotification,
   UserMention,
@@ -24,16 +25,20 @@ interface CommandItem {
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterOutlet, RouterLink, RouterLinkActive],
+  imports: [CommonModule, FormsModule, RouterOutlet, RouterLink, RouterLinkActive, I18nPipe],
   templateUrl: './app.html',
   styleUrl: './app.css',
 })
 export class App implements OnInit, OnDestroy {
   readonly api = inject(ApiService);
+  readonly i18n = inject(I18nService);
   private readonly router = inject(Router);
 
   readonly priorities = PRIORITIES;
   readonly workItemTypes = WORK_ITEM_TYPES;
+
+  readonly supportedLanguages = SUPPORTED_LANGUAGES;
+  readonly showLangDropdown = signal(false);
 
   readonly showNotificationsDropdown = signal(false);
   readonly activeActivityTab = signal<'notifications' | 'mentions'>('notifications');
@@ -68,6 +73,14 @@ export class App implements OnInit, OnDestroy {
 
   // Quick Assign Form State
   assignTargetUser = signal<number | null>(null);
+
+  changeLanguage(code: string): void {
+    this.i18n.setLanguage(code);
+    this.showLangDropdown.set(false);
+    if (this.api.currentUser()) {
+      this.api.updateUserPreferences({ language: code }).catch(() => {});
+    }
+  }
 
   private pollInterval: any = null;
   private keydownHandler = (e: KeyboardEvent) => this.handleGlobalKeydown(e);

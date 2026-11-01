@@ -23,6 +23,7 @@ enum methodType
 };
 
 using route_handler = std::function<void(wsworker *worker, const std::map<std::string, std::string> &header, const std::list<std::string> &uri_params)>;
+using middleware_handler = std::function<bool(wsworker *worker, const std::map<std::string, std::string> &header)>;
 
 struct route {
     std::regex uri;
@@ -75,8 +76,19 @@ public:
         return m_routes;
     }
 
+    void use(middleware_handler mw) {
+        if (mw) {
+            m_middlewares.push_back(std::move(mw));
+        }
+    }
+
+    const std::vector<middleware_handler>& middlewares() const {
+        return m_middlewares;
+    }
+
 private:
     std::vector<route> m_routes;
+    std::vector<middleware_handler> m_middlewares;
 };
 
 };

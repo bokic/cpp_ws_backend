@@ -22,6 +22,8 @@ import { TrashComponent } from './pages/trash/trash.component';
 import { RoadmapAdvancedComponent } from './pages/roadmap-advanced/roadmap-advanced.component';
 import { SecuritySettingsComponent } from './pages/security-settings/security-settings.component';
 import { MailHandlersComponent } from './pages/mail-handlers/mail-handlers.component';
+import { UserPreferencesComponent } from './pages/user-preferences/user-preferences.component';
+import { ApiDocsComponent } from './pages/api-docs/api-docs.component';
 
 export const routes: Routes = [
   { path: '', pathMatch: 'full', redirectTo: 'dashboards' },
@@ -30,7 +32,11 @@ export const routes: Routes = [
   { path: 'dashboards', component: DashboardsComponent },
   { path: 'roadmap/advanced', component: RoadmapAdvancedComponent },
   { path: 'roadmap', component: RoadmapAdvancedComponent },
-  { path: 'profile', component: SecuritySettingsComponent },
+  { path: 'profile', component: UserPreferencesComponent },
+  { path: 'settings/preferences', component: UserPreferencesComponent },
+  { path: 'preferences', component: UserPreferencesComponent },
+  { path: 'developer/docs', component: ApiDocsComponent },
+  { path: 'docs', component: ApiDocsComponent },
   { path: 'settings/security', component: SecuritySettingsComponent },
   { path: 'settings/mail-handlers', component: MailHandlersComponent },
   { path: 'mail-handlers', component: MailHandlersComponent },

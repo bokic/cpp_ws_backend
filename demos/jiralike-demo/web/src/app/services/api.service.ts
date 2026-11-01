@@ -1,4 +1,4 @@
-import { Injectable, computed, signal } from '@angular/core';
+import { Injectable, computed, inject, signal } from '@angular/core';
 import {
   AttachmentItem,
   AutomationAction,
@@ -64,6 +64,8 @@ import {
   TimeRollup,
   TimesheetResponse,
   User,
+  UserPreferences,
+  RateLimitStatus,
   UserGroup,
   UserGroupMember,
   UserMention,
@@ -114,6 +116,7 @@ import {
   InboundMailHandler,
   InboundMailLog,
 } from '../models/jira.models';
+import { I18nService } from './i18n.service';
 
 @Injectable({
   providedIn: 'root',
@@ -121,6 +124,7 @@ import {
 export class ApiService {
   private readonly TOKEN_KEY = 'jiralike_auth_token';
   private readonly USER_KEY = 'jiralike_auth_user';
+  readonly i18n = inject(I18nService);
 
   readonly currentUser = signal<User | null>(this.loadStoredUser());
   readonly token = signal<string>(localStorage.getItem(this.TOKEN_KEY) || '');
@@ -177,6 +181,16 @@ export class ApiService {
     localStorage.setItem(this.USER_KEY, JSON.stringify(user));
     this.token.set(token);
     this.currentUser.set(user);
+    if (user.preferences) {
+      this.i18n.setPreferences(user.preferences);
+    }
+  }
+
+  constructor() {
+    const u = this.currentUser();
+    if (u?.preferences) {
+      this.i18n.setPreferences(u.preferences);
+    }
   }
 
   clearAuth(): void {
@@ -3153,5 +3167,62 @@ export class ApiService {
       method: 'POST',
       body: typeof payload === 'string' ? payload : JSON.stringify(payload),
     });
+  }
+
+  // ============================================================================
+  // Step 20: Internationalization, User Preferences & Rate-Limiting Governance
+  // ============================================================================
+
+  async getUserPreferences(): Promise<UserPreferences> {
+    const prefs = await this.request<UserPreferences>('/api/user/preferences');
+    this.i18n.setPreferences(prefs);
+    if (this.currentUser()) {
+      const u = { ...this.currentUser()!, preferences: prefs };
+      this.currentUser.set(u);
+      localStorage.setItem(this.USER_KEY, JSON.stringify(u));
+    }
+    return prefs;
+  }
+
+  async updateUserPreferences(prefs: Partial<UserPreferences>): Promise<UserPreferences> {
+    const updated = await this.request<UserPreferences>('/api/user/preferences', {
+      method: 'PUT',
+      body: JSON.stringify(prefs),
+    });
+    this.i18n.setPreferences(updated);
+    if (this.currentUser()) {
+      const u = { ...this.currentUser()!, preferences: updated };
+      this.currentUser.set(u);
+      localStorage.setItem(this.USER_KEY, JSON.stringify(u));
+    }
+    return updated;
+  }
+
+  async getRateLimits(): Promise<RateLimitStatus> {
+    return this.request<RateLimitStatus>('/api/rate-limits');
+  }
+
+  async updateRateLimits(config: Partial<{
+    enabled: boolean;
+    ip_capacity: number;
+    ip_refill_rate: number;
+    token_capacity: number;
+    token_refill_rate: number;
+  }>): Promise<RateLimitStatus> {
+    return this.request<RateLimitStatus>('/api/rate-limits', {
+      method: 'PUT',
+      body: JSON.stringify(config),
+    });
+  }
+
+  async resetRateLimits(all = false): Promise<{ success: boolean; message: string; client_key: string }> {
+    return this.request<{ success: boolean; message: string; client_key: string }>(`/api/rate-limits/reset${all ? '?all=true' : ''}`, {
+      method: 'POST',
+      body: JSON.stringify({ all }),
+    });
+  }
+
+  async getOpenApiSpec(): Promise<any> {
+    return this.request<any>('/api/openapi.json');
   }
 }
