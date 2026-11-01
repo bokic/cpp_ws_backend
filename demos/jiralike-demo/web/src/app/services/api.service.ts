@@ -1,7 +1,13 @@
 import { Injectable, computed, signal } from '@angular/core';
 import {
   AttachmentItem,
+  BoardColumn,
+  BoardConfig,
+  BoardItemsPayload,
+  BoardQuickFilter,
+  BoardSwimlane,
   CommentItem,
+  CompleteSprintResponse,
   CustomFieldDef,
   CustomFieldOption,
   FieldConfiguration,
@@ -48,6 +54,7 @@ export class ApiService {
   readonly activeProject = signal<Project | null>(null);
   readonly users = signal<User[]>([]);
   readonly sprints = signal<Sprint[]>([]);
+  readonly boards = signal<BoardConfig[]>([]);
   readonly resolutions = signal<Resolution[]>([]);
   readonly issueTypes = signal<IssueTypeDef[]>([]);
   readonly issueTypeSchemes = signal<IssueTypeScheme[]>([]);
@@ -198,6 +205,7 @@ export class ApiService {
       wfList,
       wfsList,
       sfList,
+      boardsList,
     ] = await Promise.all([
       this.getProjects(),
       this.getUsers(),
@@ -214,6 +222,7 @@ export class ApiService {
       this.getWorkflows().catch(() => [] as WorkflowDef[]),
       this.getWorkflowSchemes().catch(() => [] as WorkflowSchemeBinding[]),
       this.getSavedFilters().catch(() => [] as SavedFilter[]),
+      this.getBoards().catch(() => [] as BoardConfig[]),
     ]);
     this.projects.set(projs);
     if (projs.length > 0 && !this.activeProject()) {
@@ -233,6 +242,7 @@ export class ApiService {
     this.workflows.set(wfList);
     this.workflowSchemes.set(wfsList);
     this.savedFilters.set(sfList);
+    this.boards.set(boardsList);
   }
 
   async getResolutions(): Promise<Resolution[]> {
@@ -1053,5 +1063,167 @@ export class ApiService {
   async deleteFilterSubscription(subId: number): Promise<void> {
     await this.request(`/api/filter-subscriptions/${subId}`, { method: 'DELETE' });
     this.savedFilters.set(await this.getSavedFilters());
+  }
+
+  // Step 6: Multi-Board Engine & Agile Backlog APIs
+  async getBoards(projectId?: number): Promise<BoardConfig[]> {
+    const q = projectId ? `?project_id=${projectId}` : '';
+    return this.request<BoardConfig[]>(`/api/boards${q}`);
+  }
+
+  async getBoard(boardId: number): Promise<BoardConfig> {
+    return this.request<BoardConfig>(`/api/boards/${boardId}`);
+  }
+
+  async createBoard(payload: Partial<BoardConfig>): Promise<BoardConfig> {
+    const b = await this.request<BoardConfig>('/api/boards', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    this.boards.set(await this.getBoards());
+    return b;
+  }
+
+  async updateBoard(boardId: number, payload: Partial<BoardConfig>): Promise<BoardConfig> {
+    const b = await this.request<BoardConfig>(`/api/boards/${boardId}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    this.boards.set(await this.getBoards());
+    return b;
+  }
+
+  async deleteBoard(boardId: number): Promise<void> {
+    await this.request(`/api/boards/${boardId}`, { method: 'DELETE' });
+    this.boards.set(await this.getBoards());
+  }
+
+  async getBoardItems(
+    boardId: number,
+    quickFilterIds: number[] = [],
+    extraJql = ''
+  ): Promise<BoardItemsPayload> {
+    const params = new URLSearchParams();
+    if (quickFilterIds.length > 0) {
+      params.set('quick_filter_ids', quickFilterIds.join(','));
+    }
+    if (extraJql.trim()) {
+      params.set('jql', extraJql.trim());
+    }
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    return this.request<BoardItemsPayload>(`/api/boards/${boardId}/items${qs}`);
+  }
+
+  async addBoardColumn(boardId: number, payload: Partial<BoardColumn>): Promise<BoardConfig> {
+    const b = await this.request<BoardConfig>(`/api/boards/${boardId}/columns`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    this.boards.set(await this.getBoards());
+    return b;
+  }
+
+  async updateBoardColumn(colId: number, payload: Partial<BoardColumn>): Promise<BoardConfig> {
+    const b = await this.request<BoardConfig>(`/api/board-columns/${colId}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    this.boards.set(await this.getBoards());
+    return b;
+  }
+
+  async deleteBoardColumn(colId: number): Promise<BoardConfig> {
+    const b = await this.request<BoardConfig>(`/api/board-columns/${colId}`, {
+      method: 'DELETE',
+    });
+    this.boards.set(await this.getBoards());
+    return b;
+  }
+
+  async addBoardQuickFilter(
+    boardId: number,
+    payload: Partial<BoardQuickFilter>
+  ): Promise<BoardConfig> {
+    const b = await this.request<BoardConfig>(`/api/boards/${boardId}/quick-filters`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    this.boards.set(await this.getBoards());
+    return b;
+  }
+
+  async deleteBoardQuickFilter(qfId: number): Promise<BoardConfig> {
+    const b = await this.request<BoardConfig>(`/api/board-quick-filters/${qfId}`, {
+      method: 'DELETE',
+    });
+    this.boards.set(await this.getBoards());
+    return b;
+  }
+
+  async addBoardSwimlane(boardId: number, payload: Partial<BoardSwimlane>): Promise<BoardConfig> {
+    const b = await this.request<BoardConfig>(`/api/boards/${boardId}/swimlanes`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    this.boards.set(await this.getBoards());
+    return b;
+  }
+
+  async deleteBoardSwimlane(swId: number): Promise<BoardConfig> {
+    const b = await this.request<BoardConfig>(`/api/board-swimlanes/${swId}`, {
+      method: 'DELETE',
+    });
+    this.boards.set(await this.getBoards());
+    return b;
+  }
+
+  async startSprint(
+    sprintId: number,
+    payload: {
+      name?: string;
+      goal?: string;
+      start_date?: string;
+      end_date?: string;
+      move_backlog_to_todo?: boolean;
+    }
+  ): Promise<any> {
+    const res = await this.request(`/api/sprints/${sprintId}/start`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    this.sprints.set(await this.getSprints());
+    return res;
+  }
+
+  async completeSprint(
+    sprintId: number,
+    payload: {
+      rollover_target: 'backlog' | 'sprint' | 'new_sprint';
+      target_sprint_id?: number;
+      next_sprint_name?: string;
+      activate_target_sprint?: boolean;
+    }
+  ): Promise<CompleteSprintResponse> {
+    const res = await this.request<CompleteSprintResponse>(`/api/sprints/${sprintId}/complete`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    this.sprints.set(await this.getSprints());
+    return res;
+  }
+
+  async rankItems(payload: {
+    item_id?: number;
+    item_ids?: number[];
+    sprint_id?: number | null;
+    parent_id?: number | null;
+    fix_version_id?: number | null;
+    ordered_item_ids?: number[];
+    board_order?: number;
+  }): Promise<any> {
+    return this.request('/api/items/rank', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
   }
 }

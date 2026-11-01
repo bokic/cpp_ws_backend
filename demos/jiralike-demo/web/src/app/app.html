@@ -8,11 +8,12 @@
         </a>
 
         <nav class="nav-links">
-          <a routerLink="/board" routerLinkActive="active">Kanban Board</a>
+          <a routerLink="/board" routerLinkActive="active">Agile Boards</a>
+          <a routerLink="/backlog" routerLinkActive="active">Agile Backlog</a>
           <a routerLink="/search" routerLinkActive="active">Search &amp; JQL</a>
           <a routerLink="/gantt" routerLinkActive="active">Gantt</a>
           <a routerLink="/states" routerLinkActive="active">States</a>
-          <a routerLink="/workflows" routerLinkActive="active">Backlog &amp; Workflows</a>
+          <a routerLink="/workflows" routerLinkActive="active">Workflows</a>
           <a routerLink="/project-settings" routerLinkActive="active">Releases &amp; Components</a>
           <a routerLink="/custom-fields" routerLinkActive="active">Custom Fields &amp; Screens</a>
           @if (user.role === 'Admin') {

@@ -17,6 +17,7 @@ export const routes: Routes = [
   { path: 'setup', component: SetupComponent },
   { path: 'login', component: LoginComponent },
   { path: 'board', component: BoardComponent },
+  { path: 'backlog', component: BoardComponent },
   { path: 'search', component: SearchComponent },
   { path: 'gantt', component: GanttComponent },
   { path: 'states', component: StatesComponent },

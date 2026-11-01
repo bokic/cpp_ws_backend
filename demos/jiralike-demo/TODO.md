@@ -269,21 +269,21 @@ This document provides a comprehensive gap analysis and exhaustive development r
 ## 5. Epic 4: Agile Boards, Scrum & Kanban Parity
 
 ### 5.1 Multi-Board Architecture
-- [ ] **Boards Configuration Table (`boards`, `board_columns`, `board_swimlanes`, `board_quick_filters`)**:
+- [x] **Boards Configuration Table (`boards`, `board_columns`, `board_swimlanes`, `board_quick_filters`)**:
   - Support multiple boards per project, as well as cross-project boards powered by saved JQL filter queries.
   - Board Types:
     - **Scrum Board**: Backlog planning, active sprint tracking, sprint completion.
     - **Kanban Board**: Continuous flow, WIP limits, backlog column.
 
 ### 5.2 Agile Backlog & Sprint Planning View
-- [ ] **Split-View Backlog Page**:
+- [x] **Split-View Backlog Page**:
   - Top section: **Active / Upcoming Sprints** collapsible buckets with issue counts and story point rollups.
   - Bottom section: **Backlog** containing unassigned work items.
   - **Drag-and-Drop Reordering**: Move cards between Backlog and Sprints, and rank items up/down.
-- [ ] **Side Panels**:
+- [x] **Side Panels**:
   - **Epic Panel**: List project Epics with progress bars; drag items onto an Epic to associate them.
   - **Version Panel**: List unreleased versions; drag items to assign Fix Version.
-- [ ] **Sprint Lifecycle Management**:
+- [x] **Sprint Lifecycle Management**:
   - **Start Sprint Dialog**: Set Sprint Name, Duration (1, 2, 3, 4 weeks or custom), Start Date, End Date, and Sprint Goal.
   - **Complete Sprint Dialog**:
     - Display completed issues and remaining uncompleted issues.
@@ -291,21 +291,21 @@ This document provides a comprehensive gap analysis and exhaustive development r
     - Record sprint velocity and close sprint.
 
 ### 5.3 Board Customization & Controls
-- [ ] **Column-to-Status Mapping**:
+- [x] **Column-to-Status Mapping**:
   - Allow multiple workflow statuses to map into a single board column (e.g. "In Code Review" and "QA" $\rightarrow$ "Review" column).
-- [ ] **WIP Limits (Work In Progress)**:
+- [x] **WIP Limits (Work In Progress)**:
   - Configure Min and Max issue limits per column.
   - Visual warnings (highlight column header red/yellow) when WIP limits are violated.
-- [ ] **Configurable Swimlanes**:
+- [x] **Configurable Swimlanes**:
   - Swimlane strategies:
     - *By Epic*: Group rows by parent Epic.
     - *By Assignee*: Group rows by assigned team member.
     - *By Story*: Subtasks grouped under their parent Story card.
     - *By Custom JQL*: Define custom swimlanes (e.g., Expedite: `priority in ("Highest", "Critical")`).
-- [ ] **Card Customization & Layout**:
+- [x] **Card Customization & Layout**:
   - Configure up to 3 extra fields displayed on cards (e.g., Due Date, Components, Story Points).
   - Card Color Rules: Assign left-edge color strips based on JQL criteria or Priority.
-- [ ] **Quick Filters**:
+- [x] **Quick Filters**:
   - Buttons above the board for instant 1-click filtering (e.g., "Only My Issues", "Recently Updated", "Blocked").
 
 ---
@@ -768,17 +768,17 @@ flowchart TD
   - [x] Saved Filters drawer: Star, share, and manage favorite filters.
 - **Verification**: Complex queries like `project = "PROJ" AND status in ("In Progress", "In Review") AND summary ~ "auth" ORDER BY priority DESC` return correct results with sub-10ms response times.
 
-#### Step 6: Scrum & Kanban Multi-Board Engine with Agile Backlog Planning
+#### Step 6: Scrum & Kanban Multi-Board Engine with Agile Backlog Planning *(Completed)*
 - **Why Next**: Powered by JQL filter queries from Step 5 and directed transitions from Step 4.
 - **Backend Deliverables**:
-  - Database Migration: Create `boards`, `board_columns`, `board_swimlanes`, `board_quick_filters`.
-  - Column status mapping: Store many-to-one mapping between workflow statuses and board columns.
-  - Sprint lifecycle APIs: Start Sprint, Edit Sprint, and Complete Sprint (with incomplete issue rollover logic).
+  - [x] Database Migration: Create `boards`, `board_columns`, `board_swimlanes`, `board_quick_filters`.
+  - [x] Column status mapping: Store many-to-one mapping between workflow statuses and board columns.
+  - [x] Sprint lifecycle APIs: Start Sprint, Edit Sprint, and Complete Sprint (with incomplete issue rollover logic).
 - **Frontend Deliverables**:
-  - Multi-Board Selector: Create and switch between multiple Scrum and Kanban boards per project.
-  - Dedicated Agile Backlog View: Split-pane interface with draggable sprint buckets and backlog ranking.
-  - Board Customizer: Column WIP limit indicator (visual red alert on overflow), custom swimlanes (by Epic, Assignee, or JQL), and Quick Filter pills.
-  - Complete Sprint Dialog: Summary modal rolling over uncompleted issues to Backlog or Next Sprint.
+  - [x] Multi-Board Selector: Create and switch between multiple Scrum and Kanban boards per project.
+  - [x] Dedicated Agile Backlog View: Split-pane interface with draggable sprint buckets and backlog ranking.
+  - [x] Board Customizer: Column WIP limit indicator (visual red alert on overflow), custom swimlanes (by Epic, Assignee, or JQL), and Quick Filter pills.
+  - [x] Complete Sprint Dialog: Summary modal rolling over uncompleted issues to Backlog or Next Sprint.
 - **Verification**: Dragging a card across columns executes the underlying workflow transition screen if required; completing a sprint updates sprint velocity accurately.
 
 #### Step 7: Time Tracking & Worklogs Subsystem

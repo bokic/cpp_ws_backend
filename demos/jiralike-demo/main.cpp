@@ -447,6 +447,22 @@ static void seed_demo_workspace(db::sqlite_db &conn, int admin_id, int project_i
         "2026-10-26", "2026-11-03", "", "", "improvement,performance,sqlite"
     );
 
+    create_item(
+        "Story", "New Feature", "Backlog", "High",
+        "Multi-Board Scrum & Kanban Swimlane Engine",
+        "Support configurable column-to-status mappings, WIP limits, JQL quick filters, and Agile Backlog sprint planning.",
+        epic2, 0, marcus_id, sarah_id, 8, 0,
+        "2026-11-10", "2026-11-24", "", "", "agile,board,scrum,kanban"
+    );
+
+    create_item(
+        "Task", "Improvement", "Backlog", "Medium",
+        "Automated Sprint Velocity & Incomplete Issue Rollover",
+        "Calculate committed vs completed story points when completing a sprint and roll over unfinished work items.",
+        epic1, 0, 0, admin_id, 5, 0,
+        "2026-11-12", "2026-11-26", "", "", "sprint,velocity,backlog"
+    );
+
     // Update project's issue_seq
     auto upd_proj = conn.prepare("UPDATE projects SET issue_seq = ? WHERE id = ?;");
     upd_proj.bind_int(1, seq);
@@ -636,6 +652,12 @@ static void seed_demo_workspace(db::sqlite_db &conn, int admin_id, int project_i
         INSERT OR IGNORE INTO custom_field_values (work_item_id, custom_field_id, json_value, text_value)
         SELECT w.id, 9, '["Linux x86_64","Docker / Kubernetes"]', 'Linux x86_64, Docker / Kubernetes'
         FROM work_items w;
+
+        UPDATE sprints
+        SET committed_points = COALESCE((SELECT SUM(w.story_points) FROM work_items w WHERE w.sprint_id = sprints.id), 0),
+            completed_points = COALESCE((SELECT SUM(w.story_points) FROM work_items w WHERE w.sprint_id = sprints.id AND w.status = 'Done'), 0),
+            completed_items_count = COALESCE((SELECT COUNT(*) FROM work_items w WHERE w.sprint_id = sprints.id AND w.status = 'Done'), 0),
+            incomplete_items_count = COALESCE((SELECT COUNT(*) FROM work_items w WHERE w.sprint_id = sprints.id AND w.status != 'Done'), 0);
     )SQL");
 }
 
@@ -4174,13 +4196,22 @@ static void handle_sprints(backend::wsworker *worker,
                    s.is_current,
                    (SELECT COUNT(*) FROM work_items w WHERE w.sprint_id = s.id) AS item_count,
                    (SELECT COUNT(*) FROM work_items w WHERE w.sprint_id = s.id AND w.status = 'Done') AS done_count,
-                   (SELECT COALESCE(SUM(w.story_points), 0) FROM work_items w WHERE w.sprint_id = s.id) AS total_points
+                   (SELECT COALESCE(SUM(w.story_points), 0) FROM work_items w WHERE w.sprint_id = s.id) AS total_points,
+                   COALESCE(s.completed_at, ''),
+                   s.committed_points,
+                   s.completed_points,
+                   s.completed_items_count,
+                   s.incomplete_items_count,
+                   COALESCE(s.rollover_target_sprint_id, 0),
+                   (SELECT COUNT(*) FROM work_items w WHERE w.sprint_id = s.id AND w.status IN ('Backlog', 'To Do')) AS todo_count,
+                   (SELECT COUNT(*) FROM work_items w WHERE w.sprint_id = s.id AND w.status NOT IN ('Backlog', 'To Do', 'Done')) AS in_progress_count,
+                   (SELECT COALESCE(SUM(w.story_points), 0) FROM work_items w WHERE w.sprint_id = s.id AND w.status = 'Done') AS live_done_points
             FROM sprints s
         )SQL";
         if (project_id > 0) {
             sql += " WHERE s.project_id = ? ";
         }
-        sql += " ORDER BY s.is_current DESC, s.id ASC;";
+        sql += " ORDER BY s.is_current DESC, CASE s.status WHEN 'active' THEN 0 WHEN 'planned' THEN 1 ELSE 2 END, s.id ASC;";
 
         auto stmt = conn.prepare(sql);
         if (project_id > 0) stmt.bind_int(1, project_id);
@@ -4188,18 +4219,37 @@ static void handle_sprints(backend::wsworker *worker,
         auto arr = json::json_value::make_array();
         while (stmt.step() == SQLITE_ROW) {
             auto s = json::json_value::make_object();
+            std::string st = stmt.column_str(4);
+            int item_cnt = stmt.column_int(9);
+            int done_cnt = stmt.column_int(10);
+            int tot_pts = stmt.column_int(11);
+            int comm_pts = stmt.column_int(13);
+            int comp_pts = stmt.column_int(14);
+            int comp_items = stmt.column_int(15);
+            int incomp_items = stmt.column_int(16);
+            int live_done_pts = stmt.column_int(20);
+
             s.add_int("id", stmt.column_int(0));
             s.add_int("project_id", stmt.column_int(1));
             s.add_str("name", stmt.column_str(2));
             s.add_str("goal", stmt.column_str(3));
-            s.add_str("status", stmt.column_str(4));
+            s.add_str("status", st);
             s.add_str("start_date", stmt.column_str(5));
             s.add_str("end_date", stmt.column_str(6));
             s.add_str("created_at", stmt.column_str(7));
             s.add_bool("is_current", stmt.column_int(8) != 0);
-            s.add_int("item_count", stmt.column_int(9));
-            s.add_int("done_count", stmt.column_int(10));
-            s.add_int("total_points", stmt.column_int(11));
+            s.add_int("item_count", st == "closed" && (comp_items + incomp_items) > 0 && item_cnt == 0 ? (comp_items + incomp_items) : item_cnt);
+            s.add_int("done_count", st == "closed" && comp_items > 0 && done_cnt == 0 ? comp_items : done_cnt);
+            s.add_int("total_points", st == "closed" && comm_pts > 0 && tot_pts == 0 ? comm_pts : tot_pts);
+            s.add_str("completed_at", stmt.column_str(12));
+            s.add_int("committed_points", comm_pts > 0 ? comm_pts : tot_pts);
+            s.add_int("completed_points", st == "closed" ? comp_pts : live_done_pts);
+            s.add_int("completed_items_count", st == "closed" ? comp_items : done_cnt);
+            s.add_int("incomplete_items_count", st == "closed" ? incomp_items : (item_cnt - done_cnt));
+            s.add_nullable_int("rollover_target_sprint_id", stmt.column_int(17));
+            s.add_int("todo_count", stmt.column_int(18));
+            s.add_int("in_progress_count", stmt.column_int(19));
+            s.add_int("done_points", st == "closed" ? comp_pts : live_done_pts);
             arr.add(std::move(s));
         }
         send_json(worker, header, "200 OK", arr);
@@ -5981,6 +6031,1436 @@ static void handle_delete_filter_subscription(backend::wsworker *worker,
     send_json(worker, header, "200 OK", res);
 }
 
+// ============================================================================
+// Step 6: Scrum & Kanban Multi-Board Engine + Agile Backlog & Sprint Lifecycle
+// ============================================================================
+
+static std::vector<std::string> split_csv_trimmed(const std::string &csv) {
+    std::vector<std::string> out;
+    std::istringstream iss(csv);
+    std::string token;
+    while (std::getline(iss, token, ',')) {
+        size_t s = token.find_first_not_of(" \t\r\n");
+        size_t e = token.find_last_not_of(" \t\r\n");
+        if (s != std::string::npos && e != std::string::npos) {
+            out.push_back(token.substr(s, e - s + 1));
+        }
+    }
+    return out;
+}
+
+static std::string extract_statuses_csv_from_json(const json::json_value &obj, const std::string &fallback = "To Do") {
+    std::string csv = obj.get_string("mapped_statuses");
+    if (!csv.empty()) return csv;
+
+    json_object *arr_obj = nullptr;
+    if (json_object_object_get_ex(obj.get(), "statuses", &arr_obj) && arr_obj && json_object_is_type(arr_obj, json_type_array)) {
+        std::ostringstream oss;
+        size_t n = json_object_array_length(arr_obj);
+        for (size_t i = 0; i < n; ++i) {
+            json_object *el = json_object_array_get_idx(arr_obj, i);
+            if (el && !json_object_is_type(el, json_type_null)) {
+                const char *s = json_object_get_string(el);
+                if (s && *s) {
+                    if (oss.tellp() > 0) oss << ",";
+                    oss << s;
+                }
+            }
+        }
+        std::string built = oss.str();
+        if (!built.empty()) return built;
+    }
+    return fallback;
+}
+
+static json::json_value build_board_json(db::sqlite_db &conn, int board_id) {
+    auto stmt = conn.prepare(R"SQL(
+        SELECT b.id, COALESCE(b.project_id, 1), b.name, b.board_type, COALESCE(b.filter_jql, ''),
+               b.swimlane_strategy, COALESCE(b.card_extra_fields, ''), b.card_color_strategy,
+               b.show_backlog_column, b.is_default, b.created_at, b.updated_at,
+               COALESCE(p.key, 'JIRA'), COALESCE(p.name, 'Core Platform Development')
+        FROM boards b
+        LEFT JOIN projects p ON p.id = b.project_id
+        WHERE b.id = ?;
+    )SQL");
+    stmt.bind_int(1, board_id);
+    if (stmt.step() != SQLITE_ROW) {
+        return json::json_value(nullptr);
+    }
+
+    auto b = json::json_value::make_object();
+    b.add_int("id", stmt.column_int(0));
+    b.add_int("project_id", stmt.column_int(1));
+    b.add_str("name", stmt.column_str(2));
+    b.add_str("board_type", stmt.column_str(3));
+    b.add_str("filter_jql", stmt.column_str(4));
+    b.add_str("swimlane_strategy", stmt.column_str(5));
+    std::string extra_csv = stmt.column_str(6);
+    b.add_str("card_extra_fields", extra_csv);
+    auto extra_arr = json::json_value::make_array();
+    for (const auto &ef : split_csv_trimmed(extra_csv)) {
+        extra_arr.add(json::json_value::make_string(ef));
+    }
+    b.add("card_extra_fields_list", std::move(extra_arr));
+    b.add_str("card_color_strategy", stmt.column_str(7));
+    b.add_bool("show_backlog_column", stmt.column_int(8) != 0);
+    b.add_bool("is_default", stmt.column_int(9) != 0);
+    b.add_str("created_at", stmt.column_str(10));
+    b.add_str("updated_at", stmt.column_str(11));
+    b.add_str("project_key", stmt.column_str(12));
+    b.add_str("project_name", stmt.column_str(13));
+    stmt.reset();
+
+    // Columns
+    auto col_stmt = conn.prepare(R"SQL(
+        SELECT id, board_id, name, mapped_statuses, min_wip, max_wip, color, sort_order
+        FROM board_columns
+        WHERE board_id = ?
+        ORDER BY sort_order ASC, id ASC;
+    )SQL");
+    col_stmt.bind_int(1, board_id);
+    auto cols = json::json_value::make_array();
+    while (col_stmt.step() == SQLITE_ROW) {
+        auto c = json::json_value::make_object();
+        c.add_int("id", col_stmt.column_int(0));
+        c.add_int("board_id", col_stmt.column_int(1));
+        c.add_str("name", col_stmt.column_str(2));
+        std::string m_csv = col_stmt.column_str(3);
+        c.add_str("mapped_statuses", m_csv);
+        auto st_arr = json::json_value::make_array();
+        for (const auto &st : split_csv_trimmed(m_csv)) {
+            st_arr.add(json::json_value::make_string(st));
+        }
+        c.add("statuses", std::move(st_arr));
+        c.add_int("min_wip", col_stmt.column_int(4));
+        c.add_int("max_wip", col_stmt.column_int(5));
+        c.add_str("color", col_stmt.column_str(6));
+        c.add_int("sort_order", col_stmt.column_int(7));
+        cols.add(std::move(c));
+    }
+    b.add("columns", std::move(cols));
+
+    // Quick filters
+    auto qf_stmt = conn.prepare(R"SQL(
+        SELECT id, board_id, name, jql_query, COALESCE(description, ''), sort_order
+        FROM board_quick_filters
+        WHERE board_id = ?
+        ORDER BY sort_order ASC, id ASC;
+    )SQL");
+    qf_stmt.bind_int(1, board_id);
+    auto qfs = json::json_value::make_array();
+    while (qf_stmt.step() == SQLITE_ROW) {
+        auto qf = json::json_value::make_object();
+        qf.add_int("id", qf_stmt.column_int(0));
+        qf.add_int("board_id", qf_stmt.column_int(1));
+        qf.add_str("name", qf_stmt.column_str(2));
+        qf.add_str("jql_query", qf_stmt.column_str(3));
+        qf.add_str("description", qf_stmt.column_str(4));
+        qf.add_int("sort_order", qf_stmt.column_int(5));
+        qfs.add(std::move(qf));
+    }
+    b.add("quick_filters", std::move(qfs));
+
+    // Custom JQL Swimlanes
+    auto sw_stmt = conn.prepare(R"SQL(
+        SELECT id, board_id, name, COALESCE(description, ''), jql_query, sort_order
+        FROM board_swimlanes
+        WHERE board_id = ?
+        ORDER BY sort_order ASC, id ASC;
+    )SQL");
+    sw_stmt.bind_int(1, board_id);
+    auto sws = json::json_value::make_array();
+    while (sw_stmt.step() == SQLITE_ROW) {
+        auto sw = json::json_value::make_object();
+        sw.add_int("id", sw_stmt.column_int(0));
+        sw.add_int("board_id", sw_stmt.column_int(1));
+        sw.add_str("name", sw_stmt.column_str(2));
+        sw.add_str("description", sw_stmt.column_str(3));
+        sw.add_str("jql_query", sw_stmt.column_str(4));
+        sw.add_int("sort_order", sw_stmt.column_int(5));
+        sws.add(std::move(sw));
+    }
+    b.add("swimlanes", std::move(sws));
+
+    return b;
+}
+
+// GET | POST /api/boards
+static void handle_boards(backend::wsworker *worker,
+                          const std::map<std::string, std::string> &header,
+                          const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+        int project_id = std::atoi(args["project_id"].c_str());
+
+        std::string sql = "SELECT id FROM boards ";
+        if (project_id > 0) {
+            sql += "WHERE project_id = ? OR project_id IS NULL ";
+        }
+        sql += "ORDER BY is_default DESC, id ASC;";
+
+        auto stmt = conn.prepare(sql);
+        if (project_id > 0) stmt.bind_int(1, project_id);
+
+        std::vector<int> ids;
+        while (stmt.step() == SQLITE_ROW) {
+            ids.push_back(stmt.column_int(0));
+        }
+        stmt.reset();
+
+        auto arr = json::json_value::make_array();
+        for (int bid : ids) {
+            auto b = build_board_json(conn, bid);
+            if (b) arr.add(std::move(b));
+        }
+        send_json(worker, header, "200 OK", arr);
+        return;
+    }
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    int project_id = body.get_int("project_id", 1);
+    std::string name = body.get_string("name");
+    std::string board_type = body.get_string("board_type", "scrum");
+    std::string filter_jql = body.get_string("filter_jql", "");
+    std::string swimlane_strategy = body.get_string("swimlane_strategy", "none");
+    std::string card_extra_fields = body.get_string("card_extra_fields", "story_points,due_date,components");
+    std::string card_color_strategy = body.get_string("card_color_strategy", "priority");
+    bool show_backlog_column = body.get_bool("show_backlog_column", board_type == "kanban");
+    bool is_default = body.get_bool("is_default", false);
+
+    if (name.empty()) {
+        send_error(worker, header, "400 Bad Request", "Board name is required");
+        return;
+    }
+    if (board_type != "scrum" && board_type != "kanban") {
+        board_type = "scrum";
+    }
+
+    if (!filter_jql.empty()) {
+        try {
+            (void)jql::JqlParser::parse_query(filter_jql);
+        } catch (const std::exception &ex) {
+            send_error(worker, header, "400 Bad Request", std::string("Invalid board filter JQL: ") + ex.what());
+            return;
+        }
+    }
+
+    int new_board_id = 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        if (is_default) {
+            auto clr = conn.prepare("UPDATE boards SET is_default = 0 WHERE project_id = ?;");
+            clr.bind_int(1, project_id);
+            clr.step_done();
+        }
+
+        auto ins = conn.prepare(R"SQL(
+            INSERT INTO boards (project_id, name, board_type, filter_jql, swimlane_strategy, card_extra_fields, card_color_strategy, show_backlog_column, is_default)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+        )SQL");
+        ins.bind_int(1, project_id);
+        ins.bind_text(2, name);
+        ins.bind_text(3, board_type);
+        ins.bind_text(4, filter_jql);
+        ins.bind_text(5, swimlane_strategy);
+        ins.bind_text(6, card_extra_fields);
+        ins.bind_text(7, card_color_strategy);
+        ins.bind_int(8, show_backlog_column ? 1 : 0);
+        ins.bind_int(9, is_default ? 1 : 0);
+        ins.step_done();
+        new_board_id = static_cast<int>(conn.last_insert_rowid());
+
+        // Seed columns from payload or defaults
+        json_object *cols_arr = nullptr;
+        auto ins_col = conn.prepare(R"SQL(
+            INSERT INTO board_columns (board_id, name, mapped_statuses, min_wip, max_wip, color, sort_order)
+            VALUES (?, ?, ?, ?, ?, ?, ?);
+        )SQL");
+        if (json_object_object_get_ex(body.get(), "columns", &cols_arr) && cols_arr && json_object_is_type(cols_arr, json_type_array) && json_object_array_length(cols_arr) > 0) {
+            size_t n = json_object_array_length(cols_arr);
+            for (size_t i = 0; i < n; ++i) {
+                json_object *el = json_object_array_get_idx(cols_arr, i);
+                if (!el || !json_object_is_type(el, json_type_object)) continue;
+                json::json_value col_v(json_object_get(el));
+                std::string cname = col_v.get_string("name", "Column");
+                std::string m_csv = extract_statuses_csv_from_json(col_v, cname);
+                int min_w = col_v.get_int("min_wip", 0);
+                int max_w = col_v.get_int("max_wip", 0);
+                std::string col_color = col_v.get_string("color", "#42526E");
+                int s_ord = col_v.get_int("sort_order", static_cast<int>((i + 1) * 10));
+
+                ins_col.clear_and_reset();
+                ins_col.bind_int(1, new_board_id);
+                ins_col.bind_text(2, cname);
+                ins_col.bind_text(3, m_csv);
+                ins_col.bind_int(4, min_w);
+                ins_col.bind_int(5, max_w);
+                ins_col.bind_text(6, col_color);
+                ins_col.bind_int(7, s_ord);
+                ins_col.step_done();
+            }
+        } else {
+            struct def_col { const char *name; const char *statuses; int min_w; int max_w; const char *color; int ord; };
+            std::vector<def_col> defs;
+            if (board_type == "kanban") {
+                defs = {
+                    {"Backlog",            "Backlog",                0, 0, "#6B778C", 10},
+                    {"Selected for Dev",   "To Do",                  0, 6, "#42526E", 20},
+                    {"In Progress",        "In Progress",            1, 4, "#0052CC", 30},
+                    {"Review & QA",        "In Review,QA / Testing", 0, 3, "#00B8D9", 40},
+                    {"Blocked",            "Blocked",                0, 2, "#DE350B", 50},
+                    {"Done",               "Done",                   0, 0, "#00875A", 60},
+                };
+            } else {
+                defs = {
+                    {"To Do",              "To Do",                  0, 0, "#42526E", 10},
+                    {"In Progress",        "In Progress",            1, 5, "#0052CC", 20},
+                    {"Review & QA",        "In Review,QA / Testing", 0, 4, "#00B8D9", 30},
+                    {"Blocked",            "Blocked",                0, 2, "#DE350B", 40},
+                    {"Done",               "Done",                   0, 0, "#00875A", 50},
+                };
+            }
+            for (const auto &d : defs) {
+                ins_col.clear_and_reset();
+                ins_col.bind_int(1, new_board_id);
+                ins_col.bind_text(2, d.name);
+                ins_col.bind_text(3, d.statuses);
+                ins_col.bind_int(4, d.min_w);
+                ins_col.bind_int(5, d.max_w);
+                ins_col.bind_text(6, d.color);
+                ins_col.bind_int(7, d.ord);
+                ins_col.step_done();
+            }
+        }
+
+        // Seed default Quick Filters for new board
+        auto ins_qf = conn.prepare(R"SQL(
+            INSERT INTO board_quick_filters (board_id, name, jql_query, description, sort_order)
+            VALUES (?, ?, ?, ?, ?);
+        )SQL");
+        struct def_qf { const char *name; const char *jql; const char *desc; int ord; };
+        std::vector<def_qf> qfs = {
+            {"Only My Issues",   "assignee = currentUser()",                    "Assigned to logged-in user", 10},
+            {"High Priority",    "priority IN (\"Critical\", \"Highest\", \"High\")", "High & Critical priority",  20},
+            {"Bugs & Defects",   "category = \"Bug\"",                          "Defect category items",     30},
+            {"Recently Updated", "updated >= startOfWeek()",                    "Updated this week",         40},
+        };
+        for (const auto &q : qfs) {
+            ins_qf.clear_and_reset();
+            ins_qf.bind_int(1, new_board_id);
+            ins_qf.bind_text(2, q.name);
+            ins_qf.bind_text(3, q.jql);
+            ins_qf.bind_text(4, q.desc);
+            ins_qf.bind_int(5, q.ord);
+            ins_qf.step_done();
+        }
+
+        // Seed default Custom JQL Swimlanes for new board
+        auto ins_sw = conn.prepare(R"SQL(
+            INSERT INTO board_swimlanes (board_id, name, description, jql_query, sort_order)
+            VALUES (?, ?, ?, ?, ?);
+        )SQL");
+        ins_sw.bind_int(1, new_board_id);
+        ins_sw.bind_text(2, "🚨 Expedite (Critical & Highest)");
+        ins_sw.bind_text(3, "Urgent high-priority work");
+        ins_sw.bind_text(4, "priority IN (\"Critical\", \"Highest\")");
+        ins_sw.bind_int(5, 10);
+        ins_sw.step_done();
+
+        ins_sw.clear_and_reset();
+        ins_sw.bind_int(1, new_board_id);
+        ins_sw.bind_text(2, "⚡ Standard Delivery");
+        ins_sw.bind_text(3, "Standard priority items");
+        ins_sw.bind_text(4, "priority NOT IN (\"Critical\", \"Highest\")");
+        ins_sw.bind_int(5, 20);
+        ins_sw.step_done();
+
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "500 Internal Server Error", ex.what());
+        return;
+    }
+
+    send_json(worker, header, "201 Created", build_board_json(conn, new_board_id));
+}
+
+// GET | PUT | DELETE /api/boards/([0-9]+)
+static void handle_board_detail(backend::wsworker *worker,
+                                const std::map<std::string, std::string> &header,
+                                const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing board ID");
+        return;
+    }
+    int board_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto b = build_board_json(conn, board_id);
+        if (!b) {
+            send_error(worker, header, "404 Not Found", "Board not found");
+            return;
+        }
+        send_json(worker, header, "200 OK", b);
+        return;
+    }
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    if (method == "DELETE") {
+        int count = 0;
+        {
+            auto cnt = conn.prepare("SELECT COUNT(*) FROM boards;");
+            if (cnt.step() == SQLITE_ROW) count = cnt.column_int(0);
+        }
+        if (count <= 1) {
+            send_error(worker, header, "400 Bad Request", "Cannot delete the last remaining board");
+            return;
+        }
+        db::sqlite_transaction tx(conn);
+        auto del = conn.prepare("DELETE FROM boards WHERE id = ?;");
+        del.bind_int(1, board_id);
+        del.step_done();
+        tx.commit();
+
+        auto res = json::json_value::make_object();
+        res.add_bool("deleted", true);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    // PUT /api/boards/:id
+    auto existing = build_board_json(conn, board_id);
+    if (!existing) {
+        send_error(worker, header, "404 Not Found", "Board not found");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    int project_id = body.get_int("project_id", existing.get_int("project_id", 1));
+    std::string name = body.get_string("name", existing.get_string("name"));
+    std::string board_type = body.get_string("board_type", existing.get_string("board_type", "scrum"));
+    std::string filter_jql = body.has_key("filter_jql") ? body.get_string("filter_jql") : existing.get_string("filter_jql");
+    std::string swimlane_strategy = body.get_string("swimlane_strategy", existing.get_string("swimlane_strategy", "none"));
+    std::string card_extra_fields = body.has_key("card_extra_fields") ? body.get_string("card_extra_fields") : existing.get_string("card_extra_fields");
+    std::string card_color_strategy = body.get_string("card_color_strategy", existing.get_string("card_color_strategy", "priority"));
+    bool show_backlog_column = body.has_key("show_backlog_column") ? body.get_bool("show_backlog_column") : existing.get_bool("show_backlog_column");
+    bool is_default = body.has_key("is_default") ? body.get_bool("is_default") : existing.get_bool("is_default");
+
+    if (!filter_jql.empty()) {
+        try {
+            (void)jql::JqlParser::parse_query(filter_jql);
+        } catch (const std::exception &ex) {
+            send_error(worker, header, "400 Bad Request", std::string("Invalid board filter JQL: ") + ex.what());
+            return;
+        }
+    }
+
+    try {
+        db::sqlite_transaction tx(conn);
+        if (is_default) {
+            auto clr = conn.prepare("UPDATE boards SET is_default = 0 WHERE project_id = ?;");
+            clr.bind_int(1, project_id);
+            clr.step_done();
+        }
+
+        auto upd = conn.prepare(R"SQL(
+            UPDATE boards
+            SET project_id = ?, name = ?, board_type = ?, filter_jql = ?,
+                swimlane_strategy = ?, card_extra_fields = ?, card_color_strategy = ?,
+                show_backlog_column = ?, is_default = ?, updated_at = datetime('now')
+            WHERE id = ?;
+        )SQL");
+        upd.bind_int(1, project_id);
+        upd.bind_text(2, name);
+        upd.bind_text(3, board_type);
+        upd.bind_text(4, filter_jql);
+        upd.bind_text(5, swimlane_strategy);
+        upd.bind_text(6, card_extra_fields);
+        upd.bind_text(7, card_color_strategy);
+        upd.bind_int(8, show_backlog_column ? 1 : 0);
+        upd.bind_int(9, is_default ? 1 : 0);
+        upd.bind_int(10, board_id);
+        upd.step_done();
+
+        json_object *cols_arr = nullptr;
+        if (json_object_object_get_ex(body.get(), "columns", &cols_arr) && cols_arr && json_object_is_type(cols_arr, json_type_array)) {
+            auto del_cols = conn.prepare("DELETE FROM board_columns WHERE board_id = ?;");
+            del_cols.bind_int(1, board_id);
+            del_cols.step_done();
+
+            auto ins_col = conn.prepare(R"SQL(
+                INSERT INTO board_columns (board_id, name, mapped_statuses, min_wip, max_wip, color, sort_order)
+                VALUES (?, ?, ?, ?, ?, ?, ?);
+            )SQL");
+            size_t n = json_object_array_length(cols_arr);
+            for (size_t i = 0; i < n; ++i) {
+                json_object *el = json_object_array_get_idx(cols_arr, i);
+                if (!el || !json_object_is_type(el, json_type_object)) continue;
+                json::json_value col_v(json_object_get(el));
+                std::string cname = col_v.get_string("name", "Column");
+                std::string m_csv = extract_statuses_csv_from_json(col_v, cname);
+                int min_w = col_v.get_int("min_wip", 0);
+                int max_w = col_v.get_int("max_wip", 0);
+                std::string col_color = col_v.get_string("color", "#42526E");
+                int s_ord = col_v.get_int("sort_order", static_cast<int>((i + 1) * 10));
+
+                ins_col.clear_and_reset();
+                ins_col.bind_int(1, board_id);
+                ins_col.bind_text(2, cname);
+                ins_col.bind_text(3, m_csv);
+                ins_col.bind_int(4, min_w);
+                ins_col.bind_int(5, max_w);
+                ins_col.bind_text(6, col_color);
+                ins_col.bind_int(7, s_ord);
+                ins_col.step_done();
+            }
+        }
+
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "500 Internal Server Error", ex.what());
+        return;
+    }
+
+    send_json(worker, header, "200 OK", build_board_json(conn, board_id));
+}
+
+// GET | POST /api/boards/([0-9]+)/items
+static void handle_board_items(backend::wsworker *worker,
+                               const std::map<std::string, std::string> &header,
+                               const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing board ID");
+        return;
+    }
+    int board_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto board_json = build_board_json(conn, board_id);
+    if (!board_json) {
+        send_error(worker, header, "404 Not Found", "Board not found");
+        return;
+    }
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    int uid = u_auth.authenticated ? u_auth.id : 1;
+    std::string uname = u_auth.authenticated ? u_auth.username : "admin";
+    std::string dname = u_auth.authenticated ? u_auth.display_name : "System Administrator";
+
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+    std::vector<int> active_qf_ids;
+    if (!args["quick_filter_ids"].empty()) {
+        for (const auto &tok : split_csv_trimmed(args["quick_filter_ids"])) {
+            int qid = std::atoi(tok.c_str());
+            if (qid > 0) active_qf_ids.push_back(qid);
+        }
+    }
+    std::string extra_jql = args["jql"];
+    if (get_header(header, "REQUEST_METHOD") == "POST" && !worker->body().empty()) {
+        auto body = json::json_value::parse(worker->body());
+        if (body) {
+            auto qf_arr = body.get_int_array("quick_filter_ids");
+            if (!qf_arr.empty()) active_qf_ids = qf_arr;
+            if (extra_jql.empty()) extra_jql = body.get_string("jql");
+        }
+    }
+
+    std::string sql = std::string(BASE_WORK_ITEM_SELECT) + " WHERE 1=1 ";
+    std::vector<std::string> bind_vals;
+
+    int project_id = board_json.get_int("project_id", 0);
+    std::string filter_jql = board_json.get_string("filter_jql");
+
+    if (project_id > 0 && filter_jql.empty()) {
+        sql += " AND w.project_id = ? ";
+        bind_vals.push_back(std::to_string(project_id));
+    }
+
+    auto append_jql_condition = [&](const std::string &jql_expr) {
+        if (jql_expr.empty()) return;
+        auto ast = jql::JqlParser::parse_query(jql_expr);
+        jql::SqlContext ctx(conn, uid, uname, dname);
+        std::string where_clause = ast.to_where_sql(ctx);
+        if (!where_clause.empty() && where_clause != "1=1") {
+            sql += " AND (" + where_clause + ") ";
+            for (const auto &p : ctx.params) {
+                bind_vals.push_back(p);
+            }
+        }
+    };
+
+    try {
+        append_jql_condition(filter_jql);
+        for (int qid : active_qf_ids) {
+            auto qstmt = conn.prepare("SELECT jql_query FROM board_quick_filters WHERE id = ? AND board_id = ?;");
+            qstmt.bind_int(1, qid);
+            qstmt.bind_int(2, board_id);
+            if (qstmt.step() == SQLITE_ROW) {
+                std::string qjql = qstmt.column_str(0);
+                qstmt.reset();
+                append_jql_condition(qjql);
+            }
+        }
+        append_jql_condition(extra_jql);
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", std::string("Board JQL filter error: ") + ex.what());
+        return;
+    }
+
+    sql += " ORDER BY w.board_order ASC, w.id ASC;";
+    auto stmt = conn.prepare(sql);
+    for (size_t i = 0; i < bind_vals.size(); ++i) {
+        stmt.bind_text(static_cast<int>(i + 1), bind_vals[i]);
+    }
+
+    auto items_arr = json::json_value::make_array();
+    while (stmt.step() == SQLITE_ROW) {
+        items_arr.add(row_to_work_item_json(conn, stmt));
+    }
+    stmt.reset();
+
+    // Evaluate custom JQL swimlanes so the frontend knows which items match each custom JQL swimlane
+    auto swimlane_matches = json::json_value::make_object();
+    {
+        auto sw_stmt = conn.prepare("SELECT id, jql_query FROM board_swimlanes WHERE board_id = ? ORDER BY sort_order ASC, id ASC;");
+        sw_stmt.bind_int(1, board_id);
+        std::vector<std::pair<int, std::string>> lanes;
+        while (sw_stmt.step() == SQLITE_ROW) {
+            lanes.emplace_back(sw_stmt.column_int(0), sw_stmt.column_str(1));
+        }
+        sw_stmt.reset();
+
+        for (const auto &[lane_id, lane_jql] : lanes) {
+            auto id_arr = json::json_value::make_array();
+            try {
+                auto ast = jql::JqlParser::parse_query(lane_jql);
+                jql::SqlContext ctx(conn, uid, uname, dname);
+                std::string lsql = "SELECT w.id FROM work_items w WHERE (" + ast.to_where_sql(ctx) + ");";
+                auto lstmt = conn.prepare(lsql);
+                for (size_t i = 0; i < ctx.params.size(); ++i) {
+                    lstmt.bind_text(static_cast<int>(i + 1), ctx.params[i]);
+                }
+                while (lstmt.step() == SQLITE_ROW) {
+                    json_object_array_add(id_arr.get(), json_object_new_int(lstmt.column_int(0)));
+                }
+            } catch (...) {
+                // ignore invalid swimlane JQL
+            }
+            swimlane_matches.add(std::to_string(lane_id).c_str(), std::move(id_arr));
+        }
+    }
+
+    auto out = json::json_value::make_object();
+    out.add("board", std::move(board_json));
+    out.add("items", std::move(items_arr));
+    out.add("swimlane_matches", std::move(swimlane_matches));
+    send_json(worker, header, "200 OK", out);
+}
+
+// POST /api/boards/([0-9]+)/columns
+static void handle_board_columns(backend::wsworker *worker,
+                                 const std::map<std::string, std::string> &header,
+                                 const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing board ID");
+        return;
+    }
+    int board_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string name = body.get_string("name");
+    std::string mapped_statuses = extract_statuses_csv_from_json(body, name);
+    int min_wip = body.get_int("min_wip", 0);
+    int max_wip = body.get_int("max_wip", 0);
+    std::string color = body.get_string("color", "#42526E");
+    int sort_order = body.get_int("sort_order", 100);
+
+    if (name.empty() || mapped_statuses.empty()) {
+        send_error(worker, header, "400 Bad Request", "Column name and mapped_statuses are required");
+        return;
+    }
+
+    try {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare(R"SQL(
+            INSERT INTO board_columns (board_id, name, mapped_statuses, min_wip, max_wip, color, sort_order)
+            VALUES (?, ?, ?, ?, ?, ?, ?);
+        )SQL");
+        ins.bind_int(1, board_id);
+        ins.bind_text(2, name);
+        ins.bind_text(3, mapped_statuses);
+        ins.bind_int(4, min_wip);
+        ins.bind_int(5, max_wip);
+        ins.bind_text(6, color);
+        ins.bind_int(7, sort_order);
+        ins.step_done();
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "500 Internal Server Error", ex.what());
+        return;
+    }
+
+    send_json(worker, header, "201 Created", build_board_json(conn, board_id));
+}
+
+// PUT | DELETE /api/board-columns/([0-9]+)
+static void handle_board_column_detail(backend::wsworker *worker,
+                                       const std::map<std::string, std::string> &header,
+                                       const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing column ID");
+        return;
+    }
+    int col_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    int board_id = 0;
+    {
+        auto q = conn.prepare("SELECT board_id FROM board_columns WHERE id = ?;");
+        q.bind_int(1, col_id);
+        if (q.step() == SQLITE_ROW) board_id = q.column_int(0);
+    }
+    if (board_id <= 0) {
+        send_error(worker, header, "404 Not Found", "Board column not found");
+        return;
+    }
+
+    std::string method = get_header(header, "REQUEST_METHOD");
+    if (method == "DELETE") {
+        db::sqlite_transaction tx(conn);
+        auto del = conn.prepare("DELETE FROM board_columns WHERE id = ?;");
+        del.bind_int(1, col_id);
+        del.step_done();
+        tx.commit();
+        send_json(worker, header, "200 OK", build_board_json(conn, board_id));
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string name = body.get_string("name");
+    std::string mapped_statuses = extract_statuses_csv_from_json(body, name);
+    int min_wip = body.get_int("min_wip", 0);
+    int max_wip = body.get_int("max_wip", 0);
+    std::string color = body.get_string("color", "#42526E");
+    int sort_order = body.get_int("sort_order", 100);
+
+    if (name.empty()) {
+        send_error(worker, header, "400 Bad Request", "Column name is required");
+        return;
+    }
+
+    try {
+        db::sqlite_transaction tx(conn);
+        auto upd = conn.prepare(R"SQL(
+            UPDATE board_columns
+            SET name = ?, mapped_statuses = ?, min_wip = ?, max_wip = ?, color = ?, sort_order = ?
+            WHERE id = ?;
+        )SQL");
+        upd.bind_text(1, name);
+        upd.bind_text(2, mapped_statuses);
+        upd.bind_int(3, min_wip);
+        upd.bind_int(4, max_wip);
+        upd.bind_text(5, color);
+        upd.bind_int(6, sort_order);
+        upd.bind_int(7, col_id);
+        upd.step_done();
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "500 Internal Server Error", ex.what());
+        return;
+    }
+
+    send_json(worker, header, "200 OK", build_board_json(conn, board_id));
+}
+
+// POST /api/boards/([0-9]+)/quick-filters
+static void handle_board_quick_filters(backend::wsworker *worker,
+                                       const std::map<std::string, std::string> &header,
+                                       const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing board ID");
+        return;
+    }
+    int board_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string name = body.get_string("name");
+    std::string jql_query = body.get_string("jql_query");
+    std::string description = body.get_string("description");
+    int sort_order = body.get_int("sort_order", 100);
+
+    if (name.empty() || jql_query.empty()) {
+        send_error(worker, header, "400 Bad Request", "Quick filter name and jql_query are required");
+        return;
+    }
+
+    try {
+        (void)jql::JqlParser::parse_query(jql_query);
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", std::string("Invalid JQL in quick filter: ") + ex.what());
+        return;
+    }
+
+    try {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare(R"SQL(
+            INSERT INTO board_quick_filters (board_id, name, jql_query, description, sort_order)
+            VALUES (?, ?, ?, ?, ?);
+        )SQL");
+        ins.bind_int(1, board_id);
+        ins.bind_text(2, name);
+        ins.bind_text(3, jql_query);
+        ins.bind_text(4, description);
+        ins.bind_int(5, sort_order);
+        ins.step_done();
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "500 Internal Server Error", ex.what());
+        return;
+    }
+
+    send_json(worker, header, "201 Created", build_board_json(conn, board_id));
+}
+
+// PUT | DELETE /api/board-quick-filters/([0-9]+)
+static void handle_board_quick_filter_detail(backend::wsworker *worker,
+                                             const std::map<std::string, std::string> &header,
+                                             const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing quick filter ID");
+        return;
+    }
+    int qf_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    int board_id = 0;
+    {
+        auto q = conn.prepare("SELECT board_id FROM board_quick_filters WHERE id = ?;");
+        q.bind_int(1, qf_id);
+        if (q.step() == SQLITE_ROW) board_id = q.column_int(0);
+    }
+    if (board_id <= 0) {
+        send_error(worker, header, "404 Not Found", "Quick filter not found");
+        return;
+    }
+
+    if (get_header(header, "REQUEST_METHOD") == "DELETE") {
+        db::sqlite_transaction tx(conn);
+        auto del = conn.prepare("DELETE FROM board_quick_filters WHERE id = ?;");
+        del.bind_int(1, qf_id);
+        del.step_done();
+        tx.commit();
+        send_json(worker, header, "200 OK", build_board_json(conn, board_id));
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string name = body.get_string("name");
+    std::string jql_query = body.get_string("jql_query");
+    std::string description = body.get_string("description");
+    int sort_order = body.get_int("sort_order", 100);
+
+    try {
+        (void)jql::JqlParser::parse_query(jql_query);
+        db::sqlite_transaction tx(conn);
+        auto upd = conn.prepare(R"SQL(
+            UPDATE board_quick_filters
+            SET name = ?, jql_query = ?, description = ?, sort_order = ?
+            WHERE id = ?;
+        )SQL");
+        upd.bind_text(1, name);
+        upd.bind_text(2, jql_query);
+        upd.bind_text(3, description);
+        upd.bind_int(4, sort_order);
+        upd.bind_int(5, qf_id);
+        upd.step_done();
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    send_json(worker, header, "200 OK", build_board_json(conn, board_id));
+}
+
+// POST /api/boards/([0-9]+)/swimlanes
+static void handle_board_swimlanes(backend::wsworker *worker,
+                                   const std::map<std::string, std::string> &header,
+                                   const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing board ID");
+        return;
+    }
+    int board_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string name = body.get_string("name");
+    std::string description = body.get_string("description");
+    std::string jql_query = body.get_string("jql_query");
+    int sort_order = body.get_int("sort_order", 100);
+
+    if (name.empty() || jql_query.empty()) {
+        send_error(worker, header, "400 Bad Request", "Swimlane name and jql_query are required");
+        return;
+    }
+
+    try {
+        (void)jql::JqlParser::parse_query(jql_query);
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare(R"SQL(
+            INSERT INTO board_swimlanes (board_id, name, description, jql_query, sort_order)
+            VALUES (?, ?, ?, ?, ?);
+        )SQL");
+        ins.bind_int(1, board_id);
+        ins.bind_text(2, name);
+        ins.bind_text(3, description);
+        ins.bind_text(4, jql_query);
+        ins.bind_int(5, sort_order);
+        ins.step_done();
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    send_json(worker, header, "201 Created", build_board_json(conn, board_id));
+}
+
+// PUT | DELETE /api/board-swimlanes/([0-9]+)
+static void handle_board_swimlane_detail(backend::wsworker *worker,
+                                         const std::map<std::string, std::string> &header,
+                                         const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing swimlane ID");
+        return;
+    }
+    int sw_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    int board_id = 0;
+    {
+        auto q = conn.prepare("SELECT board_id FROM board_swimlanes WHERE id = ?;");
+        q.bind_int(1, sw_id);
+        if (q.step() == SQLITE_ROW) board_id = q.column_int(0);
+    }
+    if (board_id <= 0) {
+        send_error(worker, header, "404 Not Found", "Swimlane not found");
+        return;
+    }
+
+    if (get_header(header, "REQUEST_METHOD") == "DELETE") {
+        db::sqlite_transaction tx(conn);
+        auto del = conn.prepare("DELETE FROM board_swimlanes WHERE id = ?;");
+        del.bind_int(1, sw_id);
+        del.step_done();
+        tx.commit();
+        send_json(worker, header, "200 OK", build_board_json(conn, board_id));
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string name = body.get_string("name");
+    std::string description = body.get_string("description");
+    std::string jql_query = body.get_string("jql_query");
+    int sort_order = body.get_int("sort_order", 100);
+
+    try {
+        (void)jql::JqlParser::parse_query(jql_query);
+        db::sqlite_transaction tx(conn);
+        auto upd = conn.prepare(R"SQL(
+            UPDATE board_swimlanes
+            SET name = ?, description = ?, jql_query = ?, sort_order = ?
+            WHERE id = ?;
+        )SQL");
+        upd.bind_text(1, name);
+        upd.bind_text(2, description);
+        upd.bind_text(3, jql_query);
+        upd.bind_int(4, sort_order);
+        upd.bind_int(5, sw_id);
+        upd.step_done();
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    send_json(worker, header, "200 OK", build_board_json(conn, board_id));
+}
+
+// POST /api/sprints/([0-9]+)/start
+static void handle_sprint_start(backend::wsworker *worker,
+                                const std::map<std::string, std::string> &header,
+                                const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing sprint ID");
+        return;
+    }
+    int sprint_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    int project_id = 1;
+    std::string cur_name, cur_goal, cur_start, cur_end;
+    {
+        auto q = conn.prepare("SELECT project_id, name, goal, start_date, end_date FROM sprints WHERE id = ?;");
+        q.bind_int(1, sprint_id);
+        if (q.step() != SQLITE_ROW) {
+            send_error(worker, header, "404 Not Found", "Sprint not found");
+            return;
+        }
+        project_id = q.column_int(0);
+        cur_name = q.column_str(1);
+        cur_goal = q.column_str(2);
+        cur_start = q.column_str(3);
+        cur_end = q.column_str(4);
+    }
+
+    auto body = worker->body().empty() ? json::json_value::make_object() : json::json_value::parse(worker->body());
+    if (!body) body = json::json_value::make_object();
+
+    std::string name = body.get_string("name", cur_name);
+    std::string goal = body.has_key("goal") ? body.get_string("goal") : cur_goal;
+    std::string start_date = body.get_string("start_date", cur_start);
+    std::string end_date = body.get_string("end_date", cur_end);
+    bool move_backlog_to_todo = body.get_bool("move_backlog_to_todo", true);
+
+    int committed_pts = 0;
+    int item_cnt = 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        {
+            auto pts = conn.prepare("SELECT COUNT(*), COALESCE(SUM(story_points), 0) FROM work_items WHERE sprint_id = ?;");
+            pts.bind_int(1, sprint_id);
+            if (pts.step() == SQLITE_ROW) {
+                item_cnt = pts.column_int(0);
+                committed_pts = pts.column_int(1);
+            }
+        }
+
+        auto clr = conn.prepare("UPDATE sprints SET is_current = 0 WHERE project_id = ?;");
+        clr.bind_int(1, project_id);
+        clr.step_done();
+
+        auto upd = conn.prepare(R"SQL(
+            UPDATE sprints
+            SET name = ?, goal = ?, status = 'active', is_current = 1,
+                start_date = COALESCE(NULLIF(?, ''), date('now')),
+                end_date = COALESCE(NULLIF(?, ''), date('now', '+14 days')),
+                committed_points = ?
+            WHERE id = ?;
+        )SQL");
+        upd.bind_text(1, name);
+        upd.bind_text(2, goal);
+        upd.bind_text(3, start_date);
+        upd.bind_text(4, end_date);
+        upd.bind_int(5, committed_pts);
+        upd.bind_int(6, sprint_id);
+        upd.step_done();
+
+        if (move_backlog_to_todo) {
+            auto mv = conn.prepare("UPDATE work_items SET status = 'To Do', updated_at = datetime('now') WHERE sprint_id = ? AND status = 'Backlog';");
+            mv.bind_int(1, sprint_id);
+            mv.step_done();
+        }
+
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "500 Internal Server Error", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_bool("started", true);
+    res.add_int("id", sprint_id);
+    res.add_int("project_id", project_id);
+    res.add_str("name", name);
+    res.add_str("goal", goal);
+    res.add_str("status", "active");
+    res.add_bool("is_current", true);
+    res.add_int("item_count", item_cnt);
+    res.add_int("committed_points", committed_pts);
+    send_json(worker, header, "200 OK", res);
+}
+
+// POST /api/sprints/([0-9]+)/complete
+static void handle_sprint_complete(backend::wsworker *worker,
+                                   const std::map<std::string, std::string> &header,
+                                   const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing sprint ID");
+        return;
+    }
+    int sprint_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    int project_id = 1;
+    std::string sprint_name;
+    int stored_committed = 0;
+    {
+        auto q = conn.prepare("SELECT project_id, name, committed_points FROM sprints WHERE id = ?;");
+        q.bind_int(1, sprint_id);
+        if (q.step() != SQLITE_ROW) {
+            send_error(worker, header, "404 Not Found", "Sprint not found");
+            return;
+        }
+        project_id = q.column_int(0);
+        sprint_name = q.column_str(1);
+        stored_committed = q.column_int(2);
+    }
+
+    auto body = worker->body().empty() ? json::json_value::make_object() : json::json_value::parse(worker->body());
+    if (!body) body = json::json_value::make_object();
+
+    std::string rollover_target = body.get_string("rollover_target", "backlog"); // 'backlog' | 'sprint' | 'new_sprint'
+    int target_sprint_id = body.get_int("target_sprint_id", 0);
+    std::string next_sprint_name = body.get_string("next_sprint_name");
+    bool activate_target = body.get_bool("activate_target_sprint", true);
+
+    int done_count = 0;
+    int done_points = 0;
+    int incomplete_count = 0;
+    int incomplete_points = 0;
+    std::vector<std::string> rolled_over_keys;
+    std::string target_sprint_name = "Backlog";
+
+    try {
+        db::sqlite_transaction tx(conn);
+
+        auto istmt = conn.prepare("SELECT id, key, status, story_points FROM work_items WHERE sprint_id = ? ORDER BY board_order ASC, id ASC;");
+        istmt.bind_int(1, sprint_id);
+        while (istmt.step() == SQLITE_ROW) {
+            std::string k = istmt.column_str(1);
+            std::string st = istmt.column_str(2);
+            int pts = istmt.column_int(3);
+            if (st == "Done") {
+                ++done_count;
+                done_points += pts;
+            } else {
+                ++incomplete_count;
+                incomplete_points += pts;
+                rolled_over_keys.push_back(k);
+            }
+        }
+        istmt.reset();
+
+        int final_committed = stored_committed > 0 ? stored_committed : (done_points + incomplete_points);
+
+        if (rollover_target == "new_sprint" || (rollover_target == "sprint" && target_sprint_id <= 0)) {
+            if (next_sprint_name.empty()) {
+                next_sprint_name = "Follow-up Sprint (" + sprint_name + ")";
+            }
+            auto ins_sp = conn.prepare(R"SQL(
+                INSERT INTO sprints (project_id, name, goal, status, start_date, end_date, is_current)
+                VALUES (?, ?, 'Rollover & next iteration deliverables', 'planned', date('now'), date('now', '+14 days'), 0);
+            )SQL");
+            ins_sp.bind_int(1, project_id);
+            ins_sp.bind_text(2, next_sprint_name);
+            ins_sp.step_done();
+            target_sprint_id = static_cast<int>(conn.last_insert_rowid());
+            rollover_target = "sprint";
+            target_sprint_name = next_sprint_name;
+        } else if (rollover_target == "sprint" && target_sprint_id > 0) {
+            auto tq = conn.prepare("SELECT name FROM sprints WHERE id = ?;");
+            tq.bind_int(1, target_sprint_id);
+            if (tq.step() == SQLITE_ROW) {
+                target_sprint_name = tq.column_str(0);
+            }
+        } else {
+            target_sprint_id = 0;
+            rollover_target = "backlog";
+            target_sprint_name = "Backlog";
+        }
+
+        // Update the completed sprint's velocity and completion metrics
+        auto upd_sp = conn.prepare(R"SQL(
+            UPDATE sprints
+            SET status = 'closed',
+                is_current = 0,
+                completed_at = datetime('now'),
+                committed_points = ?,
+                completed_points = ?,
+                completed_items_count = ?,
+                incomplete_items_count = ?,
+                rollover_target_sprint_id = ?
+            WHERE id = ?;
+        )SQL");
+        upd_sp.bind_int(1, final_committed);
+        upd_sp.bind_int(2, done_points);
+        upd_sp.bind_int(3, done_count);
+        upd_sp.bind_int(4, incomplete_count);
+        upd_sp.bind_optional_int(5, target_sprint_id);
+        upd_sp.bind_int(6, sprint_id);
+        upd_sp.step_done();
+
+        // Roll over incomplete items to target sprint or backlog
+        if (incomplete_count > 0) {
+            if (target_sprint_id > 0) {
+                auto mv = conn.prepare("UPDATE work_items SET sprint_id = ?, updated_at = datetime('now') WHERE sprint_id = ? AND status != 'Done';");
+                mv.bind_int(1, target_sprint_id);
+                mv.bind_int(2, sprint_id);
+                mv.step_done();
+
+                // Update target sprint's committed_points
+                auto sync_t = conn.prepare(R"SQL(
+                    UPDATE sprints
+                    SET committed_points = COALESCE((SELECT SUM(story_points) FROM work_items WHERE sprint_id = ?), 0)
+                    WHERE id = ?;
+                )SQL");
+                sync_t.bind_int(1, target_sprint_id);
+                sync_t.bind_int(2, target_sprint_id);
+                sync_t.step_done();
+            } else {
+                auto mv = conn.prepare("UPDATE work_items SET sprint_id = NULL, updated_at = datetime('now') WHERE sprint_id = ? AND status != 'Done';");
+                mv.bind_int(1, sprint_id);
+                mv.step_done();
+            }
+        }
+
+        // Optionally promote target sprint or next active/planned sprint as current
+        if (activate_target && target_sprint_id > 0) {
+            auto act = conn.prepare("UPDATE sprints SET is_current = 1, status = 'active' WHERE id = ?;");
+            act.bind_int(1, target_sprint_id);
+            act.step_done();
+        } else {
+            auto nxt = conn.prepare("SELECT id FROM sprints WHERE project_id = ? AND status IN ('active', 'planned') AND id != ? ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, id ASC LIMIT 1;");
+            nxt.bind_int(1, project_id);
+            nxt.bind_int(2, sprint_id);
+            if (nxt.step() == SQLITE_ROW) {
+                int next_id = nxt.column_int(0);
+                nxt.reset();
+                auto act = conn.prepare("UPDATE sprints SET is_current = 1, status = 'active' WHERE id = ?;");
+                act.bind_int(1, next_id);
+                act.step_done();
+            }
+        }
+
+        tx.commit();
+
+        auto res = json::json_value::make_object();
+        res.add_bool("completed", true);
+        res.add_int("sprint_id", sprint_id);
+        res.add_str("sprint_name", sprint_name);
+        res.add_int("committed_points", final_committed);
+        res.add_int("completed_points", done_points);
+        res.add_int("incomplete_points", incomplete_points);
+        res.add_int("completed_items_count", done_count);
+        res.add_int("incomplete_items_count", incomplete_count);
+        res.add_str("rollover_target", rollover_target);
+        res.add_nullable_int("target_sprint_id", target_sprint_id);
+        res.add_str("target_sprint_name", target_sprint_name);
+        auto keys_arr = json::json_value::make_array();
+        for (const auto &k : rolled_over_keys) {
+            keys_arr.add(json::json_value::make_string(k));
+        }
+        res.add("rolled_over_keys", std::move(keys_arr));
+        send_json(worker, header, "200 OK", res);
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "500 Internal Server Error", ex.what());
+    }
+}
+
+// POST /api/items/rank
+static void handle_items_rank(backend::wsworker *worker,
+                              const std::map<std::string, std::string> &header,
+                              const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    int item_id = body.get_int("item_id", 0);
+    if (item_id <= 0 && body.has_key("item_key")) {
+        item_id = resolve_work_item_id(conn, body.get_string("item_key"));
+    }
+    std::vector<int> item_ids = body.get_int_array("item_ids");
+    if (item_id > 0 && item_ids.empty()) {
+        item_ids.push_back(item_id);
+    }
+
+    std::vector<int> ordered_ids = body.get_int_array("ordered_item_ids");
+
+    try {
+        db::sqlite_transaction tx(conn);
+
+        if (body.has_key("sprint_id")) {
+            int sp_id = body.get_int("sprint_id", 0);
+            auto upd_sp = conn.prepare("UPDATE work_items SET sprint_id = ?, updated_at = datetime('now') WHERE id = ?;");
+            for (int id : item_ids) {
+                upd_sp.clear_and_reset();
+                upd_sp.bind_optional_int(1, sp_id);
+                upd_sp.bind_int(2, id);
+                upd_sp.step_done();
+            }
+        }
+
+        if (body.has_key("parent_id")) {
+            int p_id = body.get_int("parent_id", 0);
+            auto upd_p = conn.prepare("UPDATE work_items SET parent_id = ?, updated_at = datetime('now') WHERE id = ?;");
+            for (int id : item_ids) {
+                if (id == p_id) continue;
+                upd_p.clear_and_reset();
+                upd_p.bind_optional_int(1, p_id);
+                upd_p.bind_int(2, id);
+                upd_p.step_done();
+            }
+        }
+
+        if (body.has_key("fix_version_id")) {
+            int fv_id = body.get_int("fix_version_id", 0);
+            auto del_fv = conn.prepare("DELETE FROM work_item_versions WHERE work_item_id = ? AND relation_type = 'fix';");
+            auto ins_fv = conn.prepare("INSERT OR IGNORE INTO work_item_versions (work_item_id, version_id, relation_type) VALUES (?, ?, 'fix');");
+            for (int id : item_ids) {
+                del_fv.clear_and_reset();
+                del_fv.bind_int(1, id);
+                del_fv.step_done();
+                if (fv_id > 0) {
+                    ins_fv.clear_and_reset();
+                    ins_fv.bind_int(1, id);
+                    ins_fv.bind_int(2, fv_id);
+                    ins_fv.step_done();
+                }
+            }
+        }
+
+        if (!ordered_ids.empty()) {
+            auto upd_ord = conn.prepare("UPDATE work_items SET board_order = ? WHERE id = ?;");
+            for (size_t i = 0; i < ordered_ids.size(); ++i) {
+                upd_ord.clear_and_reset();
+                upd_ord.bind_int(1, static_cast<int>((i + 1) * 10));
+                upd_ord.bind_int(2, ordered_ids[i]);
+                upd_ord.step_done();
+            }
+        } else if (body.has_key("board_order") && item_id > 0) {
+            int bo = body.get_int("board_order", 10);
+            auto upd_ord = conn.prepare("UPDATE work_items SET board_order = ? WHERE id = ?;");
+            upd_ord.bind_int(1, bo);
+            upd_ord.bind_int(2, item_id);
+            upd_ord.step_done();
+        }
+
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "500 Internal Server Error", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_bool("ok", true);
+    res.add_int("updated_count", static_cast<int>(item_ids.empty() ? ordered_ids.size() : item_ids.size()));
+    if (item_id > 0) {
+        auto q = conn.prepare(std::string(BASE_WORK_ITEM_SELECT) + " WHERE w.id = ?;");
+        q.bind_int(1, item_id);
+        if (q.step() == SQLITE_ROW) {
+            res.add("item", row_to_work_item_json(conn, q));
+        }
+    }
+    send_json(worker, header, "200 OK", res);
+}
+
 // GET /api/items & POST /api/items
 static void handle_items(backend::wsworker *worker,
                          const std::map<std::string, std::string> &header,
@@ -7473,9 +8953,21 @@ int main(int argc, char *argv[]) {
         {"^/api/filters/([0-9]+)/star$",            backend::POST,                  handle_saved_filter_star    },
         {"^/api/filters/([0-9]+)/subscriptions$",   backend::GET | backend::POST,   handle_filter_subscriptions },
         {"^/api/filter-subscriptions/([0-9]+)$",    backend::DELETE,                handle_delete_filter_subscription},
+        {"^/api/boards$",                           backend::GET | backend::POST,   handle_boards               },
+        {"^/api/boards/([0-9]+)$",                  backend::GET | backend::PUT | backend::DELETE, handle_board_detail},
+        {"^/api/boards/([0-9]+)/items$",            backend::GET | backend::POST,   handle_board_items          },
+        {"^/api/boards/([0-9]+)/columns$",          backend::POST,                  handle_board_columns        },
+        {"^/api/board-columns/([0-9]+)$",           backend::PUT | backend::DELETE, handle_board_column_detail  },
+        {"^/api/boards/([0-9]+)/quick-filters$",    backend::POST,                  handle_board_quick_filters  },
+        {"^/api/board-quick-filters/([0-9]+)$",     backend::PUT | backend::DELETE, handle_board_quick_filter_detail},
+        {"^/api/boards/([0-9]+)/swimlanes$",        backend::POST,                  handle_board_swimlanes      },
+        {"^/api/board-swimlanes/([0-9]+)$",         backend::PUT | backend::DELETE, handle_board_swimlane_detail},
         {"^/api/sprints$",                          backend::GET | backend::POST,   handle_sprints              },
         {"^/api/sprints/([0-9]+)$",                 backend::PUT | backend::DELETE, handle_sprint_detail        },
         {"^/api/sprints/([0-9]+)/current$",         backend::POST,                  handle_sprint_set_current   },
+        {"^/api/sprints/([0-9]+)/start$",           backend::POST,                  handle_sprint_start         },
+        {"^/api/sprints/([0-9]+)/complete$",        backend::POST,                  handle_sprint_complete      },
+        {"^/api/items/rank$",                           backend::POST,                  handle_items_rank           },
         {"^/api/items$",                                backend::GET | backend::POST,   handle_items                },
         {"^/api/items/([A-Za-z0-9_-]+)$",               backend::GET | backend::PUT | backend::DELETE, handle_item_detail },
         {"^/api/items/([A-Za-z0-9_-]+)/transitions$",   backend::GET | backend::POST,   handle_item_available_transitions},

@@ -169,7 +169,90 @@ export interface Sprint {
   item_count?: number;
   done_count?: number;
   total_points?: number;
+  completed_at?: string;
+  committed_points?: number;
+  completed_points?: number;
+  completed_items_count?: number;
+  incomplete_items_count?: number;
+  rollover_target_sprint_id?: number | null;
+  todo_count?: number;
+  in_progress_count?: number;
+  done_points?: number;
   created_at?: string;
+}
+
+export type SwimlaneStrategy = 'none' | 'epic' | 'assignee' | 'priority' | 'story' | 'custom_jql';
+
+export interface BoardColumn {
+  id: number;
+  board_id: number;
+  name: string;
+  mapped_statuses: string;
+  statuses: string[];
+  min_wip: number;
+  max_wip: number;
+  color: string;
+  sort_order: number;
+}
+
+export interface BoardQuickFilter {
+  id: number;
+  board_id: number;
+  name: string;
+  jql_query: string;
+  description: string;
+  sort_order: number;
+}
+
+export interface BoardSwimlane {
+  id: number;
+  board_id: number;
+  name: string;
+  description: string;
+  jql_query: string;
+  sort_order: number;
+}
+
+export interface BoardConfig {
+  id: number;
+  project_id: number;
+  project_key?: string;
+  project_name?: string;
+  name: string;
+  board_type: 'scrum' | 'kanban';
+  filter_jql: string;
+  swimlane_strategy: SwimlaneStrategy;
+  card_extra_fields: string;
+  card_extra_fields_list: string[];
+  card_color_strategy: 'priority' | 'type' | 'category' | 'none' | string;
+  show_backlog_column: boolean;
+  is_default: boolean;
+  created_at?: string;
+  updated_at?: string;
+  columns: BoardColumn[];
+  quick_filters: BoardQuickFilter[];
+  swimlanes: BoardSwimlane[];
+}
+
+export interface BoardItemsPayload {
+  board: BoardConfig;
+  items: WorkItem[];
+  swimlane_matches: Record<string, number[]>;
+}
+
+export interface CompleteSprintResponse {
+  completed: boolean;
+  sprint_id: number;
+  sprint_name: string;
+  committed_points: number;
+  completed_points: number;
+  incomplete_points: number;
+  completed_items_count: number;
+  incomplete_items_count: number;
+  rollover_target: 'backlog' | 'sprint';
+  target_sprint_id: number | null;
+  target_sprint_name: string;
+  rolled_over_keys: string[];
 }
 
 export interface WorkItem {
