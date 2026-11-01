@@ -316,6 +316,15 @@ export interface WorkItem {
   has_voted?: boolean;
   security_level_id?: number | null;
   security_level_name?: string;
+  service_desk_id?: number | null;
+  service_desk_name?: string;
+  request_type_id?: number | null;
+  request_type_name?: string;
+  customer_reporter_name?: string;
+  customer_reporter_email?: string;
+  first_response_at?: string;
+  is_customer_request?: boolean;
+  slas?: WorkItemSla[];
 }
 
 export type WorklogAdjustmentMode = 'auto' | 'leave' | 'set' | 'reduce';
@@ -1527,6 +1536,145 @@ export interface SmartCommitSimulationResult {
   applied_actions?: string[];
   errors?: string[];
   executed: boolean;
+}
+
+export interface ServiceDesk {
+  id: number;
+  project_id: number;
+  project_name?: string;
+  project_key?: string;
+  name: string;
+  description: string;
+  portal_key: string;
+  is_open_access: boolean;
+  created_at: string;
+  request_types_count?: number;
+  open_tickets_count?: number;
+  queues_count?: number;
+  request_types?: RequestType[];
+  queues?: ServiceDeskQueue[];
+  sla_metrics?: SlaMetric[];
+}
+
+export interface RequestType {
+  id: number;
+  service_desk_id: number;
+  issue_type_id?: number | null;
+  name: string;
+  description: string;
+  icon: string;
+  help_text: string;
+  display_order: number;
+  created_at?: string;
+}
+
+export interface SlaCalendar {
+  id: number;
+  name: string;
+  timezone: string;
+  days_of_week: string;
+  start_time: string;
+  end_time: string;
+  holidays_json?: string;
+  is_24x7: boolean;
+  created_at: string;
+}
+
+export interface SlaGoal {
+  id: number;
+  metric_id: number;
+  priority: string;
+  target_duration_seconds: number;
+  target_formatted?: string;
+  warning_duration_seconds: number;
+}
+
+export interface SlaMetric {
+  id: number;
+  service_desk_id: number;
+  name: string;
+  metric_key: string;
+  description: string;
+  calendar_id?: number | null;
+  calendar_name?: string;
+  start_condition?: string;
+  pause_condition?: string;
+  stop_condition?: string;
+  goals?: SlaGoal[];
+}
+
+export interface WorkItemSla {
+  id: number;
+  metric_id: number;
+  name: string;
+  metric_key: string;
+  status: 'within' | 'approaching' | 'breached' | 'paused' | 'completed' | string;
+  target_duration_seconds: number;
+  elapsed_work_seconds: number;
+  remaining_work_seconds: number;
+  target_formatted: string;
+  elapsed_formatted: string;
+  remaining_formatted: string;
+  is_paused: boolean;
+  is_completed: boolean;
+  is_breached: boolean;
+  started_at: string;
+  paused_at?: string;
+  completed_at?: string;
+  calendar_name?: string;
+  badge_color?: string;
+}
+
+export interface ServiceDeskQueue {
+  id: number;
+  service_desk_id: number;
+  name: string;
+  filter_type: 'unassigned' | 'open_incidents' | 'waiting_customer' | 'pending_reply' | 'all' | string;
+  icon: string;
+  jql_filter?: string;
+  display_order: number;
+  count?: number;
+}
+
+export interface CannedResponse {
+  id: number;
+  service_desk_id?: number | null;
+  title: string;
+  shortcut: string;
+  content: string;
+  created_by?: number | null;
+  created_by_name?: string;
+}
+
+export interface CustomerPortalHome {
+  instance_name: string;
+  service_desks: Array<ServiceDesk & { request_types: RequestType[] }>;
+}
+
+export interface CustomerTicketDetail {
+  id: number;
+  key: string;
+  title: string;
+  description: string;
+  status: string;
+  priority: string;
+  created_at: string;
+  updated_at: string;
+  customer_name: string;
+  customer_email: string;
+  request_type_name: string;
+  service_desk_name: string;
+  service_desk_id?: number | null;
+  request_type_id?: number | null;
+  first_response_at?: string;
+  comments: Array<{
+    id: number;
+    body: string;
+    created_at: string;
+    author_name: string;
+    author_id?: number | null;
+  }>;
+  slas: WorkItemSla[];
 }
 
 

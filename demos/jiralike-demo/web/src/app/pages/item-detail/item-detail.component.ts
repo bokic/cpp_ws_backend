@@ -1001,7 +1001,21 @@ import {
                     [workItemId]="it.id"
                     placeholder="Add a comment... (Type @ to mention teammates, Ctrl+V to paste images)"
                   ></app-rich-editor>
-                  <div style="display: flex; justify-content: flex-end; margin-top: 8px;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px;">
+                    <div style="display: flex; gap: 6px; align-items: center;">
+                      @if (api.cannedResponses().length > 0) {
+                        <select
+                          class="form-control"
+                          style="font-size: 12px; padding: 4px 8px; width: auto;"
+                          (change)="insertCannedResponseIntoComment($event)"
+                        >
+                          <option value="">💬 Insert Canned Response...</option>
+                          @for (cr of api.cannedResponses(); track cr.id) {
+                            <option [value]="cr.id">{{ cr.title }} ({{ cr.shortcut }})</option>
+                          }
+                        </select>
+                      }
+                    </div>
                     <button
                       type="button"
                       class="btn btn-primary"
@@ -1490,6 +1504,54 @@ import {
                 </div>
               </div>
             </div>
+
+            <!-- ITSM & Service Desk SLA Panel (Step 15) -->
+            @if (it.service_desk_id || (it.slas && it.slas.length > 0) || it.is_customer_request) {
+              <div class="card-panel" style="border-left: 4px solid #0052cc;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                  <h3 style="margin: 0; font-size: 14px; font-weight: 700; color: #172b4d;">⏱️ SLA Targets &amp; Service Desk</h3>
+                  @if (it.service_desk_name) {
+                    <span class="badge badge-info" style="font-size: 10px;">{{ it.service_desk_name }}</span>
+                  }
+                </div>
+
+                @if (it.customer_reporter_name) {
+                  <div style="font-size: 12px; margin-bottom: 10px; color: #42526e; display: flex; flex-direction: column; gap: 2px;">
+                    <span>Customer: <strong>{{ it.customer_reporter_name }}</strong></span>
+                    @if (it.customer_reporter_email) {
+                      <span style="color: #5e6c84;">{{ it.customer_reporter_email }}</span>
+                    }
+                  </div>
+                }
+
+                @if (it.slas && it.slas.length > 0) {
+                  <div style="display: flex; flex-direction: column; gap: 8px;">
+                    @for (sla of it.slas; track sla.id) {
+                      <div [style.border-left]="'3px solid ' + (sla.badge_color || '#36b37e')" style="background: #fafbfc; padding: 6px 10px; border-radius: 4px; border: 1px solid #ebecf0; border-left-width: 4px;">
+                        <div style="display: flex; justify-content: space-between; font-size: 11px; margin-bottom: 3px;">
+                          <span style="font-weight: 600; color: #344563;">{{ sla.name }}</span>
+                          <span [style.color]="sla.badge_color || '#36b37e'" style="font-weight: 700;">
+                            @if (sla.is_completed) {
+                              ✓ Met
+                            } @else if (sla.is_paused) {
+                              ⏸ Paused
+                            } @else if (sla.is_breached) {
+                              🔥 Breached
+                            } @else {
+                              ⏱ Within
+                            }
+                          </span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; font-size: 12px;">
+                          <span style="color: #5e6c84;">{{ sla.elapsed_formatted }} / {{ sla.target_formatted }}</span>
+                          <strong [style.color]="sla.badge_color || '#36b37e'">{{ sla.remaining_formatted }}</strong>
+                        </div>
+                      </div>
+                    }
+                  </div>
+                }
+              </div>
+            }
 
             <!-- Development Panel in Sidebar (Step 14) -->
             <div class="card-panel dev-sidebar-panel">
@@ -2221,6 +2283,7 @@ export class ItemDetailComponent implements OnInit {
     await this.api.loadReferenceData();
     const list = await this.api.getItems();
     this.allItems.set(list);
+    this.api.getCannedResponses().catch(() => {});
 
     this.route.paramMap.subscribe(async (params) => {
       const idOrKey = params.get('id')?.trim();
@@ -2228,6 +2291,23 @@ export class ItemDetailComponent implements OnInit {
         await this.reloadDetail(idOrKey);
       }
     });
+  }
+
+  async insertCannedResponseIntoComment(event: any): Promise<void> {
+    const id = parseInt(event?.target?.value, 10);
+    if (!id || !this.item()) return;
+    try {
+      const res = await this.api.applyCannedResponse({
+        canned_response_id: id,
+        item_id: this.item()!.id,
+      });
+      if (res && res.content) {
+        this.newCommentText = (this.newCommentText ? this.newCommentText + '\n\n' : '') + res.content;
+      }
+      if (event?.target) {
+        event.target.value = '';
+      }
+    } catch {}
   }
 
   async reloadDetail(idOrKey: string | number): Promise<void> {

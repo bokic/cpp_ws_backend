@@ -19,7 +19,7 @@ This document provides a comprehensive gap analysis and exhaustive development r
 - [11. Epic 10: Security, Granular Permissions & Directory Management](#11-epic-10-security-granular-permissions--directory-management)
 - [12. Epic 11: Notifications, Webhooks & Email Integration](#12-epic-11-notifications-webhooks--email-integration)
 - [13. Epic 12: Developer Tooling & Git Integration (Smart Commits) *(Completed)*](#13-epic-12-developer-tooling--git-integration-smart-commits-completed)
-- [14. Epic 13: Service Management & ITSM Capabilities](#14-epic-13-service-management--itsm-capabilities)
+- [14. Epic 13: Service Management & ITSM Capabilities *(Completed)*](#14-epic-13-service-management--itsm-capabilities-completed)
 - [15. Epic 14: User Experience, Theming & Accessibility](#15-epic-14-user-experience-theming--accessibility)
 - [16. Epic 15: C++ Backend Architecture & Infrastructure Enhancements](#16-epic-15-c-backend-architecture--infrastructure-enhancements)
 - [17. Suggested Order of Implementation (Step-by-Step Execution Plan)](#17-suggested-order-of-implementation-step-by-step-execution-plan)
@@ -526,23 +526,23 @@ This document provides a comprehensive gap analysis and exhaustive development r
 
 ---
 
-## 14. Epic 13: Service Management & ITSM Capabilities
+## 14. Epic 13: Service Management & ITSM Capabilities *(Completed)*
 
 ### 14.1 Customer Service Portal
-- [ ] **Public / Customer Portal (`/servicedesk`)**:
+- [x] **Public / Customer Portal (`/servicedesk`)**:
   - Simplified, customer-friendly request submission interface.
   - Request Type catalog (e.g., *IT Helpdesk*, *Bug Report*, *Feature Suggestion*, *Billing Inquiry*).
   - Customer ticket status tracker without exposing internal development fields.
 
 ### 14.2 SLA Engine (Service Level Agreements)
-- [ ] **SLA Definitions (`sla_metrics`, `sla_goals`)**:
+- [x] **SLA Definitions (`sla_metrics`, `sla_goals`)**:
   - SLA Goals: *Time to First Response*, *Time to Resolution*.
   - Work Calendars: Define business hours (e.g., 9:00 - 17:00 Mon-Fri, excluding holidays).
   - SLA countdown clocks with visual warning thresholds (Green $\rightarrow$ Amber $\rightarrow$ Breached).
 
 ### 14.3 Agent Queues & Canned Responses
-- [ ] **Service Desk Queues**: Triage views for support agents (e.g., *Unassigned Tickets*, *Open Incidents*, *Waiting on Customer*).
-- [ ] **Canned Responses**: Pre-defined reply templates with placeholder replacement.
+- [x] **Service Desk Queues**: Triage views for support agents (e.g., *Unassigned Tickets*, *Open Incidents*, *Waiting on Customer*).
+- [x] **Canned Responses**: Pre-defined reply templates with placeholder replacement.
 
 ---
 
@@ -903,15 +903,18 @@ flowchart TD
   - [x] Interactive Modals: "Link Development Asset" dialog and "⚡ Smart Commit Simulator & Runner" with live preview and direct execution.
 - **Verification**: Verified with 9/9 test suites in `verify_step14.py`: Simulating and executing commits with `#time 45m #comment Fixed edge cases` logs 45m worklog, appends the comment, transitions state via `#done`, processes GitHub/GitLab webhooks linking branches, PRs, and CI/CD builds, and supports manual asset link/unlink. Zero regressions across Steps 10-13.
 
-#### Step 15: ITSM & Service Desk Capabilities (Customer Portal & SLA Engine)
+#### Step 15: ITSM & Service Desk Capabilities (Customer Portal & SLA Engine) *(Completed)*
 - **Why Next**: Expands Jira Software into Jira Service Management without altering core engine logic.
 - **Backend Deliverables**:
-  - Database Migration: Create `service_desks`, `request_types`, `sla_metrics`, `sla_goals`, `sla_calendars`.
-  - Background SLA Clock: Evaluates time-to-first-response and time-to-resolution against configured business calendars.
+  - [x] Database Migration: Create `service_desks`, `request_types`, `sla_metrics`, `sla_goals`, `sla_calendars` (v20).
+  - [x] Background SLA Clock: Evaluates time-to-first-response and time-to-resolution against configured business calendars.
+  - [x] Service Desk Queues & Canned Responses Engine: Dynamic ticket categorization, triage counts, and smart placeholder substitution (`{{customer_name}}`, `{{issue_key}}`, `{{agent_name}}`).
+  - [x] Customer Service Portal Endpoints: Catalog discovery, simplified ticket creation, activity tracker, and customer-safe comments.
 - **Frontend Deliverables**:
-  - Customer Service Portal (`/servicedesk`): Clean, customer-facing request submission catalog.
-  - Agent Queue View: Triage queue with live countdown SLA timers (color-coded Green/Amber/Red).
-- **Verification**: Submitting a support ticket starts SLA countdown; agent first reply pauses the First Response SLA timer.
+  - [x] Customer Service Portal (`/servicedesk`): Clean, customer-facing request submission catalog and ticket status tracker.
+  - [x] Agent Queue View (`/servicedesk/agent`): Triage queue with live countdown SLA timers (color-coded Green/Amber/Red/Met), SLA definitions, and Canned Responses runner.
+  - [x] Work Item Detail Integration: Sidebar SLA Targets & Service Desk panel, plus Canned Response insertion dropdown in comment editor.
+- **Verification**: Verified with 9/9 test suites in `verify_step15.py`: Submitting a support ticket starts SLA countdown; agent first reply pauses/completes First Response SLA timer; transition to 'Waiting for customer' pauses SLA; transition to 'Done' completes Resolution SLA; canned responses placeholder substitution and queue counts verified. Zero regressions across Steps 10-14.
 
 #### Step 16: UI/UX Modernization, Theming & SSE Real-Time Sync
 - **Why Final Step**: Polishes the complete application for end-user delight once all features are functionally complete.

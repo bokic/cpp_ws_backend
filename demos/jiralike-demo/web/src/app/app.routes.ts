@@ -16,12 +16,18 @@ import { DashboardsComponent } from './pages/dashboards/dashboards.component';
 import { PermissionsAdminComponent } from './pages/permissions-admin/permissions-admin.component';
 import { AutomationAdminComponent } from './pages/automation-admin/automation-admin.component';
 import { NotificationsAdminComponent } from './pages/notifications-admin/notifications-admin.component';
+import { ServiceDeskPortalComponent } from './pages/servicedesk-portal/servicedesk-portal.component';
+import { ServiceDeskAgentComponent } from './pages/servicedesk-agent/servicedesk-agent.component';
 
 export const routes: Routes = [
   { path: '', pathMatch: 'full', redirectTo: 'dashboards' },
   { path: 'setup', component: SetupComponent },
   { path: 'login', component: LoginComponent },
   { path: 'dashboards', component: DashboardsComponent },
+  { path: 'servicedesk', component: ServiceDeskPortalComponent },
+  { path: 'servicedesk/request/:key', component: ServiceDeskPortalComponent },
+  { path: 'servicedesk/agent', component: ServiceDeskAgentComponent },
+  { path: 'settings/servicedesk', component: ServiceDeskAgentComponent },
   { path: 'board', component: BoardComponent },
   { path: 'backlog', component: BoardComponent },
   { path: 'search', component: SearchComponent },

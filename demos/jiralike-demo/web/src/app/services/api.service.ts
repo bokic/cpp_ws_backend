@@ -84,6 +84,15 @@ import {
   WorkflowStatusNode,
   WorkflowTransitionDef,
   WorkflowTransitionRule,
+  ServiceDesk,
+  RequestType,
+  ServiceDeskQueue,
+  SlaCalendar,
+  SlaMetric,
+  WorkItemSla,
+  CannedResponse,
+  CustomerPortalHome,
+  CustomerTicketDetail,
 } from '../models/jira.models';
 
 @Injectable({
@@ -123,6 +132,8 @@ export class ApiService {
     return this.unreadMentionsCount() + this.unreadNotificationsCount();
   });
   readonly vcsRepositories = signal<GitRepository[]>([]);
+  readonly serviceDesks = signal<ServiceDesk[]>([]);
+  readonly cannedResponses = signal<CannedResponse[]>([]);
   readonly currentSprint = computed<Sprint | null>(() => {
     const list = this.sprints();
     return (
@@ -2325,6 +2336,230 @@ export class ApiService {
     }>;
   }): Promise<{ success: boolean; commits_processed: number; actions: string[] }> {
     return this.request<{ success: boolean; commits_processed: number; actions: string[] }>('/api/vcs/commits', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  // ==========================================================================
+  // Step 15: ITSM & Service Desk Capabilities (Customer Portal & SLA Engine)
+  // ==========================================================================
+
+  async getServiceDesks(): Promise<ServiceDesk[]> {
+    const list = await this.request<ServiceDesk[]>('/api/servicedesk/desks');
+    this.serviceDesks.set(list);
+    return list;
+  }
+
+  async getServiceDesk(id: number): Promise<ServiceDesk> {
+    return this.request<ServiceDesk>(`/api/servicedesk/desks/${id}`);
+  }
+
+  async createServiceDesk(payload: {
+    project_id: number;
+    name: string;
+    portal_key?: string;
+    description?: string;
+    is_open_access?: boolean;
+  }): Promise<ServiceDesk> {
+    const r = await this.request<ServiceDesk>('/api/servicedesk/desks', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    await this.getServiceDesks();
+    return r;
+  }
+
+  async updateServiceDesk(id: number, payload: Partial<ServiceDesk>): Promise<void> {
+    await this.request(`/api/servicedesk/desks/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    await this.getServiceDesks();
+  }
+
+  async deleteServiceDesk(id: number): Promise<void> {
+    await this.request(`/api/servicedesk/desks/${id}`, { method: 'DELETE' });
+    await this.getServiceDesks();
+  }
+
+  async getServiceDeskRequestTypes(deskId: number): Promise<RequestType[]> {
+    return this.request<RequestType[]>(`/api/servicedesk/desks/${deskId}/request-types`);
+  }
+
+  async createServiceDeskRequestType(deskId: number, payload: Partial<RequestType>): Promise<RequestType> {
+    return this.request<RequestType>(`/api/servicedesk/desks/${deskId}/request-types`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateServiceDeskRequestType(id: number, payload: Partial<RequestType>): Promise<void> {
+    await this.request(`/api/servicedesk/request-types/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteServiceDeskRequestType(id: number): Promise<void> {
+    await this.request(`/api/servicedesk/request-types/${id}`, { method: 'DELETE' });
+  }
+
+  async getServiceDeskQueues(deskId: number): Promise<ServiceDeskQueue[]> {
+    return this.request<ServiceDeskQueue[]>(`/api/servicedesk/desks/${deskId}/queues`);
+  }
+
+  async createServiceDeskQueue(deskId: number, payload: Partial<ServiceDeskQueue>): Promise<ServiceDeskQueue> {
+    return this.request<ServiceDeskQueue>(`/api/servicedesk/desks/${deskId}/queues`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateServiceDeskQueue(id: number, payload: Partial<ServiceDeskQueue>): Promise<void> {
+    await this.request(`/api/servicedesk/queues/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteServiceDeskQueue(id: number): Promise<void> {
+    await this.request(`/api/servicedesk/queues/${id}`, { method: 'DELETE' });
+  }
+
+  async getServiceDeskQueueItems(queueId: number): Promise<WorkItem[]> {
+    return this.request<WorkItem[]>(`/api/servicedesk/queues/${queueId}/items`);
+  }
+
+  async getServiceDeskSlas(deskId: number): Promise<SlaMetric[]> {
+    return this.request<SlaMetric[]>(`/api/servicedesk/desks/${deskId}/slas`);
+  }
+
+  async createServiceDeskSla(deskId: number, payload: Partial<SlaMetric>): Promise<SlaMetric> {
+    return this.request<SlaMetric>(`/api/servicedesk/desks/${deskId}/slas`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateServiceDeskSla(id: number, payload: Partial<SlaMetric>): Promise<void> {
+    await this.request(`/api/servicedesk/slas/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteServiceDeskSla(id: number): Promise<void> {
+    await this.request(`/api/servicedesk/slas/${id}`, { method: 'DELETE' });
+  }
+
+  async getSlaCalendars(): Promise<SlaCalendar[]> {
+    return this.request<SlaCalendar[]>('/api/servicedesk/calendars');
+  }
+
+  async createSlaCalendar(payload: Partial<SlaCalendar>): Promise<SlaCalendar> {
+    return this.request<SlaCalendar>('/api/servicedesk/calendars', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateSlaCalendar(id: number, payload: Partial<SlaCalendar>): Promise<void> {
+    await this.request(`/api/servicedesk/calendars/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteSlaCalendar(id: number): Promise<void> {
+    await this.request(`/api/servicedesk/calendars/${id}`, { method: 'DELETE' });
+  }
+
+  async evaluateSlas(): Promise<{ evaluated_count: number; success: boolean }> {
+    return this.request<{ evaluated_count: number; success: boolean }>('/api/servicedesk/slas/evaluate', {
+      method: 'POST',
+    });
+  }
+
+  async getCannedResponses(deskId?: number): Promise<CannedResponse[]> {
+    const list = await this.request<CannedResponse[]>('/api/servicedesk/canned-responses');
+    this.cannedResponses.set(list);
+    return list;
+  }
+
+  async createCannedResponse(payload: Partial<CannedResponse>): Promise<CannedResponse> {
+    const r = await this.request<CannedResponse>('/api/servicedesk/canned-responses', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    await this.getCannedResponses();
+    return r;
+  }
+
+  async updateCannedResponse(id: number, payload: Partial<CannedResponse>): Promise<void> {
+    await this.request(`/api/servicedesk/canned-responses/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    await this.getCannedResponses();
+  }
+
+  async deleteCannedResponse(id: number): Promise<void> {
+    await this.request(`/api/servicedesk/canned-responses/${id}`, { method: 'DELETE' });
+    await this.getCannedResponses();
+  }
+
+  async applyCannedResponse(payload: {
+    canned_response_id?: number;
+    content?: string;
+    item_id?: string | number;
+  }): Promise<{ content: string }> {
+    return this.request<{ content: string }>('/api/servicedesk/canned-responses/apply', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getPortalHome(): Promise<CustomerPortalHome> {
+    return this.request<CustomerPortalHome>('/api/servicedesk/portal');
+  }
+
+  async createPortalRequest(payload: {
+    service_desk_id?: number;
+    portal_key?: string;
+    request_type_id?: number;
+    summary: string;
+    description?: string;
+    customer_name?: string;
+    customer_email?: string;
+    priority?: string;
+  }): Promise<{
+    id: number;
+    key: string;
+    title: string;
+    status: string;
+    created_at: string;
+  }> {
+    return this.request('/api/servicedesk/portal/requests', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getPortalRequests(email?: string): Promise<any[]> {
+    const q = email ? `?email=${encodeURIComponent(email)}` : '';
+    return this.request<any[]>(`/api/servicedesk/portal/requests${q}`);
+  }
+
+  async getPortalRequestDetail(keyOrId: string | number): Promise<CustomerTicketDetail> {
+    return this.request<CustomerTicketDetail>(`/api/servicedesk/portal/requests/${keyOrId}`);
+  }
+
+  async addPortalRequestComment(
+    keyOrId: string | number,
+    payload: { body: string; author_name?: string; author_email?: string }
+  ): Promise<{ id: number; body: string; author_name: string; created_at: string }> {
+    return this.request(`/api/servicedesk/portal/requests/${keyOrId}/comments`, {
       method: 'POST',
       body: JSON.stringify(payload),
     });
