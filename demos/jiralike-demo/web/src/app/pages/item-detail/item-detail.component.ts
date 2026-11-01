@@ -8,12 +8,15 @@ import {
   PRIORITIES,
   ScreenDef,
   ScreenTab,
+  TimeRollup,
   WORKFLOW_STATES,
   WORK_ITEM_CATEGORIES,
   WORK_ITEM_TYPES,
   WorkItem,
   WorkItemDetail,
   WorkflowState,
+  WorklogAdjustmentMode,
+  WorklogItem,
 } from '../../models/jira.models';
 
 @Component({
@@ -326,6 +329,177 @@ import {
                 </button>
                 <button type="button" class="btn btn-primary" (click)="submitTransitionModal()">
                   Execute '{{ tr.name }}' → {{ tr.to_status }}
+                </button>
+              </div>
+            </div>
+          </div>
+        }
+
+        <!-- Interactive Jira Log Work Modal -->
+        @if (showLogWorkModal()) {
+          <div class="modal-backdrop">
+            <div class="modal-card">
+              <div class="section-header">
+                <div>
+                  <h3>⏱ {{ editingWorklogId() ? 'Edit Worklog' : 'Log Work' }} — {{ it.key }}</h3>
+                  <small class="text-muted">{{ it.title }}</small>
+                </div>
+                <button type="button" class="btn btn-ghost btn-sm" (click)="closeLogWorkModal()">✕</button>
+              </div>
+
+              @if (logWorkError()) {
+                <div style="margin: 10px 0; padding: 10px 12px; background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c; border-radius: 6px; font-size: 13px;">
+                  ⚠ {{ logWorkError() }}
+                </div>
+              }
+
+              <!-- Time Spent Input with Presets -->
+              <div class="form-group" style="margin-top: 12px;">
+                <label>
+                  Time Spent *
+                  <small class="text-muted">(e.g. 2w 3d 4h 30m, 1.5h, 45m)</small>
+                </label>
+                <input
+                  type="text"
+                  name="modal_time_spent"
+                  [ngModel]="worklogDraft.duration"
+                  (ngModelChange)="onDurationChange($event)"
+                  placeholder="e.g. 2h 30m"
+                  style="font-size: 14px; font-weight: 600;"
+                />
+
+                <!-- Quick Presets -->
+                <div class="tt-quick-chips">
+                  <span style="font-size: 11px; color: #5e6c84; align-self: center; margin-right: 4px;">Quick Add:</span>
+                  @for (preset of ['15m', '30m', '1h', '2h', '4h', '1d']; track preset) {
+                    <button type="button" class="tt-chip" (click)="applyDurationPreset(preset)">
+                      +{{ preset }}
+                    </button>
+                  }
+                </div>
+
+                @if (durationPreview(); as prev) {
+                  <div style="margin-top: 6px; font-size: 11.5px;">
+                    @if (prev.valid) {
+                      <span style="color: #00875a; font-weight: 600;">✔ Valid: {{ prev.formatted }} ({{ prev.seconds }}s)</span>
+                    } @else if (prev.error) {
+                      <span style="color: #de350b;">⚠ {{ prev.error }}</span>
+                    }
+                  </div>
+                }
+              </div>
+
+              <!-- Date Started -->
+              <div class="form-group">
+                <label>Date Started</label>
+                <input
+                  type="datetime-local"
+                  name="modal_started_at"
+                  [(ngModel)]="worklogDraft.started_at"
+                />
+              </div>
+
+              <!-- Remaining Estimate Adjustment Modes -->
+              <div class="form-group">
+                <label>Remaining Estimate Adjustment</label>
+                <div class="radio-group-vertical">
+                  <label class="radio-row">
+                    <input
+                      type="radio"
+                      name="modal_adj_mode"
+                      value="auto"
+                      [(ngModel)]="worklogDraft.adjustment_mode"
+                    />
+                    <div>
+                      <strong>Auto-adjust (Recommended)</strong>
+                      <div class="text-muted" style="font-size: 11.5px;">
+                        Automatically reduces remaining estimate by the logged time.
+                      </div>
+                    </div>
+                  </label>
+
+                  <label class="radio-row">
+                    <input
+                      type="radio"
+                      name="modal_adj_mode"
+                      value="leave"
+                      [(ngModel)]="worklogDraft.adjustment_mode"
+                    />
+                    <div>
+                      <strong>Leave unchanged</strong>
+                      <div class="text-muted" style="font-size: 11.5px;">
+                        Keep remaining estimate at {{ it.remaining_estimate_formatted || '0m' }}.
+                      </div>
+                    </div>
+                  </label>
+
+                  <label class="radio-row">
+                    <input
+                      type="radio"
+                      name="modal_adj_mode"
+                      value="set"
+                      [(ngModel)]="worklogDraft.adjustment_mode"
+                    />
+                    <div style="flex: 1;">
+                      <strong>Set to:</strong>
+                      <div class="text-muted" style="font-size: 11.5px; margin-bottom: 4px;">
+                        Set remaining estimate to a specific duration.
+                      </div>
+                      @if (worklogDraft.adjustment_mode === 'set') {
+                        <input
+                          type="text"
+                          name="modal_new_estimate"
+                          [(ngModel)]="worklogDraft.new_estimate"
+                          placeholder="e.g. 4h 30m"
+                          style="max-width: 200px; padding: 4px 8px; font-size: 12.5px;"
+                        />
+                      }
+                    </div>
+                  </label>
+
+                  <label class="radio-row">
+                    <input
+                      type="radio"
+                      name="modal_adj_mode"
+                      value="reduce"
+                      [(ngModel)]="worklogDraft.adjustment_mode"
+                    />
+                    <div style="flex: 1;">
+                      <strong>Reduce by:</strong>
+                      <div class="text-muted" style="font-size: 11.5px; margin-bottom: 4px;">
+                        Decrease remaining estimate by custom amount.
+                      </div>
+                      @if (worklogDraft.adjustment_mode === 'reduce') {
+                        <input
+                          type="text"
+                          name="modal_reduce_by"
+                          [(ngModel)]="worklogDraft.reduce_by"
+                          placeholder="e.g. 1h 30m"
+                          style="max-width: 200px; padding: 4px 8px; font-size: 12.5px;"
+                        />
+                      }
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              <!-- Work Description -->
+              <div class="form-group">
+                <label>Work Description</label>
+                <textarea
+                  rows="3"
+                  name="modal_worklog_desc"
+                  [(ngModel)]="worklogDraft.description"
+                  placeholder="Describe the tasks completed during this work session..."
+                ></textarea>
+              </div>
+
+              <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px;">
+                <button type="button" class="btn btn-secondary" (click)="closeLogWorkModal()">
+                  Cancel
+                </button>
+                <button type="button" class="btn btn-primary" (click)="submitLogWork()">
+                  ⏱ {{ editingWorklogId() ? 'Update Worklog' : 'Log Work' }}
                 </button>
               </div>
             </div>
@@ -723,7 +897,7 @@ import {
               }
             </div>
 
-            <!-- Comments & Workflow Audit Log -->
+            <!-- Comments, Worklogs & Workflow Audit Log -->
             <div class="card-panel">
               <div class="tabs-bar">
                 <button
@@ -733,6 +907,14 @@ import {
                   (click)="activeTab.set('comments')"
                 >
                   Comments ({{ it.comments.length }})
+                </button>
+                <button
+                  type="button"
+                  class="tab-btn"
+                  [class.active]="activeTab() === 'worklogs'"
+                  (click)="activeTab.set('worklogs')"
+                >
+                  ⏱ Worklogs ({{ it.worklogs?.length || 0 }})
                 </button>
                 <button
                   type="button"
@@ -775,6 +957,60 @@ import {
                     Post Comment
                   </button>
                 </div>
+              } @else if (activeTab() === 'worklogs') {
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #ebecf0;">
+                  <div>
+                    <span style="font-size: 13px; color: #5e6c84;">Total Time Spent:</span>
+                    <strong style="margin-left: 6px; color: #0052cc; font-size: 14px;">{{ it.time_spent_formatted || '0m' }}</strong>
+                    <span style="margin: 0 8px; color: #dfe1e6;">|</span>
+                    <span style="font-size: 13px; color: #5e6c84;">Remaining:</span>
+                    <strong style="margin-left: 6px; color: #00875a; font-size: 14px;">{{ it.remaining_estimate_formatted || '0m' }}</strong>
+                  </div>
+                  <button type="button" class="btn btn-primary btn-sm" (click)="openLogWorkModal()">
+                    ⏱ + Log Work
+                  </button>
+                </div>
+
+                @if ((it.worklogs || []).length > 0) {
+                  <div class="worklogs-list">
+                    @for (wl of it.worklogs; track wl.id) {
+                      <div class="worklog-timeline-row">
+                        <div class="worklog-author-avatar" [style.background]="wl.author_color">
+                          {{ wl.author_name.slice(0, 2).toUpperCase() }}
+                        </div>
+                        <div class="worklog-body">
+                          <div class="worklog-meta">
+                            <strong>{{ wl.author_name }}</strong>
+                            <span class="worklog-spent-badge">⏱ {{ wl.time_spent_formatted }}</span>
+                            <span class="text-muted">logged on {{ wl.started_at }}</span>
+                            <span class="worklog-adj-note">
+                              ({{ wl.adjustment_mode }}: {{ wl.remaining_before_formatted }} → {{ wl.remaining_after_formatted }})
+                            </span>
+                          </div>
+                          @if (wl.description) {
+                            <p class="worklog-desc">{{ wl.description }}</p>
+                          }
+                        </div>
+                        <div class="worklog-actions">
+                          <button type="button" class="btn btn-ghost btn-sm" (click)="openLogWorkModal(wl)" title="Edit Worklog">
+                            ✏
+                          </button>
+                          <button type="button" class="btn btn-ghost btn-sm" (click)="deleteWorklog(wl.id)" title="Delete Worklog">
+                            🗑
+                          </button>
+                        </div>
+                      </div>
+                    }
+                  </div>
+                } @else {
+                  <div style="padding: 24px 16px; text-align: center; color: #6b778c;">
+                    <div style="font-size: 28px; margin-bottom: 6px;">⏱</div>
+                    <p style="margin: 0 0 10px;">No work has been logged on this issue yet.</p>
+                    <button type="button" class="btn btn-secondary btn-sm" (click)="openLogWorkModal()">
+                      Log your first work session
+                    </button>
+                  </div>
+                }
               } @else {
                 <div class="history-list">
                   @for (h of it.history; track h.id) {
@@ -806,6 +1042,119 @@ import {
 
           <!-- Right Metadata Sidebar -->
           <div class="detail-sidebar">
+            <!-- Prominent Time Tracking & Estimation Panel -->
+            <div class="tt-panel">
+              <div class="tt-header">
+                <h3>⏱ Time Tracking</h3>
+                <button type="button" class="btn btn-primary btn-sm" (click)="openLogWorkModal()">
+                  + Log Work
+                </button>
+              </div>
+
+              <!-- Visual Jira Time Tracking Progress Bar -->
+              <div class="tt-progress-track" [title]="'Logged: ' + (it.time_spent_formatted || '0m') + ' / Remaining: ' + (it.remaining_estimate_formatted || '0m')">
+                <div
+                  class="tt-progress-spent"
+                  [style.width.%]="getSpentPercent(it)"
+                  [title]="'Logged: ' + (it.time_spent_formatted || '0m')"
+                ></div>
+                <div
+                  class="tt-progress-rem"
+                  [style.width.%]="getRemainingPercent(it)"
+                  [title]="'Remaining: ' + (it.remaining_estimate_formatted || '0m')"
+                ></div>
+                @if (it.is_over_estimate) {
+                  <div class="tt-progress-over" style="width: 100%;" title="Logged time exceeds original estimate!"></div>
+                }
+              </div>
+
+              <div class="tt-legend-row">
+                <div class="tt-legend-item">
+                  <span class="tt-legend-dot spent"></span>
+                  <span>Logged: <strong>{{ it.time_spent_formatted || '0m' }}</strong></span>
+                </div>
+                <div class="tt-legend-item">
+                  <span class="tt-legend-dot remaining"></span>
+                  <span>Remaining: <strong>{{ it.remaining_estimate_formatted || '0m' }}</strong></span>
+                </div>
+                <div class="tt-legend-item">
+                  <span class="text-muted">Original: <strong>{{ it.original_estimate_formatted || '0m' }}</strong></span>
+                </div>
+              </div>
+
+              @if (it.is_over_estimate) {
+                <div style="margin-bottom: 12px; padding: 6px 10px; background: #fff1f0; border: 1px solid #ffa39e; border-radius: 4px; font-size: 11.5px; color: #cf1322;">
+                  ⚠ Logged time exceeds the original estimate!
+                </div>
+              }
+
+              <!-- Subtasks Rollup (if subtasks exist) -->
+              @if (it.time_rollup && it.time_rollup.subtask_count > 0) {
+                <div style="margin: 10px 0; padding: 10px; background: #f8fafc; border-radius: 6px; border: 1px solid #e2e8f0; font-size: 12px;">
+                  <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                    <strong>⧉ Subtask Rollup ({{ it.time_rollup.subtask_count }})</strong>
+                    <span>{{ it.time_rollup.aggregate_progress_pct }}%</span>
+                  </div>
+                  <div class="tt-progress-track" style="height: 6px; margin-bottom: 6px;">
+                    <div class="tt-progress-spent" [style.width.%]="it.time_rollup.aggregate_progress_pct"></div>
+                  </div>
+                  <div style="display: flex; justify-content: space-between; color: #64748b; font-size: 11px;">
+                    <span>Total: {{ it.time_rollup.aggregate_time_spent_formatted }}</span>
+                    <span>Rem: {{ it.time_rollup.aggregate_remaining_estimate_formatted }}</span>
+                    <span>Orig: {{ it.time_rollup.aggregate_original_estimate_formatted }}</span>
+                  </div>
+                </div>
+              }
+
+              <!-- Inline Editable Estimates -->
+              <div style="border-top: 1px solid #ebecf0; padding-top: 10px; margin-top: 10px;">
+                <div class="grid-2">
+                  <div class="form-group">
+                    <label style="font-size: 12px;">Original Estimate</label>
+                    <input
+                      type="text"
+                      name="tt_original_est"
+                      [ngModel]="originalEstimateInput()"
+                      (ngModelChange)="originalEstimateInput.set($event)"
+                      (blur)="saveEstimateChanges()"
+                      placeholder="e.g. 2d 4h"
+                      style="font-size: 12.5px; padding: 4px 8px;"
+                    />
+                  </div>
+                  <div class="form-group">
+                    <label style="font-size: 12px;">Remaining Estimate</label>
+                    <input
+                      type="text"
+                      name="tt_remaining_est"
+                      [ngModel]="remainingEstimateInput()"
+                      (ngModelChange)="remainingEstimateInput.set($event)"
+                      (blur)="saveEstimateChanges()"
+                      placeholder="e.g. 1d 2h"
+                      style="font-size: 12.5px; padding: 4px 8px;"
+                    />
+                  </div>
+                </div>
+
+                <div class="form-group" style="margin-top: 6px;">
+                  <label style="font-size: 12px;">T-Shirt Size Estimation</label>
+                  <select
+                    name="tt_tshirt_size"
+                    [ngModel]="tshirtSizeInput()"
+                    (ngModelChange)="onTshirtChange($event)"
+                    style="font-size: 12.5px; padding: 4px 8px;"
+                  >
+                    <option value="">— None —</option>
+                    <option value="XS">XS (Extra Small · ~2h)</option>
+                    <option value="S">S (Small · ~4h)</option>
+                    <option value="M">M (Medium · ~1d)</option>
+                    <option value="L">L (Large · ~2d)</option>
+                    <option value="XL">XL (Extra Large · ~1w)</option>
+                    <option value="XXL">XXL (Epic Scope · ~2w)</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
             <div class="card-panel">
               <h3>Attributes &amp; Scheduling</h3>
 
@@ -1045,12 +1394,35 @@ export class ItemDetailComponent implements OnInit {
 
   readonly item = signal<WorkItemDetail | null>(null);
   readonly allItems = signal<WorkItem[]>([]);
-  readonly activeTab = signal<'comments' | 'history'>('comments');
+  readonly activeTab = signal<'comments' | 'worklogs' | 'history'>('comments');
   readonly toastMsg = signal('');
   readonly resolvedScreen = signal<ScreenDef | null>(null);
   readonly activeScreenTabId = signal<number>(0);
   readonly activeTransitionModal = signal<AvailableTransition | null>(null);
   readonly transitionModalError = signal('');
+
+  // Step 7: Time Tracking & Worklogs Signals & Draft State
+  readonly showLogWorkModal = signal(false);
+  readonly logWorkError = signal('');
+  readonly editingWorklogId = signal<number | null>(null);
+  readonly originalEstimateInput = signal('');
+  readonly remainingEstimateInput = signal('');
+  readonly tshirtSizeInput = signal('');
+  readonly durationPreview = signal<{ valid: boolean; formatted: string; seconds: number; error: string }>({
+    valid: true,
+    formatted: '2h',
+    seconds: 7200,
+    error: '',
+  });
+
+  worklogDraft = {
+    duration: '2h',
+    started_at: '',
+    description: '',
+    adjustment_mode: 'auto' as WorklogAdjustmentMode,
+    new_estimate: '',
+    reduce_by: '',
+  };
 
   customFieldsDraft: Record<string, any> = {};
 
@@ -1083,6 +1455,9 @@ export class ItemDetailComponent implements OnInit {
     const d = await this.api.getItemDetail(idOrKey);
     this.item.set(d);
     this.customFieldsDraft = { ...(d.custom_fields || {}) };
+    this.originalEstimateInput.set(d.original_estimate_formatted || '');
+    this.remainingEstimateInput.set(d.remaining_estimate_formatted || '');
+    this.tshirtSizeInput.set(d.tshirt_size || '');
     try {
       const sc = await this.api.resolveScreen(d.project_id, 'edit', d.type);
       this.resolvedScreen.set(sc);
@@ -1337,6 +1712,192 @@ export class ItemDetailComponent implements OnInit {
     if (!cur) return;
     await this.api.deleteItem(cur.key);
     await this.router.navigate(['/board']);
+  }
+
+  // Step 7: Time Tracking & Estimation Methods
+  getSpentPercent(it: WorkItemDetail): number {
+    const orig = it.original_estimate_seconds || 0;
+    const rem = it.remaining_estimate_seconds || 0;
+    const spent = it.time_spent_seconds || 0;
+    const total = Math.max(orig, spent + rem);
+    if (total <= 0) return 0;
+    return Math.min(100, Math.round((spent / total) * 100));
+  }
+
+  getRemainingPercent(it: WorkItemDetail): number {
+    const orig = it.original_estimate_seconds || 0;
+    const rem = it.remaining_estimate_seconds || 0;
+    const spent = it.time_spent_seconds || 0;
+    const total = Math.max(orig, spent + rem);
+    if (total <= 0) return 0;
+    return Math.min(100 - this.getSpentPercent(it), Math.round((rem / total) * 100));
+  }
+
+  openLogWorkModal(wl?: WorklogItem): void {
+    const now = new Date();
+    // format as YYYY-MM-DDTHH:MM
+    const localIso = new Date(now.getTime() - now.getTimezoneOffset() * 60000)
+      .toISOString()
+      .slice(0, 16);
+
+    if (wl) {
+      this.editingWorklogId.set(wl.id);
+      this.worklogDraft = {
+        duration: wl.time_spent_formatted || '1h',
+        started_at: wl.started_at ? wl.started_at.replace(' ', 'T').slice(0, 16) : localIso,
+        description: wl.description || '',
+        adjustment_mode: (wl.adjustment_mode as WorklogAdjustmentMode) || 'auto',
+        new_estimate: '',
+        reduce_by: '',
+      };
+      this.onDurationChange(this.worklogDraft.duration);
+    } else {
+      this.editingWorklogId.set(null);
+      this.worklogDraft = {
+        duration: '2h',
+        started_at: localIso,
+        description: '',
+        adjustment_mode: 'auto',
+        new_estimate: '',
+        reduce_by: '',
+      };
+      this.onDurationChange('2h');
+    }
+    this.logWorkError.set('');
+    this.showLogWorkModal.set(true);
+  }
+
+  closeLogWorkModal(): void {
+    this.showLogWorkModal.set(false);
+    this.editingWorklogId.set(null);
+    this.logWorkError.set('');
+  }
+
+  async onDurationChange(val: string): Promise<void> {
+    this.worklogDraft.duration = val;
+    if (!val.trim()) {
+      this.durationPreview.set({ valid: false, formatted: '', seconds: 0, error: 'Duration cannot be empty' });
+      return;
+    }
+    try {
+      const res = await this.api.parseDuration({ duration: val });
+      this.durationPreview.set({
+        valid: res.valid,
+        formatted: res.formatted,
+        seconds: res.seconds,
+        error: res.error || '',
+      });
+    } catch (e: any) {
+      this.durationPreview.set({ valid: false, formatted: '', seconds: 0, error: e?.message || 'Invalid format' });
+    }
+  }
+
+  applyDurationPreset(preset: string): void {
+    const cur = this.worklogDraft.duration.trim();
+    if (!cur) {
+      this.worklogDraft.duration = preset;
+    } else {
+      this.worklogDraft.duration = `${cur} ${preset}`;
+    }
+    this.onDurationChange(this.worklogDraft.duration);
+  }
+
+  async submitLogWork(): Promise<void> {
+    const cur = this.item();
+    if (!cur) return;
+    this.logWorkError.set('');
+
+    const dur = this.worklogDraft.duration.trim();
+    if (!dur) {
+      this.logWorkError.set('Time spent duration is required (e.g. 2h 30m)');
+      return;
+    }
+
+    try {
+      const payload: any = {
+        duration: dur,
+        started_at: this.worklogDraft.started_at ? this.worklogDraft.started_at.replace('T', ' ') : '',
+        description: this.worklogDraft.description,
+        adjustment_mode: this.worklogDraft.adjustment_mode,
+      };
+
+      if (this.worklogDraft.adjustment_mode === 'set') {
+        if (!this.worklogDraft.new_estimate.trim()) {
+          this.logWorkError.set("Please provide a new remaining estimate duration (e.g. '4h')");
+          return;
+        }
+        payload.new_estimate = this.worklogDraft.new_estimate.trim();
+      } else if (this.worklogDraft.adjustment_mode === 'reduce') {
+        if (!this.worklogDraft.reduce_by.trim()) {
+          this.logWorkError.set("Please provide an amount to reduce the remaining estimate by (e.g. '1h')");
+          return;
+        }
+        payload.reduce_by = this.worklogDraft.reduce_by.trim();
+      }
+
+      const wlId = this.editingWorklogId();
+      if (wlId) {
+        await this.api.updateWorklog(wlId, payload);
+        this.showToast('Worklog updated successfully');
+      } else {
+        await this.api.addWorklog(cur.key, payload);
+        this.showToast('Logged work successfully');
+      }
+
+      this.closeLogWorkModal();
+      await this.reloadDetail(cur.key);
+    } catch (err: any) {
+      this.logWorkError.set(err?.message || 'Failed to log work');
+    }
+  }
+
+  async deleteWorklog(wlId: number): Promise<void> {
+    const cur = this.item();
+    if (!cur) return;
+    if (!confirm('Are you sure you want to delete this worklog?')) return;
+    try {
+      await this.api.deleteWorklog(wlId, 'auto');
+      await this.reloadDetail(cur.key);
+      this.showToast('Worklog deleted');
+    } catch (err: any) {
+      this.showToast(`Error deleting worklog: ${err?.message || 'Failed'}`);
+    }
+  }
+
+  async saveEstimateChanges(): Promise<void> {
+    const cur = this.item();
+    if (!cur) return;
+    const origStr = this.originalEstimateInput().trim();
+    const remStr = this.remainingEstimateInput().trim();
+    try {
+      await this.api.updateItem(cur.key, {
+        original_estimate: origStr,
+        remaining_estimate: remStr,
+        tshirt_size: this.tshirtSizeInput() || '',
+      } as any);
+      await this.reloadDetail(cur.key);
+      this.showToast('Updated estimates');
+    } catch (err: any) {
+      this.showToast(`Estimate error: ${err?.message || 'Invalid format'}`);
+    }
+  }
+
+  async onTshirtChange(newSize: string): Promise<void> {
+    this.tshirtSizeInput.set(newSize);
+    // Auto-suggest estimates based on T-Shirt size if estimates are currently empty
+    const sizeToHours: Record<string, string> = {
+      XS: '2h',
+      S: '4h',
+      M: '1d',
+      L: '2d',
+      XL: '1w',
+      XXL: '2w',
+    };
+    if (newSize && sizeToHours[newSize] && !this.originalEstimateInput()) {
+      this.originalEstimateInput.set(sizeToHours[newSize]);
+      this.remainingEstimateInput.set(sizeToHours[newSize]);
+    }
+    await this.saveEstimateChanges();
   }
 
   showToast(msg: string): void {

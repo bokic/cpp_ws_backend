@@ -336,16 +336,16 @@ This document provides a comprehensive gap analysis and exhaustive development r
 ## 7. Epic 6: Time Tracking, Worklogs & Estimation Schemes
 
 ### 7.1 Estimation Triad
-- [ ] **Work Item Estimation Fields**:
+- [x] **Work Item Estimation Fields**:
   - `original_estimate_seconds`: Initial planned time.
   - `remaining_estimate_seconds`: Remaining time needed.
   - `time_spent_seconds`: Total logged duration.
   - Human-friendly time parser and formatter: `"2w 3d 4h 30m"` $\leftrightarrow$ seconds ($1\text{d} = 8\text{h}$, $1\text{w} = 5\text{d}$).
-- [ ] **Alternative Estimation Units**:
+- [x] **Alternative Estimation Units**:
   - Story Points (Fibonacci: 1, 2, 3, 5, 8, 13, 21), Linear points, T-shirt sizes (XS, S, M, L, XL), or Hours.
 
 ### 7.2 Worklogs Subsystem
-- [ ] **Worklog Table (`worklogs`)**:
+- [x] **Worklog Table (`worklogs`)**:
   ```sql
   CREATE TABLE worklogs (
       id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -359,13 +359,13 @@ This document provides a comprehensive gap analysis and exhaustive development r
       FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE CASCADE
   );
   ```
-- [ ] **Log Work Dialog & Remaining Estimate Adjustment**:
+- [x] **Log Work Dialog & Remaining Estimate Adjustment**:
   - Adjustment Modes:
     - *Auto-adjust*: Reduce `remaining_estimate` by `time_spent`.
     - *Leave unchanged*: Retain current remaining estimate.
     - *Set to*: Manually define new remaining estimate.
     - *Reduce by*: Subtract a specified duration from remaining estimate.
-- [ ] **Timesheet Reports**:
+- [x] **Timesheet Reports**:
   - Grid view showing hours logged per user per day/week across projects.
 
 ---
@@ -781,18 +781,21 @@ flowchart TD
   - [x] Complete Sprint Dialog: Summary modal rolling over uncompleted issues to Backlog or Next Sprint.
 - **Verification**: Dragging a card across columns executes the underlying workflow transition screen if required; completing a sprint updates sprint velocity accurately.
 
-#### Step 7: Time Tracking & Worklogs Subsystem
+#### Step 7: Time Tracking & Worklogs Subsystem *(Completed)*
 - **Why Next**: Worklogs feed directly into Burndown charts and Agile analytics in Step 8.
 - **Backend Deliverables**:
-  - Database Migration: Create `worklogs` table (`work_item_id`, `author_id`, `time_spent_seconds`, `started_at`, `description`).
-  - Add `original_estimate_seconds`, `remaining_estimate_seconds`, and `time_spent_seconds` to `work_items`.
-  - Duration string parser/serializer (`"2w 3d 4h 30m"` $\leftrightarrow$ seconds).
-  - Worklog Adjustment Logic: Auto-adjust, leave unchanged, set to, or reduce by modes.
+  - [x] Database Migration: Create `worklogs` table (`work_item_id`, `author_id`, `time_spent_seconds`, `started_at`, `description`, `adjustment_mode`, `adjustment_seconds`, `remaining_before`, `remaining_after`).
+  - [x] Add `original_estimate_seconds`, `remaining_estimate_seconds`, `time_spent_seconds`, and `tshirt_size` to `work_items`.
+  - [x] Duration string parser/serializer (`"2w 3d 4h 30m"` $\leftrightarrow$ seconds, supporting `w`, `d`, `h`, `m`, `s` and decimals like `1.5h`).
+  - [x] Worklog Adjustment Logic: Auto-adjust, leave unchanged, set to, or reduce by modes.
+  - [x] Worklog CRUD, Timesheet Aggregation, and Subtask/Parent Time Rollup endpoints.
+  - [x] JQL support for `remainingEstimate`, `timeSpent`, `originalEstimate`, `tshirtSize`, and `worklogAuthor`.
 - **Frontend Deliverables**:
-  - Log Work Modal: Interactive form with duration input, date picker, work description, and remaining estimate adjustment radio buttons.
-  - Worklog History Tab: Visual timeline on issue details displaying work logged per author.
-  - Issue Progress Bar: Visual breakdown of Time Spent vs Remaining Estimate.
-- **Verification**: Logging 2 hours with "Auto-adjust" reduces remaining estimate by 2 hours and increments total time spent.
+  - [x] Log Work Modal: Interactive form with duration input, quick preset chips (`+15m`, `+30m`, `+1h`, `+2h`, `+4h`, `+1d`), date picker, work description, and remaining estimate adjustment radio buttons (`Auto-adjust`, `Leave unchanged`, `Set to`, `Reduce by`).
+  - [x] Worklog History Tab: Visual timeline on issue details displaying work logged per author with inline edit and delete actions.
+  - [x] Issue Progress Bar & Estimation Panel: Visual breakdown of Time Spent vs Remaining Estimate vs Original Estimate with over-estimate alert and Subtask Rollup bar.
+  - [x] Board & Backlog badges showing remaining estimates and T-Shirt size badges.
+- **Verification**: Logging 2 hours with "Auto-adjust" reduces remaining estimate by 2 hours and increments total time spent; verified all 4 adjustment modes, edit/delete, subtask rollup, timesheet API, and JQL queries end-to-end.
 
 #### Step 8: Agile Analytics & Reporting Engine
 - **Why Next**: Sprints (Step 6), Workflows (Step 4), and Worklogs (Step 7) now provide all data points required for Agile metrics.

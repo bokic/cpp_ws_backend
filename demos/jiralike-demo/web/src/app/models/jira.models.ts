@@ -299,7 +299,121 @@ export interface WorkItem {
   subtask_count: number;
   comment_count: number;
   attachment_count: number;
+  original_estimate_seconds?: number;
+  remaining_estimate_seconds?: number;
+  time_spent_seconds?: number;
+  original_estimate_formatted?: string;
+  remaining_estimate_formatted?: string;
+  time_spent_formatted?: string;
+  tshirt_size?: string;
+  worklog_count?: number;
+  time_tracking_pct?: number;
+  is_over_estimate?: boolean;
   bm25_score?: number;
+}
+
+export type WorklogAdjustmentMode = 'auto' | 'leave' | 'set' | 'reduce';
+
+export interface WorklogItem {
+  id: number;
+  work_item_id: number;
+  author_id: number | null;
+  author_name: string;
+  author_color: string;
+  author_role?: string;
+  time_spent_seconds: number;
+  time_spent_formatted: string;
+  started_at: string;
+  description: string;
+  adjustment_mode: string;
+  adjustment_seconds: number;
+  adjustment_formatted?: string;
+  remaining_before: number;
+  remaining_before_formatted: string;
+  remaining_after: number;
+  remaining_after_formatted: string;
+  created_at?: string;
+  updated_at?: string;
+  work_item_key?: string;
+  work_item_title?: string;
+  work_item_type?: string;
+  work_item_status?: string;
+  project_id?: number;
+}
+
+export interface TimeRollup {
+  own_original_estimate_seconds: number;
+  own_original_estimate_formatted: string;
+  own_remaining_estimate_seconds: number;
+  own_remaining_estimate_formatted: string;
+  own_time_spent_seconds: number;
+  own_time_spent_formatted: string;
+  subtasks_original_estimate_seconds: number;
+  subtasks_original_estimate_formatted: string;
+  subtasks_remaining_estimate_seconds: number;
+  subtasks_remaining_estimate_formatted: string;
+  subtasks_time_spent_seconds: number;
+  subtasks_time_spent_formatted: string;
+  aggregate_original_estimate_seconds: number;
+  aggregate_original_estimate_formatted: string;
+  aggregate_remaining_estimate_seconds: number;
+  aggregate_remaining_estimate_formatted: string;
+  aggregate_time_spent_seconds: number;
+  aggregate_time_spent_formatted: string;
+  aggregate_progress_pct: number;
+  aggregate_is_over_estimate: boolean;
+  subtask_count: number;
+}
+
+export interface TimesheetUserSummary {
+  user_id: number;
+  display_name: string;
+  avatar_color: string;
+  role: string;
+  total_seconds: number;
+  total_formatted: string;
+  entry_count: number;
+}
+
+export interface TimesheetDaySummary {
+  date: string;
+  total_seconds: number;
+  total_formatted: string;
+}
+
+export interface TimesheetItemSummary {
+  work_item_id: number;
+  key: string;
+  title: string;
+  type: string;
+  status: string;
+  total_seconds: number;
+  total_formatted: string;
+  entry_count: number;
+}
+
+export interface TimesheetResponse {
+  total_seconds: number;
+  total_formatted: string;
+  worklogs: WorklogItem[];
+  by_user: TimesheetUserSummary[];
+  by_day: TimesheetDaySummary[];
+  by_item: TimesheetItemSummary[];
+}
+
+export interface DurationParseResponse {
+  valid: boolean;
+  input?: string;
+  seconds: number;
+  formatted: string;
+  error?: string;
+  breakdown?: {
+    weeks: number;
+    days: number;
+    hours: number;
+    minutes: number;
+    seconds: number;
+  };
 }
 
 export interface WorkItemLink {
@@ -358,6 +472,8 @@ export interface WorkItemDetail extends WorkItem {
   comments: CommentItem[];
   attachments: AttachmentItem[];
   history: WorkflowHistoryItem[];
+  worklogs?: WorklogItem[];
+  time_rollup?: TimeRollup;
   workflow?: ItemTransitionsPayload;
 }
 

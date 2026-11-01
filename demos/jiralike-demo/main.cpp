@@ -7,6 +7,7 @@
 #include "src/raii_json.h"
 #include "src/crypto_utils.h"
 #include "src/db_migrator.h"
+#include "src/time_tracking.h"
 #include "src/jql_lexer.h"
 #include "src/jql_parser.h"
 
@@ -658,6 +659,53 @@ static void seed_demo_workspace(db::sqlite_db &conn, int admin_id, int project_i
             completed_points = COALESCE((SELECT SUM(w.story_points) FROM work_items w WHERE w.sprint_id = sprints.id AND w.status = 'Done'), 0),
             completed_items_count = COALESCE((SELECT COUNT(*) FROM work_items w WHERE w.sprint_id = sprints.id AND w.status = 'Done'), 0),
             incomplete_items_count = COALESCE((SELECT COUNT(*) FROM work_items w WHERE w.sprint_id = sprints.id AND w.status != 'Done'), 0);
+
+        UPDATE work_items
+        SET original_estimate_seconds = CASE
+                WHEN story_points > 0 THEN story_points * 14400
+                ELSE 28800
+            END,
+            tshirt_size = CASE
+                WHEN story_points >= 13 THEN 'XL'
+                WHEN story_points >= 8  THEN 'L'
+                WHEN story_points >= 5  THEN 'M'
+                WHEN story_points >= 3  THEN 'S'
+                ELSE 'XS'
+            END
+        WHERE original_estimate_seconds = 0;
+
+        INSERT INTO worklogs (
+            work_item_id, author_id, time_spent_seconds, started_at, description,
+            adjustment_mode, adjustment_seconds, remaining_before, remaining_after
+        )
+        SELECT
+            w.id,
+            COALESCE(w.assignee_id, w.reporter_id),
+            CASE
+                WHEN w.status = 'Done' THEN w.original_estimate_seconds
+                WHEN w.progress > 0 THEN CAST((w.original_estimate_seconds * w.progress) / 100 AS INTEGER)
+                ELSE 7200
+            END,
+            COALESCE(NULLIF(w.start_date, '') || ' 09:30:00', datetime('now', '-2 days')),
+            'Implemented core deliverables and verified acceptance criteria for ' || w.key,
+            'auto',
+            0,
+            w.original_estimate_seconds,
+            CASE
+                WHEN w.status = 'Done' THEN 0
+                WHEN w.progress > 0 THEN MAX(0, w.original_estimate_seconds - CAST((w.original_estimate_seconds * w.progress) / 100 AS INTEGER))
+                ELSE MAX(0, w.original_estimate_seconds - 7200)
+            END
+        FROM work_items w
+        WHERE w.status IN ('Done', 'In Review', 'QA / Testing', 'In Progress')
+          AND NOT EXISTS (SELECT 1 FROM worklogs wl WHERE wl.work_item_id = w.id);
+
+        UPDATE work_items
+        SET time_spent_seconds = COALESCE((SELECT SUM(wl.time_spent_seconds) FROM worklogs wl WHERE wl.work_item_id = work_items.id), 0),
+            remaining_estimate_seconds = CASE
+                WHEN status = 'Done' THEN 0
+                ELSE MAX(0, original_estimate_seconds - COALESCE((SELECT SUM(wl.time_spent_seconds) FROM worklogs wl WHERE wl.work_item_id = work_items.id), 0))
+            END;
     )SQL");
 }
 
@@ -4474,6 +4522,197 @@ static int resolve_default_resolution_id(db::sqlite_db &conn) {
     return 1;
 }
 
+static bool extract_duration_field(const json::json_value &body,
+                                   const char *sec_key,
+                                   const char *str_key,
+                                   int64_t fallback_sec,
+                                   int64_t &out_sec,
+                                   std::string &err_msg) {
+    out_sec = fallback_sec;
+    if (!body) return true;
+    if (str_key && body.has_key(str_key)) {
+        std::string raw = body.get_string(str_key);
+        if (!raw.empty()) {
+            return time_tracking::parse_duration_to_seconds(raw, out_sec, err_msg);
+        }
+        out_sec = 0;
+        return true;
+    }
+    if (sec_key && body.has_key(sec_key)) {
+        // Also support passing a string inside sec_key or an integer
+        json_object *obj = nullptr;
+        if (json_object_object_get_ex(body.get(), sec_key, &obj) && obj) {
+            if (json_object_is_type(obj, json_type_string)) {
+                const char *s = json_object_get_string(obj);
+                if (s && *s) {
+                    bool has_alpha = false;
+                    for (const char *p = s; *p; ++p) {
+                        if (std::isalpha(static_cast<unsigned char>(*p))) {
+                            has_alpha = true;
+                            break;
+                        }
+                    }
+                    if (has_alpha) {
+                        return time_tracking::parse_duration_to_seconds(s, out_sec, err_msg);
+                    }
+                }
+            }
+            out_sec = std::max<int64_t>(0, json_object_get_int64(obj));
+            return true;
+        }
+    }
+    return true;
+}
+
+static json::json_value build_item_worklogs_array(db::sqlite_db &conn, int item_id) {
+    auto wl_stmt = conn.prepare(R"SQL(
+        SELECT wl.id, wl.work_item_id, wl.author_id,
+               COALESCE(u.display_name, 'System'),
+               COALESCE(u.avatar_color, '#0052CC'),
+               COALESCE(u.role, 'Developer'),
+               wl.time_spent_seconds, wl.started_at, wl.description,
+               wl.adjustment_mode, wl.adjustment_seconds,
+               wl.remaining_before, wl.remaining_after,
+               wl.created_at, wl.updated_at,
+               w.key, w.title
+        FROM worklogs wl
+        INNER JOIN work_items w ON w.id = wl.work_item_id
+        LEFT JOIN users u ON u.id = wl.author_id
+        WHERE wl.work_item_id = ?
+        ORDER BY wl.started_at DESC, wl.id DESC;
+    )SQL");
+    wl_stmt.bind_int(1, item_id);
+    auto arr = json::json_value::make_array();
+    while (wl_stmt.step() == SQLITE_ROW) {
+        auto w = json::json_value::make_object();
+        int64_t spent = wl_stmt.column_int64(6);
+        int64_t adj_sec = wl_stmt.column_int64(10);
+        int64_t rem_before = wl_stmt.column_int64(11);
+        int64_t rem_after = wl_stmt.column_int64(12);
+        w.add_int("id", wl_stmt.column_int(0));
+        w.add_int("work_item_id", wl_stmt.column_int(1));
+        w.add_nullable_int("author_id", wl_stmt.column_int(2));
+        w.add_str("author_name", wl_stmt.column_str(3));
+        w.add_str("author_color", wl_stmt.column_str(4));
+        w.add_str("author_role", wl_stmt.column_str(5));
+        w.add_int64("time_spent_seconds", spent);
+        w.add_str("time_spent_formatted", time_tracking::format_seconds_to_duration(spent));
+        w.add_str("started_at", wl_stmt.column_str(7));
+        w.add_str("description", wl_stmt.column_str(8));
+        w.add_str("adjustment_mode", wl_stmt.column_str(9));
+        w.add_int64("adjustment_seconds", adj_sec);
+        w.add_str("adjustment_formatted", time_tracking::format_seconds_to_duration(adj_sec));
+        w.add_int64("remaining_before", rem_before);
+        w.add_str("remaining_before_formatted", time_tracking::format_seconds_to_duration(rem_before));
+        w.add_int64("remaining_after", rem_after);
+        w.add_str("remaining_after_formatted", time_tracking::format_seconds_to_duration(rem_after));
+        w.add_str("created_at", wl_stmt.column_str(13));
+        w.add_str("updated_at", wl_stmt.column_str(14));
+        w.add_str("issue_key", wl_stmt.column_str(15));
+        w.add_str("issue_title", wl_stmt.column_str(16));
+        arr.add(std::move(w));
+    }
+    return arr;
+}
+
+static json::json_value build_item_time_rollup_json(db::sqlite_db &conn, int item_id) {
+    int64_t own_orig = 0, own_rem = 0, own_spent = 0;
+    {
+        auto st = conn.prepare(R"SQL(
+            SELECT COALESCE(original_estimate_seconds, 0),
+                   COALESCE(remaining_estimate_seconds, 0),
+                   COALESCE(time_spent_seconds, 0)
+            FROM work_items WHERE id = ?;
+        )SQL");
+        st.bind_int(1, item_id);
+        if (st.step() == SQLITE_ROW) {
+            own_orig = st.column_int64(0);
+            own_rem = st.column_int64(1);
+            own_spent = st.column_int64(2);
+        }
+    }
+
+    int sub_count = 0;
+    int64_t sub_orig = 0, sub_rem = 0, sub_spent = 0;
+    {
+        auto st = conn.prepare(R"SQL(
+            SELECT COUNT(*),
+                   COALESCE(SUM(original_estimate_seconds), 0),
+                   COALESCE(SUM(remaining_estimate_seconds), 0),
+                   COALESCE(SUM(time_spent_seconds), 0)
+            FROM work_items WHERE parent_id = ?;
+        )SQL");
+        st.bind_int(1, item_id);
+        if (st.step() == SQLITE_ROW) {
+            sub_count = st.column_int(0);
+            sub_orig = st.column_int64(1);
+            sub_rem = st.column_int64(2);
+            sub_spent = st.column_int64(3);
+        }
+    }
+
+    int64_t tot_orig = own_orig + sub_orig;
+    int64_t tot_rem = own_rem + sub_rem;
+    int64_t tot_spent = own_spent + sub_spent;
+
+    int own_pct = (own_spent + own_rem > 0) ? static_cast<int>((own_spent * 100) / (own_spent + own_rem)) : 0;
+    int rollup_pct = (tot_spent + tot_rem > 0) ? static_cast<int>((tot_spent * 100) / (tot_spent + tot_rem)) : 0;
+
+    auto obj = json::json_value::make_object();
+    obj.add_int("subtask_count", sub_count);
+
+    obj.add_int64("own_original_seconds", own_orig);
+    obj.add_int64("own_remaining_seconds", own_rem);
+    obj.add_int64("own_spent_seconds", own_spent);
+    obj.add_str("own_original_formatted", time_tracking::format_seconds_to_duration(own_orig));
+    obj.add_str("own_remaining_formatted", time_tracking::format_seconds_to_duration(own_rem));
+    obj.add_str("own_spent_formatted", time_tracking::format_seconds_to_duration(own_spent));
+
+    obj.add_int64("subtasks_original_seconds", sub_orig);
+    obj.add_int64("subtasks_remaining_seconds", sub_rem);
+    obj.add_int64("subtasks_spent_seconds", sub_spent);
+    obj.add_str("subtasks_original_formatted", time_tracking::format_seconds_to_duration(sub_orig));
+    obj.add_str("subtasks_remaining_formatted", time_tracking::format_seconds_to_duration(sub_rem));
+    obj.add_str("subtasks_spent_formatted", time_tracking::format_seconds_to_duration(sub_spent));
+
+    obj.add_int64("total_original_seconds", tot_orig);
+    obj.add_int64("total_remaining_seconds", tot_rem);
+    obj.add_int64("total_spent_seconds", tot_spent);
+    obj.add_str("total_original_formatted", time_tracking::format_seconds_to_duration(tot_orig));
+    obj.add_str("total_remaining_formatted", time_tracking::format_seconds_to_duration(tot_rem));
+    obj.add_str("total_spent_formatted", time_tracking::format_seconds_to_duration(tot_spent));
+
+    // Aliases for frontend models
+    obj.add_int64("own_original_estimate_seconds", own_orig);
+    obj.add_int64("own_remaining_estimate_seconds", own_rem);
+    obj.add_int64("own_time_spent_seconds", own_spent);
+    obj.add_str("own_original_estimate_formatted", time_tracking::format_seconds_to_duration(own_orig));
+    obj.add_str("own_remaining_estimate_formatted", time_tracking::format_seconds_to_duration(own_rem));
+    obj.add_str("own_time_spent_formatted", time_tracking::format_seconds_to_duration(own_spent));
+
+    obj.add_int64("subtasks_original_estimate_seconds", sub_orig);
+    obj.add_int64("subtasks_remaining_estimate_seconds", sub_rem);
+    obj.add_int64("subtasks_time_spent_seconds", sub_spent);
+    obj.add_str("subtasks_original_estimate_formatted", time_tracking::format_seconds_to_duration(sub_orig));
+    obj.add_str("subtasks_remaining_estimate_formatted", time_tracking::format_seconds_to_duration(sub_rem));
+    obj.add_str("subtasks_time_spent_formatted", time_tracking::format_seconds_to_duration(sub_spent));
+
+    obj.add_int64("aggregate_original_estimate_seconds", tot_orig);
+    obj.add_int64("aggregate_remaining_estimate_seconds", tot_rem);
+    obj.add_int64("aggregate_time_spent_seconds", tot_spent);
+    obj.add_str("aggregate_original_estimate_formatted", time_tracking::format_seconds_to_duration(tot_orig));
+    obj.add_str("aggregate_remaining_estimate_formatted", time_tracking::format_seconds_to_duration(tot_rem));
+    obj.add_str("aggregate_time_spent_formatted", time_tracking::format_seconds_to_duration(tot_spent));
+    obj.add_int("aggregate_progress_pct", std::clamp(rollup_pct, 0, 100));
+    obj.add_bool("aggregate_is_over_estimate", tot_orig > 0 && (tot_spent + tot_rem) > tot_orig);
+
+    obj.add_int("own_pct", std::clamp(own_pct, 0, 100));
+    obj.add_int("rollup_pct", std::clamp(rollup_pct, 0, 100));
+    obj.add_bool("is_over_estimate", own_orig > 0 && (own_spent + own_rem) > own_orig);
+    obj.add_bool("is_rollup_over_estimate", tot_orig > 0 && (tot_spent + tot_rem) > tot_orig);
+    return obj;
+}
+
 static void sync_item_components_and_versions(db::sqlite_db &conn,
                                               int item_id,
                                               const json::json_value &body,
@@ -4911,6 +5150,30 @@ static json::json_value row_to_work_item_json(db::sqlite_db &conn, db::sqlite_st
     item.add_str("resolution_name", stmt.column_str(33));
     item.add_str("resolution_date", stmt.column_str(34));
 
+    int64_t orig_sec = stmt.column_int64(35);
+    int64_t rem_sec  = stmt.column_int64(36);
+    int64_t spent_sec = stmt.column_int64(37);
+    std::string tshirt_sz = stmt.column_str(38);
+    int worklog_cnt = stmt.column_int(39);
+
+    item.add_int64("original_estimate_seconds", orig_sec);
+    item.add_int64("remaining_estimate_seconds", rem_sec);
+    item.add_int64("time_spent_seconds", spent_sec);
+    item.add_str("original_estimate_formatted", time_tracking::format_seconds_to_duration(orig_sec, false));
+    item.add_str("remaining_estimate_formatted", time_tracking::format_seconds_to_duration(rem_sec, false));
+    item.add_str("time_spent_formatted", time_tracking::format_seconds_to_duration(spent_sec, false));
+    item.add_str("tshirt_size", tshirt_sz);
+    item.add_int("worklog_count", worklog_cnt);
+
+    int time_pct = 0;
+    if (spent_sec + rem_sec > 0) {
+        time_pct = static_cast<int>((spent_sec * 100) / (spent_sec + rem_sec));
+    } else if (orig_sec > 0 && stmt.column_str(4) == "Done") {
+        time_pct = 100;
+    }
+    item.add_int("time_tracking_pct", std::clamp(time_pct, 0, 100));
+    item.add_bool("is_over_estimate", orig_sec > 0 && (spent_sec + rem_sec) > orig_sec);
+
     // Load associated components
     auto comp_arr = json::json_value::make_array();
     auto comp_ids_arr = json::json_value::make_array();
@@ -5086,7 +5349,12 @@ static const char *BASE_WORK_ITEM_SELECT = R"SQL(
         w.category,
         w.resolution_id,
         COALESCE(res.name, ''),
-        COALESCE(w.resolution_date, '')
+        COALESCE(w.resolution_date, ''),
+        COALESCE(w.original_estimate_seconds, 0),
+        COALESCE(w.remaining_estimate_seconds, 0),
+        COALESCE(w.time_spent_seconds, 0),
+        COALESCE(w.tshirt_size, ''),
+        (SELECT COUNT(*) FROM worklogs wl WHERE wl.work_item_id = w.id)
     FROM work_items w
     LEFT JOIN users ua ON ua.id = w.assignee_id
     LEFT JOIN users ur ON ur.id = w.reporter_id
@@ -5544,6 +5812,12 @@ static void handle_search_suggestions(backend::wsworker *worker,
     add_field_meta("due", "Due Date", "date", "Target due date");
     add_field_meta("startDate", "Start Date", "date", "Planned start date");
     add_field_meta("resolved", "Resolution Date", "date", "Timestamp when the issue was resolved");
+    add_field_meta("originalEstimate", "Original Estimate", "duration", "Initial planned time (e.g., originalEstimate >= \"1d\" or seconds)");
+    add_field_meta("remainingEstimate", "Remaining Estimate", "duration", "Remaining time needed (e.g., remainingEstimate > \"4h\")");
+    add_field_meta("timeSpent", "Time Spent", "duration", "Total logged duration (e.g., timeSpent > \"2h\")");
+    add_field_meta("tshirtSize", "T-Shirt Size", "select", "T-shirt size estimate: XS, S, M, L, XL");
+    add_field_meta("worklogAuthor", "Worklog Author", "user", "User who logged work on the issue");
+    add_field_meta("worklogComment", "Worklog Description", "text", "Search inside worklog descriptions (~)");
 
     auto values_map = json::json_value::make_object();
 
@@ -7594,6 +7868,28 @@ static void handle_items(backend::wsworker *worker,
     std::string steps = body.get_string("steps_to_reproduce");
     std::string labels = body.get_string("labels");
     int resolution_id = body.get_int("resolution_id", 0);
+    std::string tshirt_size = body.get_string("tshirt_size");
+    if (tshirt_size.empty() && story_points > 0) {
+        if (story_points >= 13) tshirt_size = "XL";
+        else if (story_points >= 8) tshirt_size = "L";
+        else if (story_points >= 5) tshirt_size = "M";
+        else if (story_points >= 3) tshirt_size = "S";
+        else tshirt_size = "XS";
+    }
+
+    int64_t default_orig_sec = story_points > 0 ? static_cast<int64_t>(story_points) * 14400 : 0;
+    int64_t orig_est_sec = default_orig_sec;
+    std::string dur_err;
+    if (!extract_duration_field(body, "original_estimate_seconds", "original_estimate", default_orig_sec, orig_est_sec, dur_err)) {
+        send_error(worker, header, "400 Bad Request", "Invalid original_estimate: " + dur_err);
+        return;
+    }
+    int64_t default_rem_sec = (status == "Done") ? 0 : orig_est_sec;
+    int64_t rem_est_sec = default_rem_sec;
+    if (!extract_duration_field(body, "remaining_estimate_seconds", "remaining_estimate", default_rem_sec, rem_est_sec, dur_err)) {
+        send_error(worker, header, "400 Bad Request", "Invalid remaining_estimate: " + dur_err);
+        return;
+    }
 
     if (title.empty()) {
         send_error(worker, header, "400 Bad Request", "Work item title is required");
@@ -7658,8 +7954,9 @@ static void handle_items(backend::wsworker *worker,
                 project_id, key, type, category, status, priority, title, description,
                 parent_id, sprint_id, assignee_id, reporter_id, story_points,
                 progress, start_date, due_date, severity, steps_to_reproduce, labels, board_order,
-                resolution_id, resolution_date
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? > 0 THEN datetime('now') ELSE '' END);
+                resolution_id, resolution_date,
+                original_estimate_seconds, remaining_estimate_seconds, time_spent_seconds, tshirt_size
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? > 0 THEN datetime('now') ELSE '' END, ?, ?, 0, ?);
         )SQL");
         ins.bind_int(1, project_id);
         ins.bind_text(2, item_key);
@@ -7683,6 +7980,9 @@ static void handle_items(backend::wsworker *worker,
         ins.bind_int(20, next_seq * 10);
         ins.bind_optional_int(21, resolution_id);
         ins.bind_int(22, resolution_id);
+        ins.bind_int64(23, orig_est_sec);
+        ins.bind_int64(24, rem_est_sec);
+        ins.bind_text(25, tshirt_size);
         ins.step_done();
         new_item_id = static_cast<int>(conn.last_insert_rowid());
 
@@ -7883,6 +8183,10 @@ static void handle_item_detail(backend::wsworker *worker,
         auto u_viewer = get_authenticated_user(conn, worker, header);
         item.add("workflow", build_item_transitions_payload(conn, item_id, u_viewer));
 
+        // Worklogs & Time Rollup (Step 7)
+        item.add("worklogs", build_item_worklogs_array(conn, item_id));
+        item.add("time_rollup", build_item_time_rollup_json(conn, item_id));
+
         send_json(worker, header, "200 OK", item);
         return;
     }
@@ -7929,8 +8233,16 @@ static void handle_item_detail(backend::wsworker *worker,
     int old_project_id = 1;
     int old_resolution_id = 0;
     std::string old_resolution_date;
+    int old_orig_est = 0;
+    int old_rem_est = 0;
+    std::string old_tshirt;
     {
-        auto cur = conn.prepare("SELECT status, COALESCE(resolution_id, 0), COALESCE(resolution_date, ''), project_id FROM work_items WHERE id = ?;");
+        auto cur = conn.prepare(R"SQL(
+            SELECT status, COALESCE(resolution_id, 0), COALESCE(resolution_date, ''), project_id,
+                   COALESCE(original_estimate_seconds, 0), COALESCE(remaining_estimate_seconds, 0),
+                   COALESCE(tshirt_size, '')
+            FROM work_items WHERE id = ?;
+        )SQL");
         cur.bind_int(1, item_id);
         if (cur.step() != SQLITE_ROW) {
             send_error(worker, header, "404 Not Found", "Work item not found");
@@ -7940,6 +8252,9 @@ static void handle_item_detail(backend::wsworker *worker,
         old_resolution_id = cur.column_int(1);
         old_resolution_date = cur.column_str(2);
         old_project_id = cur.column_int(3);
+        old_orig_est = cur.column_int(4);
+        old_rem_est = cur.column_int(5);
+        old_tshirt = cur.column_str(6);
     }
 
     std::string type = body.get_string("type", "Task");
@@ -7963,6 +8278,21 @@ static void handle_item_detail(backend::wsworker *worker,
     std::string severity = body.get_string("severity");
     std::string steps = body.get_string("steps_to_reproduce");
     std::string labels = body.get_string("labels");
+    std::string tshirt_size = body.has_key("tshirt_size") ? body.get_string("tshirt_size") : old_tshirt;
+
+    std::string dur_err;
+    int64_t orig_est_sec = old_orig_est;
+    if (!extract_duration_field(body, "original_estimate_seconds", "original_estimate", old_orig_est, orig_est_sec, dur_err)) {
+        send_error(worker, header, "400 Bad Request", "Invalid original_estimate: " + dur_err);
+        return;
+    }
+    int64_t rem_est_sec = old_rem_est;
+    if (!extract_duration_field(body, "remaining_estimate_seconds", "remaining_estimate", old_rem_est, rem_est_sec, dur_err)) {
+        send_error(worker, header, "400 Bad Request", "Invalid remaining_estimate: " + dur_err);
+        return;
+    }
+    int original_estimate_seconds = static_cast<int>(orig_est_sec);
+    int remaining_estimate_seconds = static_cast<int>(rem_est_sec);
 
     int resolution_id = body.has_key("resolution_id") ? body.get_int("resolution_id", 0) : old_resolution_id;
     bool set_res_now = false;
@@ -7995,6 +8325,9 @@ static void handle_item_detail(backend::wsworker *worker,
                 steps_to_reproduce = ?, labels = ?,
                 resolution_id = ?,
                 resolution_date = CASE WHEN ? = 1 THEN datetime('now') ELSE ? END,
+                original_estimate_seconds = ?,
+                remaining_estimate_seconds = ?,
+                tshirt_size = ?,
                 updated_at = datetime('now')
             WHERE id = ?;
         )SQL");
@@ -8017,7 +8350,10 @@ static void handle_item_detail(backend::wsworker *worker,
         upd.bind_optional_int(17, resolution_id);
         upd.bind_int(18, set_res_now ? 1 : 0);
         upd.bind_text(19, resolution_date);
-        upd.bind_int(20, item_id);
+        upd.bind_int(20, original_estimate_seconds);
+        upd.bind_int(21, remaining_estimate_seconds);
+        upd.bind_text(22, tshirt_size);
+        upd.bind_int(23, item_id);
         upd.step_done();
 
         sync_item_components_and_versions(conn, item_id, body, false);
@@ -8836,6 +9172,694 @@ static void handle_delete_attachment(backend::wsworker *worker,
     send_json(worker, header, "200 OK", res);
 }
 
+// ============================================================================
+// Step 7: Time Tracking & Worklogs Subsystem REST Endpoints
+// ============================================================================
+
+// GET | POST /api/items/([A-Za-z0-9_-]+)/worklogs
+static void handle_item_worklogs(backend::wsworker *worker,
+                                 const std::map<std::string, std::string> &header,
+                                 const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing item ID or key");
+        return;
+    }
+    std::string method = get_header(header, "REQUEST_METHOD");
+    auto conn = acquire_db_connection();
+    int item_id = resolve_work_item_id(conn, uri_params.front());
+    if (item_id <= 0) {
+        send_error(worker, header, "404 Not Found", "Work item not found");
+        return;
+    }
+
+    if (method == "GET") {
+        auto out = json::json_value::make_object();
+        out.add_int("work_item_id", item_id);
+        out.add("worklogs", build_item_worklogs_array(conn, item_id));
+        out.add("time_rollup", build_item_time_rollup_json(conn, item_id));
+        send_json(worker, header, "200 OK", out);
+        return;
+    }
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    // Parse time_spent (accepts human-friendly duration like "2w 3d 4h 30m" or numeric time_spent_seconds)
+    std::string dur_err;
+    int64_t ts_seconds = -1;
+    if (!extract_duration_field(body, "time_spent_seconds", "time_spent", -1, ts_seconds, dur_err)) {
+        send_error(worker, header, "400 Bad Request", "Invalid time_spent: " + dur_err);
+        return;
+    }
+    if (ts_seconds <= 0 && body.has_key("duration")) {
+        if (!time_tracking::parse_duration_to_seconds(body.get_string("duration"), ts_seconds, dur_err)) {
+            send_error(worker, header, "400 Bad Request", "Invalid duration format: " + dur_err);
+            return;
+        }
+    }
+    if (ts_seconds <= 0) {
+        send_error(worker, header, "400 Bad Request", "A positive time_spent (e.g. '2h 30m') or time_spent_seconds is required");
+        return;
+    }
+
+    std::string started_at = body.get_string("started_at");
+    std::string description = body.get_string("description");
+    if (description.empty() && body.has_key("comment")) {
+        description = body.get_string("comment");
+    }
+
+    std::string raw_mode = body.get_string("adjustment_mode", "auto");
+    if (raw_mode != "auto" && raw_mode != "auto_adjust" &&
+        raw_mode != "leave" && raw_mode != "leave_unchanged" && raw_mode != "unchanged" &&
+        raw_mode != "set" && raw_mode != "set_to" && raw_mode != "manual" &&
+        raw_mode != "reduce" && raw_mode != "reduce_by") {
+        send_error(worker, header, "400 Bad Request",
+                   "Invalid adjustment_mode '" + raw_mode + "'. Must be one of: auto, leave, set, reduce");
+        return;
+    }
+    std::string mode = time_tracking::normalize_adjustment_mode(raw_mode);
+
+    int64_t adj_param_seconds = 0;
+    if (mode == "set") {
+        std::string adj_err;
+        int64_t set_sec = -1;
+        if (!extract_duration_field(body, "new_estimate_seconds", "new_estimate", -1, set_sec, adj_err)) {
+            send_error(worker, header, "400 Bad Request", "Invalid new_estimate: " + adj_err);
+            return;
+        }
+        if (set_sec < 0 && body.has_key("adjustment_duration")) {
+            if (!time_tracking::parse_duration_to_seconds(body.get_string("adjustment_duration"), set_sec, adj_err)) {
+                send_error(worker, header, "400 Bad Request", "Invalid adjustment_duration: " + adj_err);
+                return;
+            }
+        }
+        if (set_sec < 0 && body.has_key("adjustment_seconds")) {
+            set_sec = body.get_int("adjustment_seconds", 0);
+        }
+        if (set_sec < 0) {
+            send_error(worker, header, "400 Bad Request",
+                       "adjustment_mode 'set' requires a non-negative new_estimate (e.g. '4h') or adjustment_seconds");
+            return;
+        }
+        adj_param_seconds = set_sec;
+    } else if (mode == "reduce") {
+        std::string adj_err;
+        int64_t red_sec = -1;
+        if (!extract_duration_field(body, "reduce_by_seconds", "reduce_by", -1, red_sec, adj_err)) {
+            send_error(worker, header, "400 Bad Request", "Invalid reduce_by: " + adj_err);
+            return;
+        }
+        if (red_sec <= 0 && body.has_key("adjustment_duration")) {
+            if (!time_tracking::parse_duration_to_seconds(body.get_string("adjustment_duration"), red_sec, adj_err)) {
+                send_error(worker, header, "400 Bad Request", "Invalid adjustment_duration: " + adj_err);
+                return;
+            }
+        }
+        if (red_sec <= 0 && body.has_key("adjustment_seconds")) {
+            red_sec = body.get_int("adjustment_seconds", 0);
+        }
+        if (red_sec <= 0) {
+            send_error(worker, header, "400 Bad Request",
+                       "adjustment_mode 'reduce' requires a positive reduce_by (e.g. '1h 30m') or adjustment_seconds");
+            return;
+        }
+        adj_param_seconds = red_sec;
+    }
+
+    int cur_orig_sec = 0;
+    int cur_rem_sec = 0;
+    int cur_spent_sec = 0;
+    {
+        auto q = conn.prepare(R"SQL(
+            SELECT COALESCE(original_estimate_seconds, 0),
+                   COALESCE(remaining_estimate_seconds, 0),
+                   COALESCE(time_spent_seconds, 0)
+            FROM work_items WHERE id = ?;
+        )SQL");
+        q.bind_int(1, item_id);
+        if (q.step() != SQLITE_ROW) {
+            send_error(worker, header, "404 Not Found", "Work item not found");
+            return;
+        }
+        cur_orig_sec = q.column_int(0);
+        cur_rem_sec = q.column_int(1);
+        cur_spent_sec = q.column_int(2);
+    }
+
+    int64_t new_rem_sec = time_tracking::compute_adjusted_remaining(
+        cur_rem_sec, ts_seconds, mode, adj_param_seconds);
+    int64_t new_spent_sec = static_cast<int64_t>(cur_spent_sec) + ts_seconds;
+
+    int wl_id = 0;
+    {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare(R"SQL(
+            INSERT INTO worklogs (
+                work_item_id, author_id, time_spent_seconds,
+                started_at, description, adjustment_mode, adjustment_seconds,
+                remaining_before, remaining_after
+            ) VALUES (
+                ?, ?, ?,
+                COALESCE(NULLIF(?, ''), datetime('now')), ?, ?, ?,
+                ?, ?
+            );
+        )SQL");
+        ins.bind_int(1, item_id);
+        ins.bind_int(2, u_auth.id);
+        ins.bind_int(3, static_cast<int>(ts_seconds));
+        ins.bind_text(4, started_at);
+        ins.bind_text(5, description);
+        ins.bind_text(6, mode);
+        ins.bind_int(7, static_cast<int>(adj_param_seconds));
+        ins.bind_int(8, cur_rem_sec);
+        ins.bind_int(9, static_cast<int>(new_rem_sec));
+        ins.step_done();
+        wl_id = static_cast<int>(conn.last_insert_rowid());
+
+        auto upd = conn.prepare(R"SQL(
+            UPDATE work_items
+            SET time_spent_seconds = ?,
+                remaining_estimate_seconds = ?,
+                updated_at = datetime('now')
+            WHERE id = ?;
+        )SQL");
+        upd.bind_int(1, static_cast<int>(new_spent_sec));
+        upd.bind_int(2, static_cast<int>(new_rem_sec));
+        upd.bind_int(3, item_id);
+        upd.step_done();
+        tx.commit();
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", wl_id);
+    res.add_int("work_item_id", item_id);
+    res.add_int("author_id", u_auth.id);
+    res.add_str("author_name", u_auth.display_name);
+    res.add_str("author_color", u_auth.avatar_color);
+    res.add_int("time_spent_seconds", static_cast<int>(ts_seconds));
+    res.add_str("time_spent_formatted", time_tracking::format_seconds_to_duration(ts_seconds));
+    res.add_str("started_at", started_at.empty() ? "just now" : started_at);
+    res.add_str("description", description);
+    res.add_str("adjustment_mode", mode);
+    res.add_int("adjustment_seconds", static_cast<int>(adj_param_seconds));
+    res.add_str("adjustment_formatted", time_tracking::format_seconds_to_duration(adj_param_seconds));
+    res.add_int("remaining_before", cur_rem_sec);
+    res.add_str("remaining_before_formatted", time_tracking::format_seconds_to_duration(cur_rem_sec));
+    res.add_int("remaining_after", static_cast<int>(new_rem_sec));
+    res.add_str("remaining_after_formatted", time_tracking::format_seconds_to_duration(new_rem_sec));
+    res.add_int("item_original_estimate_seconds", cur_orig_sec);
+    res.add_str("item_original_estimate_formatted", time_tracking::format_seconds_to_duration(cur_orig_sec));
+    res.add_int("item_remaining_estimate_seconds", static_cast<int>(new_rem_sec));
+    res.add_str("item_remaining_estimate_formatted", time_tracking::format_seconds_to_duration(new_rem_sec));
+    res.add_int("item_time_spent_seconds", static_cast<int>(new_spent_sec));
+    res.add_str("item_time_spent_formatted", time_tracking::format_seconds_to_duration(new_spent_sec));
+    res.add("time_rollup", build_item_time_rollup_json(conn, item_id));
+    send_json(worker, header, "201 Created", res);
+}
+
+// PUT | DELETE /api/worklogs/([0-9]+)
+static void handle_worklog_detail(backend::wsworker *worker,
+                                  const std::map<std::string, std::string> &header,
+                                  const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing worklog ID");
+        return;
+    }
+    int wl_id = std::atoi(uri_params.front().c_str());
+    std::string method = get_header(header, "REQUEST_METHOD");
+    auto conn = acquire_db_connection();
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    int item_id = 0;
+    int old_spent = 0;
+    std::string old_started;
+    std::string old_desc;
+    std::string old_mode;
+    {
+        auto q = conn.prepare(R"SQL(
+            SELECT work_item_id, time_spent_seconds, started_at, description, adjustment_mode
+            FROM worklogs WHERE id = ?;
+        )SQL");
+        q.bind_int(1, wl_id);
+        if (q.step() != SQLITE_ROW) {
+            send_error(worker, header, "404 Not Found", "Worklog entry not found");
+            return;
+        }
+        item_id = q.column_int(0);
+        old_spent = q.column_int(1);
+        old_started = q.column_str(2);
+        old_desc = q.column_str(3);
+        old_mode = q.column_str(4);
+    }
+
+    int cur_rem = 0;
+    int cur_total_spent = 0;
+    {
+        auto iq = conn.prepare("SELECT COALESCE(remaining_estimate_seconds, 0), COALESCE(time_spent_seconds, 0) FROM work_items WHERE id = ?;");
+        iq.bind_int(1, item_id);
+        if (iq.step() == SQLITE_ROW) {
+            cur_rem = iq.column_int(0);
+            cur_total_spent = iq.column_int(1);
+        }
+    }
+
+    if (method == "DELETE") {
+        auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+        std::string revert_mode = args["adjustment_mode"];
+        if (revert_mode.empty()) revert_mode = "auto";
+        int new_total_spent = std::max(0, cur_total_spent - old_spent);
+        int new_rem = cur_rem;
+        if (revert_mode == "auto") {
+            new_rem = cur_rem + old_spent;
+        }
+
+        {
+            db::sqlite_transaction tx(conn);
+            auto del = conn.prepare("DELETE FROM worklogs WHERE id = ?;");
+            del.bind_int(1, wl_id);
+            del.step_done();
+
+            auto upd = conn.prepare(R"SQL(
+                UPDATE work_items
+                SET time_spent_seconds = COALESCE((SELECT SUM(time_spent_seconds) FROM worklogs WHERE work_item_id = ?), 0),
+                    remaining_estimate_seconds = ?,
+                    updated_at = datetime('now')
+                WHERE id = ?;
+            )SQL");
+            upd.bind_int(1, item_id);
+            upd.bind_int(2, new_rem);
+            upd.bind_int(3, item_id);
+            upd.step_done();
+            tx.commit();
+        }
+
+        auto res = json::json_value::make_object();
+        res.add_bool("deleted", true);
+        res.add_int("work_item_id", item_id);
+        res.add_int("item_time_spent_seconds", new_total_spent);
+        res.add_str("item_time_spent_formatted", time_tracking::format_seconds_to_duration(new_total_spent));
+        res.add_int("item_remaining_estimate_seconds", new_rem);
+        res.add_str("item_remaining_estimate_formatted", time_tracking::format_seconds_to_duration(new_rem));
+        res.add("time_rollup", build_item_time_rollup_json(conn, item_id));
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    // PUT /api/worklogs/:id
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string dur_err;
+    int64_t ts_sec = old_spent;
+    if (!extract_duration_field(body, "time_spent_seconds", "time_spent", old_spent, ts_sec, dur_err)) {
+        send_error(worker, header, "400 Bad Request", "Invalid time_spent: " + dur_err);
+        return;
+    }
+    int new_wl_spent = static_cast<int>(ts_sec);
+    if (new_wl_spent <= 0) {
+        send_error(worker, header, "400 Bad Request", "time_spent must be greater than zero");
+        return;
+    }
+
+    std::string new_started = body.has_key("started_at") ? body.get_string("started_at") : old_started;
+    std::string new_desc = body.has_key("description") ? body.get_string("description") : old_desc;
+    std::string mode = body.has_key("adjustment_mode")
+                           ? time_tracking::normalize_adjustment_mode(body.get_string("adjustment_mode"))
+                           : "auto";
+    if (mode.empty()) mode = "auto";
+
+    int delta_spent = new_wl_spent - old_spent;
+    int new_rem = cur_rem;
+    int adj_param = 0;
+    if (mode == "auto") {
+        new_rem = std::max(0, cur_rem - delta_spent);
+    } else if (mode == "set") {
+        std::string adj_err;
+        int64_t set_sec = -1;
+        if (extract_duration_field(body, "new_estimate_seconds", "new_estimate", -1, set_sec, adj_err) && set_sec >= 0) {
+            adj_param = static_cast<int>(set_sec);
+            new_rem = std::max(0, adj_param);
+        }
+    } else if (mode == "reduce") {
+        std::string adj_err;
+        int64_t red_sec = -1;
+        if (extract_duration_field(body, "reduce_by_seconds", "reduce_by", -1, red_sec, adj_err) && red_sec > 0) {
+            adj_param = static_cast<int>(red_sec);
+            new_rem = std::max(0, cur_rem - adj_param);
+        }
+    }
+
+    {
+        db::sqlite_transaction tx(conn);
+        auto upd_wl = conn.prepare(R"SQL(
+            UPDATE worklogs
+            SET time_spent_seconds = ?, started_at = ?, description = ?,
+                adjustment_mode = ?, adjustment_seconds = ?,
+                remaining_before = ?, remaining_after = ?,
+                updated_at = datetime('now')
+            WHERE id = ?;
+        )SQL");
+        upd_wl.bind_int(1, new_wl_spent);
+        upd_wl.bind_text(2, new_started);
+        upd_wl.bind_text(3, new_desc);
+        upd_wl.bind_text(4, mode);
+        upd_wl.bind_int(5, adj_param);
+        upd_wl.bind_int(6, cur_rem);
+        upd_wl.bind_int(7, new_rem);
+        upd_wl.bind_int(8, wl_id);
+        upd_wl.step_done();
+
+        auto upd_it = conn.prepare(R"SQL(
+            UPDATE work_items
+            SET time_spent_seconds = COALESCE((SELECT SUM(time_spent_seconds) FROM worklogs WHERE work_item_id = ?), 0),
+                remaining_estimate_seconds = ?,
+                updated_at = datetime('now')
+            WHERE id = ?;
+        )SQL");
+        upd_it.bind_int(1, item_id);
+        upd_it.bind_int(2, new_rem);
+        upd_it.bind_int(3, item_id);
+        upd_it.step_done();
+        tx.commit();
+    }
+
+    int updated_total_spent = 0;
+    {
+        auto sq = conn.prepare("SELECT COALESCE(time_spent_seconds, 0) FROM work_items WHERE id = ?;");
+        sq.bind_int(1, item_id);
+        if (sq.step() == SQLITE_ROW) {
+            updated_total_spent = sq.column_int(0);
+        }
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", wl_id);
+    res.add_int("work_item_id", item_id);
+    res.add_int("time_spent_seconds", new_wl_spent);
+    res.add_str("time_spent_formatted", time_tracking::format_seconds_to_duration(new_wl_spent));
+    res.add_str("started_at", new_started);
+    res.add_str("description", new_desc);
+    res.add_str("adjustment_mode", mode);
+    res.add_int("remaining_before", cur_rem);
+    res.add_int("remaining_after", new_rem);
+    res.add_int("item_time_spent_seconds", updated_total_spent);
+    res.add_str("item_time_spent_formatted", time_tracking::format_seconds_to_duration(updated_total_spent));
+    res.add_int("item_remaining_estimate_seconds", new_rem);
+    res.add_str("item_remaining_estimate_formatted", time_tracking::format_seconds_to_duration(new_rem));
+    res.add("time_rollup", build_item_time_rollup_json(conn, item_id));
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET /api/worklogs (Timesheet & Project/User/Sprint Worklog Report)
+static void handle_all_worklogs_timesheet(backend::wsworker *worker,
+                                          const std::map<std::string, std::string> &header,
+                                          const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+    std::string proj_str = args["project_id"];
+    std::string user_str = args["user_id"];
+    std::string sprint_str = args["sprint_id"];
+    std::string item_str = args["work_item_id"];
+    std::string from_date = args["from_date"];
+    std::string to_date = args["to_date"];
+
+    std::string sql = R"SQL(
+        SELECT wl.id, wl.work_item_id, w.key, w.title, w.type, w.status, w.project_id,
+               wl.author_id, COALESCE(u.display_name, 'Unknown'), COALESCE(u.avatar_color, '#0052cc'), COALESCE(u.role, ''),
+               wl.time_spent_seconds, wl.started_at, wl.description,
+               wl.adjustment_mode, wl.adjustment_seconds, wl.remaining_before, wl.remaining_after,
+               wl.created_at, wl.updated_at
+        FROM worklogs wl
+        INNER JOIN work_items w ON w.id = wl.work_item_id
+        LEFT JOIN users u ON u.id = wl.author_id
+        WHERE 1 = 1
+    )SQL";
+
+    struct FilterParam {
+        bool is_int{false};
+        int int_val{0};
+        std::string str_val;
+    };
+    std::vector<FilterParam> params;
+
+    if (!proj_str.empty() && std::atoi(proj_str.c_str()) > 0) {
+        sql += " AND w.project_id = ?";
+        params.push_back({true, std::atoi(proj_str.c_str()), ""});
+    }
+    if (!user_str.empty() && std::atoi(user_str.c_str()) > 0) {
+        sql += " AND wl.author_id = ?";
+        params.push_back({true, std::atoi(user_str.c_str()), ""});
+    }
+    if (!sprint_str.empty() && std::atoi(sprint_str.c_str()) > 0) {
+        sql += " AND w.sprint_id = ?";
+        params.push_back({true, std::atoi(sprint_str.c_str()), ""});
+    }
+    if (!item_str.empty() && std::atoi(item_str.c_str()) > 0) {
+        sql += " AND wl.work_item_id = ?";
+        params.push_back({true, std::atoi(item_str.c_str()), ""});
+    }
+    if (!from_date.empty()) {
+        sql += " AND substr(wl.started_at, 1, 10) >= ?";
+        params.push_back({false, 0, from_date});
+    }
+    if (!to_date.empty()) {
+        sql += " AND substr(wl.started_at, 1, 10) <= ?";
+        params.push_back({false, 0, to_date});
+    }
+
+    sql += " ORDER BY wl.started_at DESC, wl.id DESC;";
+
+    auto stmt = conn.prepare(sql);
+    for (size_t i = 0; i < params.size(); ++i) {
+        if (params[i].is_int) {
+            stmt.bind_int(static_cast<int>(i + 1), params[i].int_val);
+        } else {
+            stmt.bind_text(static_cast<int>(i + 1), params[i].str_val);
+        }
+    }
+
+    auto entries = json::json_value::make_array();
+    int64_t total_logged_seconds = 0;
+
+    struct UserBucket {
+        int user_id{0};
+        std::string name;
+        std::string color;
+        std::string role;
+        int64_t seconds{0};
+        int count{0};
+    };
+    std::map<int, UserBucket> by_user_map;
+    std::map<std::string, int64_t> by_day_map;
+
+    struct ItemBucket {
+        int item_id{0};
+        std::string key;
+        std::string title;
+        std::string type;
+        std::string status;
+        int64_t seconds{0};
+        int count{0};
+    };
+    std::map<int, ItemBucket> by_item_map;
+
+    while (stmt.step() == SQLITE_ROW) {
+        int wl_id = stmt.column_int(0);
+        int item_id = stmt.column_int(1);
+        std::string item_key = stmt.column_str(2);
+        std::string item_title = stmt.column_str(3);
+        std::string item_type = stmt.column_str(4);
+        std::string item_status = stmt.column_str(5);
+        int proj_id = stmt.column_int(6);
+        int author_id = stmt.column_int(7);
+        std::string author_name = stmt.column_str(8);
+        std::string author_color = stmt.column_str(9);
+        std::string author_role = stmt.column_str(10);
+        int ts_sec = stmt.column_int(11);
+        std::string started_at = stmt.column_str(12);
+        std::string desc = stmt.column_str(13);
+        std::string adj_mode = stmt.column_str(14);
+        int adj_sec = stmt.column_int(15);
+        int rem_before = stmt.column_int(16);
+        int rem_after = stmt.column_int(17);
+
+        total_logged_seconds += ts_sec;
+
+        auto& ub = by_user_map[author_id];
+        ub.user_id = author_id;
+        ub.name = author_name;
+        ub.color = author_color;
+        ub.role = author_role;
+        ub.seconds += ts_sec;
+        ub.count += 1;
+
+        std::string day_key = started_at.size() >= 10 ? started_at.substr(0, 10) : started_at;
+        by_day_map[day_key] += ts_sec;
+
+        auto& ib = by_item_map[item_id];
+        ib.item_id = item_id;
+        ib.key = item_key;
+        ib.title = item_title;
+        ib.type = item_type;
+        ib.status = item_status;
+        ib.seconds += ts_sec;
+        ib.count += 1;
+
+        auto wl = json::json_value::make_object();
+        wl.add_int("id", wl_id);
+        wl.add_int("work_item_id", item_id);
+        wl.add_str("work_item_key", item_key);
+        wl.add_str("work_item_title", item_title);
+        wl.add_str("work_item_type", item_type);
+        wl.add_str("work_item_status", item_status);
+        wl.add_int("project_id", proj_id);
+        wl.add_int("author_id", author_id);
+        wl.add_str("author_name", author_name);
+        wl.add_str("author_color", author_color);
+        wl.add_str("author_role", author_role);
+        wl.add_int("time_spent_seconds", ts_sec);
+        wl.add_str("time_spent_formatted", time_tracking::format_seconds_to_duration(ts_sec));
+        wl.add_str("started_at", started_at);
+        wl.add_str("description", desc);
+        wl.add_str("adjustment_mode", adj_mode);
+        wl.add_int("adjustment_seconds", adj_sec);
+        wl.add_int("remaining_before", rem_before);
+        wl.add_str("remaining_before_formatted", time_tracking::format_seconds_to_duration(rem_before));
+        wl.add_int("remaining_after", rem_after);
+        wl.add_str("remaining_after_formatted", time_tracking::format_seconds_to_duration(rem_after));
+        wl.add_str("created_at", stmt.column_str(18));
+        wl.add_str("updated_at", stmt.column_str(19));
+        entries.add(std::move(wl));
+    }
+
+    auto by_user = json::json_value::make_array();
+    for (const auto& [uid, ub] : by_user_map) {
+        auto uo = json::json_value::make_object();
+        uo.add_int("user_id", ub.user_id);
+        uo.add_str("display_name", ub.name);
+        uo.add_str("avatar_color", ub.color);
+        uo.add_str("role", ub.role);
+        uo.add_int("total_seconds", static_cast<int>(ub.seconds));
+        uo.add_str("total_formatted", time_tracking::format_seconds_to_duration(ub.seconds));
+        uo.add_int("entry_count", ub.count);
+        by_user.add(std::move(uo));
+    }
+
+    auto by_day = json::json_value::make_array();
+    for (const auto& [day, secs] : by_day_map) {
+        auto d = json::json_value::make_object();
+        d.add_str("date", day);
+        d.add_int("total_seconds", static_cast<int>(secs));
+        d.add_str("total_formatted", time_tracking::format_seconds_to_duration(secs));
+        by_day.add(std::move(d));
+    }
+
+    auto by_item = json::json_value::make_array();
+    for (const auto& [iid, ib] : by_item_map) {
+        auto io = json::json_value::make_object();
+        io.add_int("work_item_id", ib.item_id);
+        io.add_str("key", ib.key);
+        io.add_str("title", ib.title);
+        io.add_str("type", ib.type);
+        io.add_str("status", ib.status);
+        io.add_int("total_seconds", static_cast<int>(ib.seconds));
+        io.add_str("total_formatted", time_tracking::format_seconds_to_duration(ib.seconds));
+        io.add_int("entry_count", ib.count);
+        by_item.add(std::move(io));
+    }
+
+    auto out = json::json_value::make_object();
+    out.add_int("total_seconds", static_cast<int>(total_logged_seconds));
+    out.add_str("total_formatted", time_tracking::format_seconds_to_duration(total_logged_seconds));
+    out.add("worklogs", std::move(entries));
+    out.add("by_user", std::move(by_user));
+    out.add("by_day", std::move(by_day));
+    out.add("by_item", std::move(by_item));
+    send_json(worker, header, "200 OK", out);
+}
+
+// GET | POST /api/time-tracking/parse
+static void handle_time_tracking_parse(backend::wsworker *worker,
+                                       const std::map<std::string, std::string> &header,
+                                       const std::list<std::string> &) {
+    std::string method = get_header(header, "REQUEST_METHOD");
+    std::string duration_str;
+    int64_t raw_seconds = -1;
+
+    if (method == "POST") {
+        auto body = json::json_value::parse(worker->body());
+        if (body) {
+            if (body.has_key("duration")) duration_str = body.get_string("duration");
+            if (body.has_key("seconds")) raw_seconds = body.get_int("seconds", -1);
+        }
+    } else {
+        auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+        duration_str = args["duration"];
+        std::string sec_q = args["seconds"];
+        if (!sec_q.empty()) raw_seconds = std::atoll(sec_q.c_str());
+    }
+
+    auto out = json::json_value::make_object();
+    out.add_int("seconds_per_minute", static_cast<int>(time_tracking::SECONDS_PER_MINUTE));
+    out.add_int("seconds_per_hour", static_cast<int>(time_tracking::SECONDS_PER_HOUR));
+    out.add_int("seconds_per_day", static_cast<int>(time_tracking::SECONDS_PER_DAY));
+    out.add_int("seconds_per_week", static_cast<int>(time_tracking::SECONDS_PER_WEEK));
+
+    if (!duration_str.empty()) {
+        int64_t parsed_sec = 0;
+        std::string parse_err;
+        bool valid = time_tracking::parse_duration_to_seconds(duration_str, parsed_sec, parse_err);
+        out.add_bool("valid", valid);
+        out.add_str("input", duration_str);
+        out.add_int("seconds", static_cast<int>(parsed_sec));
+        out.add_str("formatted", valid ? time_tracking::format_seconds_to_duration(parsed_sec) : "");
+        out.add_str("error", parse_err);
+        auto bd = time_tracking::decompose_seconds(parsed_sec);
+        auto bobj = json::json_value::make_object();
+        bobj.add_int("weeks", static_cast<int>(bd.weeks));
+        bobj.add_int("days", static_cast<int>(bd.days));
+        bobj.add_int("hours", static_cast<int>(bd.hours));
+        bobj.add_int("minutes", static_cast<int>(bd.minutes));
+        bobj.add_int("seconds", static_cast<int>(bd.seconds));
+        out.add("breakdown", std::move(bobj));
+    } else if (raw_seconds >= 0) {
+        out.add_bool("valid", true);
+        out.add_int("seconds", static_cast<int>(raw_seconds));
+        out.add_str("formatted", time_tracking::format_seconds_to_duration(raw_seconds));
+        auto bd = time_tracking::decompose_seconds(raw_seconds);
+        auto bobj = json::json_value::make_object();
+        bobj.add_int("weeks", static_cast<int>(bd.weeks));
+        bobj.add_int("days", static_cast<int>(bd.days));
+        bobj.add_int("hours", static_cast<int>(bd.hours));
+        bobj.add_int("minutes", static_cast<int>(bd.minutes));
+        bobj.add_int("seconds", static_cast<int>(bd.seconds));
+        out.add("breakdown", std::move(bobj));
+    } else {
+        out.add_bool("valid", true);
+        out.add_int("seconds", 0);
+        out.add_str("formatted", "0m");
+    }
+
+    send_json(worker, header, "200 OK", out);
+}
+
 static constexpr auto DEFAULT_SOCKET_NAME = ":9002";
 static constexpr auto DEFAULT_BACKLOG = 100;
 
@@ -8973,6 +9997,10 @@ int main(int argc, char *argv[]) {
         {"^/api/items/([A-Za-z0-9_-]+)/transitions$",   backend::GET | backend::POST,   handle_item_available_transitions},
         {"^/api/items/([A-Za-z0-9_-]+)/state$",         backend::PATCH | backend::POST, handle_item_state_transition},
         {"^/api/items/([A-Za-z0-9_-]+)/comments$",      backend::POST,                  handle_item_comments        },
+        {"^/api/items/([A-Za-z0-9_-]+)/worklogs$",      backend::GET | backend::POST,   handle_item_worklogs        },
+        {"^/api/worklogs$",                             backend::GET,                   handle_all_worklogs_timesheet},
+        {"^/api/worklogs/([0-9]+)$",                    backend::PUT | backend::DELETE, handle_worklog_detail       },
+        {"^/api/time-tracking/parse$",                  backend::GET | backend::POST,   handle_time_tracking_parse  },
         {"^/api/items/([A-Za-z0-9_-]+)/links$",         backend::POST,                  handle_item_links           },
         {"^/api/links$",                                backend::GET,                   handle_all_links            },
         {"^/api/links/([0-9]+)$",                       backend::DELETE,                handle_delete_link          },

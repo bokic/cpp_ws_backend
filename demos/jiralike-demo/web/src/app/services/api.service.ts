@@ -10,6 +10,7 @@ import {
   CompleteSprintResponse,
   CustomFieldDef,
   CustomFieldOption,
+  DurationParseResponse,
   FieldConfiguration,
   IssueTypeDef,
   IssueTypeScheme,
@@ -28,10 +29,13 @@ import {
   ScreenTab,
   SetupStatus,
   Sprint,
+  TimeRollup,
+  TimesheetResponse,
   User,
   WorkItem,
   WorkItemDetail,
   WorkItemLink,
+  WorklogItem,
   WorkflowDef,
   WorkflowSchemeBinding,
   WorkflowState,
@@ -1222,6 +1226,105 @@ export class ApiService {
     board_order?: number;
   }): Promise<any> {
     return this.request('/api/items/rank', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  // Step 7: Time Tracking & Worklogs Methods
+  async getItemWorklogs(
+    idOrKey: string | number
+  ): Promise<{ work_item_id: number; worklogs: WorklogItem[]; time_rollup: TimeRollup }> {
+    return this.request<{ work_item_id: number; worklogs: WorklogItem[]; time_rollup: TimeRollup }>(
+      `/api/items/${encodeURIComponent(String(idOrKey))}/worklogs`
+    );
+  }
+
+  async addWorklog(
+    idOrKey: string | number,
+    payload: {
+      time_spent?: string;
+      time_spent_seconds?: number;
+      duration?: string;
+      started_at?: string;
+      description?: string;
+      adjustment_mode?: string;
+      new_estimate?: string;
+      new_estimate_seconds?: number;
+      reduce_by?: string;
+      reduce_by_seconds?: number;
+      adjustment_duration?: string;
+      adjustment_seconds?: number;
+    }
+  ): Promise<WorklogItem> {
+    return this.request<WorklogItem>(`/api/items/${encodeURIComponent(String(idOrKey))}/worklogs`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateWorklog(
+    worklogId: number,
+    payload: {
+      time_spent?: string;
+      time_spent_seconds?: number;
+      started_at?: string;
+      description?: string;
+      adjustment_mode?: string;
+      new_estimate?: string;
+      new_estimate_seconds?: number;
+      reduce_by?: string;
+      reduce_by_seconds?: number;
+    }
+  ): Promise<WorklogItem> {
+    return this.request<WorklogItem>(`/api/worklogs/${worklogId}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteWorklog(
+    worklogId: number,
+    adjustment_mode: string = 'auto'
+  ): Promise<{
+    deleted: boolean;
+    work_item_id: number;
+    item_time_spent_seconds: number;
+    item_time_spent_formatted: string;
+    item_remaining_estimate_seconds: number;
+    item_remaining_estimate_formatted: string;
+    time_rollup: TimeRollup;
+  }> {
+    return this.request(`/api/worklogs/${worklogId}?adjustment_mode=${encodeURIComponent(adjustment_mode)}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getTimesheet(
+    filters: {
+      project_id?: number;
+      user_id?: number;
+      sprint_id?: number;
+      work_item_id?: number;
+      from_date?: string;
+      to_date?: string;
+    } = {}
+  ): Promise<TimesheetResponse> {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(filters)) {
+      if (v !== undefined && v !== null && v !== '') {
+        params.set(k, String(v));
+      }
+    }
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    return this.request<TimesheetResponse>(`/api/worklogs${qs}`);
+  }
+
+  async parseDuration(payload: {
+    duration?: string;
+    seconds?: number;
+  }): Promise<DurationParseResponse> {
+    return this.request<DurationParseResponse>('/api/time-tracking/parse', {
       method: 'POST',
       body: JSON.stringify(payload),
     });

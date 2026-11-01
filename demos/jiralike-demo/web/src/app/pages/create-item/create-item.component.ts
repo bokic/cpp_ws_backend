@@ -237,6 +237,51 @@ import {
           </div>
         </div>
 
+        <!-- Time Tracking & Estimation Fields -->
+        <div class="grid-3" style="margin-top: 10px;">
+          <div class="form-group">
+            <label for="create-orig-est">Original Estimate (e.g. 2d 4h, 1w, 45m)</label>
+            <input
+              type="text"
+              id="create-orig-est"
+              name="original_estimate"
+              autocomplete="off"
+              [(ngModel)]="form.original_estimate"
+              placeholder="e.g. 2d 4h"
+            />
+          </div>
+
+          <div class="form-group">
+            <label for="create-rem-est">Remaining Estimate (Defaults to Original)</label>
+            <input
+              type="text"
+              id="create-rem-est"
+              name="remaining_estimate"
+              autocomplete="off"
+              [(ngModel)]="form.remaining_estimate"
+              placeholder="e.g. 2d 4h"
+            />
+          </div>
+
+          <div class="form-group">
+            <label for="create-tshirt-size">T-Shirt Size Estimation</label>
+            <select
+              id="create-tshirt-size"
+              name="tshirt_size"
+              [(ngModel)]="form.tshirt_size"
+              (change)="onTshirtChange()"
+            >
+              <option value="">— None —</option>
+              <option value="XS">XS (~2h)</option>
+              <option value="S">S (~4h)</option>
+              <option value="M">M (~1d)</option>
+              <option value="L">L (~2d)</option>
+              <option value="XL">XL (~1w)</option>
+              <option value="XXL">XXL (~2w)</option>
+            </select>
+          </div>
+        </div>
+
         <!-- Components, Fix Versions, and Affects Versions -->
         <div class="grid-3">
           <div class="form-group">
@@ -511,6 +556,9 @@ export class CreateItemComponent implements OnInit {
     severity: string;
     steps_to_reproduce: string;
     labels: string;
+    original_estimate: string;
+    remaining_estimate: string;
+    tshirt_size: string;
     component_ids: number[];
     fix_version_ids: number[];
     affects_version_ids: number[];
@@ -532,11 +580,30 @@ export class CreateItemComponent implements OnInit {
     severity: 'Major',
     steps_to_reproduce: '',
     labels: '',
+    original_estimate: '1d',
+    remaining_estimate: '1d',
+    tshirt_size: 'M',
     component_ids: [],
     fix_version_ids: [],
     affects_version_ids: [],
     custom_fields: {},
   };
+
+  onTshirtChange(): void {
+    const sizeToDuration: Record<string, string> = {
+      XS: '2h',
+      S: '4h',
+      M: '1d',
+      L: '2d',
+      XL: '1w',
+      XXL: '2w',
+    };
+    const sz = this.form.tshirt_size;
+    if (sz && sizeToDuration[sz]) {
+      this.form.original_estimate = sizeToDuration[sz];
+      this.form.remaining_estimate = sizeToDuration[sz];
+    }
+  }
 
   activeScreenTab(): ScreenTab | null {
     const sc = this.resolvedScreen();

@@ -751,6 +751,20 @@ export interface SwimlaneRow {
               @if (shouldShowCardField('story_points') && item.story_points > 0) {
                 <span class="points-badge" title="Story Points">{{ item.story_points }} SP</span>
               }
+              @if (item.time_spent_formatted || item.remaining_estimate_formatted || item.original_estimate_formatted) {
+                <span
+                  class="points-badge"
+                  style="background: #eef2ff; color: #4338ca; border-color: #c7d2fe;"
+                  [title]="'Time Spent: ' + (item.time_spent_formatted || '0m') + ' / Remaining: ' + (item.remaining_estimate_formatted || '0m')"
+                >
+                  ⏱ {{ item.time_spent_formatted || '0m' }}/{{ item.remaining_estimate_formatted || item.original_estimate_formatted || '0m' }}
+                </span>
+              }
+              @if (item.tshirt_size) {
+                <span class="label-chip" style="background: #fdf2f8; color: #be185d;" title="T-Shirt Size">
+                  👕 {{ item.tshirt_size }}
+                </span>
+              }
               @if (item.subtask_count > 0) {
                 <span class="meta-icon" title="Subtasks">⧉ {{ item.subtask_count }}</span>
               }
@@ -1109,6 +1123,16 @@ export interface SwimlaneRow {
             <span class="priority-badge" [attr.data-priority]="item.priority">{{ item.priority }}</span>
             <span class="state-pill" [attr.data-state]="item.status">{{ item.status }}</span>
             <span class="points-badge" title="Story Points">{{ item.story_points || 0 }} SP</span>
+            @if (item.remaining_estimate_formatted || item.original_estimate_formatted) {
+              <span class="points-badge" style="background: #f0fdf4; color: #166534; border-color: #bbf7d0;" title="Remaining Estimate">
+                ⏱ {{ item.remaining_estimate_formatted || item.original_estimate_formatted }}
+              </span>
+            }
+            @if (item.tshirt_size) {
+              <span class="label-chip" style="background: #fdf2f8; color: #be185d; padding: 2px 6px; font-size: 11px;">
+                👕 {{ item.tshirt_size }}
+              </span>
+            }
 
             @if (item.assignee_name) {
               <div

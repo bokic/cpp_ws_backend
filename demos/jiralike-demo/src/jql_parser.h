@@ -2,6 +2,7 @@
 
 #include "jql_lexer.h"
 #include "raii_sqlite.h"
+#include "time_tracking.h"
 #include <algorithm>
 #include <cctype>
 #include <memory>
@@ -619,10 +620,37 @@ struct ClauseNode : JqlNode {
             return "(" + rank_expr + " " + op + " " + std::to_string(target_rank) + ")";
         }
 
+        // 13b. Time Tracking & Worklog fields: originalEstimate, remainingEstimate, timeSpent, worklogAuthor, worklogComment
+        if (f == "worklogauthor" || f == "worklog_author") {
+            return compile_multi_match_clause(
+                ctx,
+                resolved_vals,
+                [](SqlContext &c, const std::string &val) {
+                    std::string p1 = c.add_param(val);
+                    std::string p2 = c.add_param(val);
+                    std::string p3 = c.add_param(val);
+                    return "EXISTS (SELECT 1 FROM worklogs wl LEFT JOIN users wlu ON wlu.id = wl.author_id "
+                           "WHERE wl.work_item_id = w.id AND (CAST(wl.author_id AS TEXT) = " + p1 +
+                           " OR lower(COALESCE(wlu.username, '')) = lower(" + p2 + ")" +
+                           " OR lower(COALESCE(wlu.display_name, '')) = lower(" + p3 + ")))";
+                });
+        }
+        if (f == "worklogcomment" || f == "worklog_comment" || f == "worklogdescription") {
+            std::string term = resolved_vals.empty() ? "" : resolved_vals[0];
+            bool neg = (op == "!~" || op == "!=");
+            std::string p = ctx.add_param("%" + term + "%");
+            std::string ex = "EXISTS (SELECT 1 FROM worklogs wl WHERE wl.work_item_id = w.id AND wl.description LIKE " + p + ")";
+            return neg ? "(NOT " + ex + ")" : ex;
+        }
+
+        bool is_duration_col = (f == "originalestimate" || f == "original_estimate" || f == "original_estimate_seconds" ||
+                                f == "remainingestimate" || f == "remaining_estimate" || f == "remaining_estimate_seconds" ||
+                                f == "timeestimate" || f == "timespent" || f == "time_spent" || f == "time_spent_seconds");
+
         // 14. Standard column mapping on work_items
         std::string col = map_standard_column(f);
         bool is_numeric_col = (f == "storypoints" || f == "story_points" || f == "points" ||
-                               f == "progress" || f == "id" || f == "board_order");
+                               f == "progress" || f == "id" || f == "board_order" || is_duration_col);
 
         if (op == "~" || op == "!~") {
             std::string term = resolved_vals.empty() ? "" : resolved_vals[0];
@@ -687,6 +715,20 @@ struct ClauseNode : JqlNode {
         }
 
         if (is_numeric_col) {
+            if (is_duration_col) {
+                int64_t dur_sec = 0;
+                std::string dur_err;
+                bool has_alpha = false;
+                for (unsigned char c : val) {
+                    if (std::isalpha(c)) {
+                        has_alpha = true;
+                        break;
+                    }
+                }
+                if (has_alpha && time_tracking::parse_duration_to_seconds(val, dur_sec, dur_err)) {
+                    val = std::to_string(dur_sec);
+                }
+            }
             std::string p = ctx.add_param(val);
             return "(CAST(" + col + " AS REAL) " + op + " CAST(" + p + " AS REAL))";
         }
@@ -747,6 +789,10 @@ struct ClauseNode : JqlNode {
         if (f == "startdate" || f == "start_date") return "w.start_date";
         if (f == "resolved" || f == "resolutiondate" || f == "resolution_date") return "w.resolution_date";
         if (f == "rank" || f == "order" || f == "board_order") return "w.board_order";
+        if (f == "originalestimate" || f == "original_estimate" || f == "original_estimate_seconds") return "w.original_estimate_seconds";
+        if (f == "remainingestimate" || f == "remaining_estimate" || f == "remaining_estimate_seconds" || f == "timeestimate") return "w.remaining_estimate_seconds";
+        if (f == "timespent" || f == "time_spent" || f == "time_spent_seconds") return "w.time_spent_seconds";
+        if (f == "tshirtsize" || f == "tshirt_size" || f == "tshirt") return "w.tshirt_size";
         return "w.title";
     }
 
