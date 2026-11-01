@@ -51,6 +51,12 @@ import {
             <strong class="issue-key-lg">{{ it.key }}</strong>
           </div>
           <div class="toolbar-actions">
+            <button type="button" class="btn btn-secondary btn-sm" (click)="openCloneModal()" title="Duplicate this work item">
+              📋 Clone
+            </button>
+            <button type="button" class="btn btn-secondary btn-sm" (click)="openMoveModal()" title="Move project or convert issue type">
+              ↗ Move
+            </button>
             <a
               routerLink="/create"
               [queryParams]="{ type: 'Subtask', parent_id: it.id }"
@@ -58,8 +64,8 @@ import {
             >
               + Create Subtask
             </a>
-            <button type="button" class="btn btn-danger btn-sm" (click)="deleteCurrentItem()">
-              Delete
+            <button type="button" class="btn btn-danger btn-sm" (click)="deleteCurrentItem()" title="Move issue to Trash Bin (30-day retention)">
+              🗑 Delete
             </button>
           </div>
         </div>
@@ -2059,6 +2065,149 @@ import {
           </div>
         }
 
+        <!-- Clone Issue Modal (Step 17) -->
+        @if (showCloneModal()) {
+          <div
+            style="position: fixed; inset: 0; background: rgba(15, 23, 42, 0.55); z-index: 1200; display: flex; align-items: center; justify-content: center; padding: 16px;"
+            (click)="closeCloneModal()"
+          >
+            <div
+              class="card-panel"
+              style="width: 100%; max-width: 520px; max-height: 85vh; overflow-y: auto; box-shadow: 0 20px 45px rgba(0,0,0,0.25); background: var(--card-bg, #ffffff); border-radius: 8px; padding: 20px;"
+              (click)="$event.stopPropagation()"
+            >
+              <div class="section-header" style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px;">
+                <div>
+                  <h3 style="margin: 0; font-size: 18px;">📋 Clone Issue ({{ it.key }})</h3>
+                  <small class="text-muted" style="color: #6b778c; font-size: 12px;">Create an exact duplicate with customizable links and subtasks</small>
+                </div>
+                <button type="button" class="btn btn-ghost btn-sm" (click)="closeCloneModal()">✕</button>
+              </div>
+
+              @if (cloneError()) {
+                <div style="margin-bottom: 12px; padding: 8px 12px; background: #ffebe6; color: #de350b; border-radius: 4px; font-size: 12px;">
+                  {{ cloneError() }}
+                </div>
+              }
+
+              <div class="form-group" style="margin-bottom: 12px;">
+                <label style="font-size: 12px; font-weight: 600; display: block; margin-bottom: 4px;">Cloned Summary *</label>
+                <input
+                  type="text"
+                  [(ngModel)]="cloneDraft.summary"
+                  name="clone_summary"
+                  class="form-control"
+                  style="width: 100%; padding: 8px 10px; border: 1px solid #dfe1e6; border-radius: 4px; font-size: 13px;"
+                  placeholder="e.g. CLONE - {{ it.title }}"
+                />
+              </div>
+
+              <div class="form-group" style="margin-bottom: 12px;">
+                <label style="font-size: 12px; font-weight: 600; display: block; margin-bottom: 4px;">Target Project</label>
+                <select [(ngModel)]="cloneDraft.project_id" name="clone_project_id" class="form-control" style="width: 100%; padding: 8px 10px; border: 1px solid #dfe1e6; border-radius: 4px; font-size: 13px;">
+                  @for (p of api.projects(); track p.id) {
+                    <option [value]="p.id">{{ p.name }} ({{ p.key }})</option>
+                  }
+                </select>
+              </div>
+
+              <div style="display: flex; flex-direction: column; gap: 10px; margin: 16px 0; background: var(--bg-subtle, #f4f5f7); padding: 12px; border-radius: 6px;">
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
+                  <input type="checkbox" [(ngModel)]="cloneDraft.clone_subtasks" name="clone_subtasks" />
+                  <span>Clone child subtasks ({{ it.subtasks.length || 0 }} subtasks)</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
+                  <input type="checkbox" [(ngModel)]="cloneDraft.clone_attachments" name="clone_attachments" />
+                  <span>Clone attachments &amp; files ({{ it.attachments.length || 0 }} files)</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
+                  <input type="checkbox" [(ngModel)]="cloneDraft.clone_links" name="clone_links" />
+                  <span>Clone existing issue links (relates to, blocks, etc.)</span>
+                </label>
+              </div>
+
+              <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px;">
+                <button type="button" class="btn btn-secondary btn-sm" (click)="closeCloneModal()">Cancel</button>
+                <button type="button" class="btn btn-primary btn-sm" (click)="submitClone()" [disabled]="isCloning()">
+                  {{ isCloning() ? "Cloning..." : "Create Clone" }}
+                </button>
+              </div>
+            </div>
+          </div>
+        }
+
+        <!-- Move / Convert Issue Modal (Step 17) -->
+        @if (showMoveModal()) {
+          <div
+            style="position: fixed; inset: 0; background: rgba(15, 23, 42, 0.55); z-index: 1200; display: flex; align-items: center; justify-content: center; padding: 16px;"
+            (click)="closeMoveModal()"
+          >
+            <div
+              class="card-panel"
+              style="width: 100%; max-width: 520px; max-height: 85vh; overflow-y: auto; box-shadow: 0 20px 45px rgba(0,0,0,0.25); background: var(--card-bg, #ffffff); border-radius: 8px; padding: 20px;"
+              (click)="$event.stopPropagation()"
+            >
+              <div class="section-header" style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px;">
+                <div>
+                  <h3 style="margin: 0; font-size: 18px;">↗ Move / Convert Issue ({{ it.key }})</h3>
+                  <small class="text-muted" style="color: #6b778c; font-size: 12px;">Transfer across projects or change issue type &amp; status</small>
+                </div>
+                <button type="button" class="btn btn-ghost btn-sm" (click)="closeMoveModal()">✕</button>
+              </div>
+
+              @if (moveError()) {
+                <div style="margin-bottom: 12px; padding: 8px 12px; background: #ffebe6; color: #de350b; border-radius: 4px; font-size: 12px;">
+                  {{ moveError() }}
+                </div>
+              }
+
+              <div class="form-group" style="margin-bottom: 12px;">
+                <label style="font-size: 12px; font-weight: 600; display: block; margin-bottom: 4px;">Target Project</label>
+                <select [(ngModel)]="moveDraft.target_project_id" name="move_project_id" class="form-control" style="width: 100%; padding: 8px 10px; border: 1px solid #dfe1e6; border-radius: 4px; font-size: 13px;">
+                  @for (p of api.projects(); track p.id) {
+                    <option [value]="p.id">{{ p.name }} ({{ p.key }})</option>
+                  }
+                </select>
+                @if (moveDraft.target_project_id !== it.project_id) {
+                  <small style="display: block; margin-top: 4px; color: #ff8b00; font-size: 11px;">
+                    ⚠️ Moving to another project re-assigns the issue key using the target project sequence.
+                  </small>
+                }
+              </div>
+
+              <div class="form-group" style="margin-bottom: 12px;">
+                <label style="font-size: 12px; font-weight: 600; display: block; margin-bottom: 4px;">Target Issue Type</label>
+                <select [(ngModel)]="moveDraft.target_type" name="move_type" class="form-control" style="width: 100%; padding: 8px 10px; border: 1px solid #dfe1e6; border-radius: 4px; font-size: 13px;">
+                  <option value="Epic">Epic</option>
+                  <option value="Story">Story</option>
+                  <option value="Task">Task</option>
+                  <option value="Bug">Bug</option>
+                  <option value="Subtask">Subtask</option>
+                </select>
+              </div>
+
+              <div class="form-group" style="margin-bottom: 12px;">
+                <label style="font-size: 12px; font-weight: 600; display: block; margin-bottom: 4px;">Target Workflow Status</label>
+                <select [(ngModel)]="moveDraft.target_status" name="move_status" class="form-control" style="width: 100%; padding: 8px 10px; border: 1px solid #dfe1e6; border-radius: 4px; font-size: 13px;">
+                  <option value="Backlog">Backlog</option>
+                  <option value="To Do">To Do</option>
+                  <option value="In Progress">In Progress</option>
+                  <option value="In Review">In Review</option>
+                  <option value="QA / Testing">QA / Testing</option>
+                  <option value="Done">Done</option>
+                </select>
+              </div>
+
+              <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px;">
+                <button type="button" class="btn btn-secondary btn-sm" (click)="closeMoveModal()">Cancel</button>
+                <button type="button" class="btn btn-primary btn-sm" (click)="submitMove()" [disabled]="isMoving()">
+                  {{ isMoving() ? "Moving..." : "Execute Move" }}
+                </button>
+              </div>
+            </div>
+          </div>
+        }
+
         <!-- Smart Commit Simulator & Runner Modal -->
         @if (showSmartCommitModal()) {
           <div
@@ -2636,11 +2785,102 @@ export class ItemDetailComponent implements OnInit, OnDestroy {
     await this.reloadDetail(cur.key);
   }
 
+  readonly showCloneModal = signal(false);
+  readonly isCloning = signal(false);
+  readonly cloneError = signal('');
+  cloneDraft = {
+    summary: '',
+    project_id: 1,
+    clone_subtasks: false,
+    clone_attachments: true,
+    clone_links: true,
+  };
+
+  readonly showMoveModal = signal(false);
+  readonly isMoving = signal(false);
+  readonly moveError = signal('');
+  moveDraft = {
+    target_project_id: 1,
+    target_type: 'Task',
+    target_status: 'To Do',
+  };
+
+  openCloneModal(): void {
+    const cur = this.item();
+    if (!cur) return;
+    this.cloneDraft = {
+      summary: `CLONE - ${cur.title}`,
+      project_id: cur.project_id || 1,
+      clone_subtasks: (cur.subtasks && cur.subtasks.length > 0) || false,
+      clone_attachments: (cur.attachments && cur.attachments.length > 0) || false,
+      clone_links: true,
+    };
+    this.cloneError.set('');
+    this.showCloneModal.set(true);
+  }
+
+  closeCloneModal(): void {
+    this.showCloneModal.set(false);
+  }
+
+  async submitClone(): Promise<void> {
+    const cur = this.item();
+    if (!cur) return;
+    this.isCloning.set(true);
+    this.cloneError.set('');
+    try {
+      const res = await this.api.cloneItem(cur.key, this.cloneDraft);
+      this.closeCloneModal();
+      await this.router.navigate(['/items', res.key]);
+      await this.reloadDetail(res.key);
+    } catch (err: any) {
+      this.cloneError.set(err.message || 'Cloning failed');
+    } finally {
+      this.isCloning.set(false);
+    }
+  }
+
+  openMoveModal(): void {
+    const cur = this.item();
+    if (!cur) return;
+    this.moveDraft = {
+      target_project_id: cur.project_id || 1,
+      target_type: cur.type || 'Task',
+      target_status: cur.status || 'To Do',
+    };
+    this.moveError.set('');
+    this.showMoveModal.set(true);
+  }
+
+  closeMoveModal(): void {
+    this.showMoveModal.set(false);
+  }
+
+  async submitMove(): Promise<void> {
+    const cur = this.item();
+    if (!cur) return;
+    this.isMoving.set(true);
+    this.moveError.set('');
+    try {
+      const res = await this.api.moveItem(cur.key, this.moveDraft);
+      this.closeMoveModal();
+      await this.router.navigate(['/items', res.new_key]);
+      await this.reloadDetail(res.new_key);
+    } catch (err: any) {
+      this.moveError.set(err.message || 'Move failed');
+    } finally {
+      this.isMoving.set(false);
+    }
+  }
+
   async deleteCurrentItem(): Promise<void> {
     const cur = this.item();
     if (!cur) return;
+    if (!confirm(`Are you sure you want to move ${cur.key} to the Trash Bin? You can restore it anytime within 30 days.`)) {
+      return;
+    }
     await this.api.deleteItem(cur.key);
-    await this.router.navigate(['/board']);
+    await this.router.navigate(['/trash']);
   }
 
   // Step 10: Rich Text & Collaboration Handlers

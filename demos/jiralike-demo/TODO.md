@@ -148,14 +148,14 @@ This document provides a comprehensive gap analysis and exhaustive development r
   - Automated Release Notes Generator (export Markdown / HTML of all fixed issues in a release).
 
 ### 1.7 Issue Operations
-- [ ] **Issue Cloning**: Duplicate an existing issue with options to clone attachments, links, and subtasks.
-- [ ] **Issue Move**: Move an issue to a different project or convert its issue type, with interactive field remapping wizard.
-- [ ] **Bulk Operations Wizard**:
+- [x] **Issue Cloning**: Duplicate an existing issue with options to clone attachments, links, and subtasks.
+- [x] **Issue Move**: Move an issue to a different project or convert its issue type, with interactive field remapping wizard.
+- [x] **Bulk Operations Wizard**:
   - Bulk Edit: Update fields (e.g. assignee, priority, fix version) across $N$ selected issues.
   - Bulk Transition: Advance multiple issues along a shared workflow step.
   - Bulk Move: Migrate a batch of issues between projects.
   - Bulk Delete: Soft-delete multiple issues with confirmation.
-- [ ] **Trash & Soft Delete (`trash_bin`)**:
+- [x] **Trash & Soft Delete (`trash_bin`)**:
   - Soft-delete issues with a 30-day retention window.
   - Administrative restoration and permanent purge controls.
 
@@ -954,18 +954,18 @@ flowchart TD
   - [x] Concurrent Viewers Alert: Live presence bar on Issue Detail displaying teammates viewing or editing the issue in real time.
 - **Verification**: Verified with 8/8 test suites in `verify_step16.py`: SSE handshake connects cleanly; card movement broadcasts `card_moved` over SSE stream; presence broadcasts `presence_updated`; dev-gateway.js FastCGI streaming forwarder validated; dark mode tokens and global shortcuts validated; zero regressions across Steps 10-15.
 
-#### Step 17: Bulk Operations, Issue Move/Clone & Trash Bin
+#### Step 17: Bulk Operations, Issue Move/Clone & Trash Bin *(Completed)*
 - **Why Next**: Now that real-time sync, boards, permissions, and workflows are in place, power users and administrators require batch maintenance tooling, issue lifecycle migration, and safety retention for deleted items.
 - **Backend Deliverables**:
-  - [ ] Issue Cloning Engine: Deep issue duplication endpoint (`POST /api/items/:id/clone`) with selectable cloning flags (`clone_subtasks`, `clone_attachments`, `clone_links`, `prefix_summary`).
-  - [ ] Issue Move & Type Conversion: Cross-project transfer and issue type conversion endpoint (`POST /api/items/:id/move`) with custom field remapping and status mapping logic.
-  - [ ] Bulk Operations Engine: Multi-issue batch processing endpoint (`POST /api/items/bulk`) supporting bulk field edits, bulk status transitions, bulk deletions, and bulk assignment with atomic transaction rollback on failure.
-  - [ ] Trash & Soft Delete Storage: Soft-deletion retention table (`trash_bin`) capturing deleted issues, deleted attachments, and purge dates; automatic 30-day retention countdown and restore/purge endpoints (`GET /api/trash`, `POST /api/trash/:id/restore`, `DELETE /api/trash/:id/purge`).
+  - [x] Issue Cloning Engine: Deep issue duplication endpoint (`POST /api/items/:id/clone`) with selectable cloning flags (`clone_subtasks`, `clone_attachments`, `clone_links`, `prefix_summary`).
+  - [x] Issue Move & Type Conversion: Cross-project transfer and issue type conversion endpoint (`POST /api/items/:id/move`) with custom field remapping and status mapping logic.
+  - [x] Bulk Operations Engine: Multi-issue batch processing endpoint (`POST /api/items/bulk`) supporting bulk field edits, bulk status transitions, bulk deletions, and bulk assignment with atomic transaction rollback on failure.
+  - [x] Trash & Soft Delete Storage: Soft-deletion retention table (`trash_bin`) capturing deleted issues, deleted attachments, and purge dates; automatic 30-day retention countdown and restore/purge endpoints (`GET /api/trash`, `POST /api/trash/:id/restore`, `DELETE /api/trash/:id/purge`).
 - **Frontend Deliverables**:
-  - [ ] Bulk Selection & Action Bar: Checkbox selection across search results, backlogs, and queues with multi-action floating dock (Bulk Edit, Bulk Move, Bulk Transition, Bulk Delete).
-  - [ ] Issue Move & Clone Wizards: Step-by-step modal guides for remapping issue types, target projects, and unmapped custom fields.
-  - [ ] Trash Bin Management View (`/settings/trash`): Dedicated administrative interface to review deleted items, inspect days remaining before purge, and trigger single-item or bulk restore/permanent deletion.
-- **Verification**: Verify cloning an issue duplicates fields and links; verify moving an issue updates project key counter, maps fields, and logs audit trail; verify bulk edit modifies 50+ items atomically; verify soft-deleted item disappears from board/search and is successfully restored from trash.
+  - [x] Bulk Selection & Action Bar: Checkbox selection across search results, backlogs, and queues with multi-action floating dock (Bulk Edit, Bulk Move, Bulk Transition, Bulk Delete).
+  - [x] Issue Move & Clone Wizards: Step-by-step modal guides for remapping issue types, target projects, and unmapped custom fields.
+  - [x] Trash Bin Management View (`/settings/trash`): Dedicated administrative interface to review deleted items, inspect days remaining before purge, and trigger single-item or bulk restore/permanent deletion.
+- **Verification**: Verified with 7/7 test suites in `verify_step17_e2e.py`: Cloning duplicate issue with clones link; cross-project move with key re-allocation (JIRA to OPS) and audit trail; atomic bulk edit, transition, and assign on 50 items; bulk soft delete to trash with 30-day retention countdown; item restore with original ID and key; individual and bulk purge; zero regressions across Steps 14-16.
 
 #### Step 18: Advanced Roadmaps, Gantt Dependencies, Critical Path & Capacity Planning
 - **Why Next**: Complements Agile Multi-board and Time Tracking with enterprise-grade portfolio scheduling, cross-issue dependencies, and team capacity balancing.
@@ -1028,7 +1028,7 @@ flowchart TD
 | **14** | Dev Tooling & Smart Commits | Step 4, Step 7 | Medium | 2 weeks | VCS Webhooks & Commit Parser |
 | **15** | ITSM & Service Desk | Step 4, Step 11 | High | 3 weeks | SLA Calendar Engine & Customer Portal |
 | **16** | UX Modernization & Real-Time Sync | Step 6, Step 9 | Medium | 2 weeks | SSE / WebSockets & Dark Mode *(Completed)* |
-| **17** | Bulk Operations & Trash Bin | Step 6, Step 11 | Medium | 2 weeks | Bulk Engine & Soft Delete Storage |
+| **17** | Bulk Operations & Trash Bin | Step 6, Step 11 | Medium | 2 weeks | Bulk Engine & Soft Delete Storage *(Completed)* |
 | **18** | Advanced Roadmaps & Gantt CPM | Step 6, Step 7 | High | 3 weeks | CPM Dependency Engine & SVG Gantt Canvas |
 | **19** | Enterprise SSO, 2FA & Inbound Mail | Step 11, Step 13 | High | 2-3 weeks | SAML/OIDC, RFC 6238 TOTP & Mail Hook |
 | **20** | i18n, S3 Storage & Rate Limiting | Step 1, Step 11 | Medium | 2 weeks | Storage Abstraction, Token Bucket & i18n |

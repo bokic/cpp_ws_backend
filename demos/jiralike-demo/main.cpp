@@ -18,6 +18,7 @@
 #include "src/vcs_engine.h"
 #include "src/itsm_engine.h"
 #include "src/realtime_engine.h"
+#include "src/bulk_and_trash_engine.h"
 
 #include <algorithm>
 #include <atomic>
@@ -8510,30 +8511,59 @@ static void handle_item_detail(backend::wsworker *worker,
             send_error(worker, header, "403 Forbidden", "You do not have permission to delete this issue");
             return;
         }
-        // Remove physical blob files for this item first
-        auto b_stmt = conn.prepare("SELECT blob_filename FROM attachments WHERE work_item_id = ?;");
-        b_stmt.bind_int(1, item_id);
-        while (b_stmt.step() == SQLITE_ROW) {
-            std::filesystem::path p = std::filesystem::path(g_blobs_dir) / b_stmt.column_str(0);
-            std::error_code ec;
-            std::filesystem::remove(p, ec);
-        }
-        b_stmt.reset();
 
-        {
-            db::sqlite_transaction tx(conn);
-            auto del = conn.prepare("DELETE FROM work_items WHERE id = ?;");
-            del.bind_int(1, item_id);
-            del.step_done();
-            tx.commit();
+        auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+        bool permanent = (args["permanent"] == "true" || args["permanent"] == "1");
+
+        if (permanent) {
+            // Remove physical blob files for this item first
+            auto b_stmt = conn.prepare("SELECT blob_filename FROM attachments WHERE work_item_id = ?;");
+            b_stmt.bind_int(1, item_id);
+            while (b_stmt.step() == SQLITE_ROW) {
+                std::filesystem::path p = std::filesystem::path(g_blobs_dir) / b_stmt.column_str(0);
+                std::error_code ec;
+                std::filesystem::remove(p, ec);
+            }
+            b_stmt.reset();
+
+            {
+                db::sqlite_transaction tx(conn);
+                auto del = conn.prepare("DELETE FROM work_items WHERE id = ?;");
+                del.bind_int(1, item_id);
+                del.step_done();
+                tx.commit();
+            }
+
+            auto del_payload = json::json_value::make_object();
+            del_payload.add_int("id", item_id);
+            del_payload.add_bool("permanent", true);
+            realtime::get_engine().publish("item_deleted", del_payload.to_string(), u_auth.id, u_auth.display_name, item_id, "");
+
+            auto res = json::json_value::make_object();
+            res.add_bool("deleted", true);
+            res.add_bool("permanent", true);
+            send_json(worker, header, "200 OK", res);
+            return;
+        }
+
+        // Soft delete into trash_bin (30-day retention countdown)
+        std::string s_err;
+        int trash_id = bulk_trash::soft_delete_item(conn, item_id, u_auth.id, g_blobs_dir, s_err);
+        if (trash_id <= 0) {
+            send_error(worker, header, "500 Internal Server Error", "Failed to soft-delete issue to trash: " + s_err);
+            return;
         }
 
         auto del_payload = json::json_value::make_object();
         del_payload.add_int("id", item_id);
+        del_payload.add_bool("soft_deleted", true);
+        del_payload.add_int("trash_id", trash_id);
         realtime::get_engine().publish("item_deleted", del_payload.to_string(), u_auth.id, u_auth.display_name, item_id, "");
 
         auto res = json::json_value::make_object();
         res.add_bool("deleted", true);
+        res.add_bool("soft_deleted", true);
+        res.add_int("trash_id", trash_id);
         send_json(worker, header, "200 OK", res);
         return;
     }
@@ -8845,6 +8875,256 @@ static void handle_item_detail(backend::wsworker *worker,
     } else {
         send_error(worker, header, "404 Not Found", "Work item not found");
     }
+}
+
+// POST /api/items/bulk
+static void handle_items_bulk(backend::wsworker *worker,
+                              const std::map<std::string, std::string> &header,
+                              const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string err_msg;
+    auto res = bulk_trash::execute_bulk(conn, u_auth.id, body, g_blobs_dir, err_msg);
+    if (!res) {
+        send_error(worker, header, "400 Bad Request", err_msg.empty() ? "Bulk operation failed" : err_msg);
+        return;
+    }
+
+    auto b_payload = json::json_value::make_object();
+    b_payload.add_str("operation", body.get_string("operation", "edit"));
+    b_payload.add_int("count", res.get_int("processed_count", 0));
+    realtime::get_engine().publish("bulk_updated", b_payload.to_string(), u_auth.id, u_auth.display_name, 0, "");
+
+    send_json(worker, header, "200 OK", res);
+}
+
+// POST /api/items/([A-Za-z0-9_-]+)/clone
+static void handle_item_clone(backend::wsworker *worker,
+                              const std::map<std::string, std::string> &header,
+                              const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing work item ID");
+        return;
+    }
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    int orig_id = resolve_work_item_id(conn, uri_params.front());
+    if (orig_id <= 0) {
+        send_error(worker, header, "404 Not Found", "Work item not found");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    json::json_value options = body ? std::move(body) : json::json_value::make_object();
+
+    std::string new_key, err_msg;
+    int cloned_id = bulk_trash::clone_work_item(conn, orig_id, u_auth.id, options, g_blobs_dir, new_key, err_msg);
+    if (cloned_id <= 0) {
+        send_error(worker, header, "400 Bad Request", err_msg.empty() ? "Cloning failed" : err_msg);
+        return;
+    }
+
+    auto ev_payload = json::json_value::make_object();
+    ev_payload.add_int("id", cloned_id);
+    ev_payload.add_str("key", new_key);
+    realtime::get_engine().publish("item_created", ev_payload.to_string(), u_auth.id, u_auth.display_name, cloned_id, new_key);
+
+    auto res = json::json_value::make_object();
+    res.add_bool("success", true);
+    res.add_int("id", cloned_id);
+    res.add_str("key", new_key);
+    auto q = conn.prepare(std::string(BASE_WORK_ITEM_SELECT) + " WHERE w.id = ?;");
+    q.bind_int(1, cloned_id);
+    if (q.step() == SQLITE_ROW) {
+        res.add("cloned_item", row_to_work_item_json(conn, q));
+    }
+    send_json(worker, header, "201 Created", res);
+}
+
+// POST /api/items/([A-Za-z0-9_-]+)/move
+static void handle_item_move(backend::wsworker *worker,
+                             const std::map<std::string, std::string> &header,
+                             const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing work item ID");
+        return;
+    }
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    int item_id = resolve_work_item_id(conn, uri_params.front());
+    if (item_id <= 0) {
+        send_error(worker, header, "404 Not Found", "Work item not found");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    int target_proj_id = body.get_int("target_project_id", 0);
+    std::string target_type = body.get_string("target_type", "");
+    std::string target_status = body.get_string("target_status", "");
+    auto cf_vals = body.get_child("custom_fields");
+
+    std::string old_key, new_key, err_msg;
+    if (!bulk_trash::move_work_item(conn, item_id, u_auth.id, target_proj_id, target_type, target_status, cf_vals, old_key, new_key, err_msg)) {
+        send_error(worker, header, "400 Bad Request", err_msg.empty() ? "Move failed" : err_msg);
+        return;
+    }
+
+    auto ev_payload = json::json_value::make_object();
+    ev_payload.add_int("id", item_id);
+    ev_payload.add_str("key", new_key);
+    ev_payload.add_str("old_key", old_key);
+    realtime::get_engine().publish("item_updated", ev_payload.to_string(), u_auth.id, u_auth.display_name, item_id, new_key);
+
+    auto res = json::json_value::make_object();
+    res.add_bool("success", true);
+    res.add_str("old_key", old_key);
+    res.add_str("new_key", new_key);
+    auto q = conn.prepare(std::string(BASE_WORK_ITEM_SELECT) + " WHERE w.id = ?;");
+    q.bind_int(1, item_id);
+    if (q.step() == SQLITE_ROW) {
+        res.add("item", row_to_work_item_json(conn, q));
+    }
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET | DELETE /api/trash
+static void handle_trash(backend::wsworker *worker,
+                         const std::map<std::string, std::string> &header,
+                         const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    std::string method = get_header(header, "REQUEST_METHOD");
+    if (method == "DELETE") {
+        int cnt = bulk_trash::purge_all_trash(conn, g_blobs_dir);
+        auto res = json::json_value::make_object();
+        res.add_bool("success", true);
+        res.add_int("purged_count", cnt);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    auto items = bulk_trash::list_trash_items(conn);
+    send_json(worker, header, "200 OK", items);
+}
+
+// POST | DELETE /api/trash/purge-all
+static void handle_trash_purge_all(backend::wsworker *worker,
+                                   const std::map<std::string, std::string> &header,
+                                   const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+    int cnt = bulk_trash::purge_all_trash(conn, g_blobs_dir);
+    auto res = json::json_value::make_object();
+    res.add_bool("success", true);
+    res.add_int("purged_count", cnt);
+    send_json(worker, header, "200 OK", res);
+}
+
+// POST /api/trash/([0-9]+)/restore
+static void handle_trash_restore(backend::wsworker *worker,
+                                 const std::map<std::string, std::string> &header,
+                                 const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing trash item ID");
+        return;
+    }
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    int trash_id = std::atoi(uri_params.front().c_str());
+    std::string restored_key, err_msg;
+    if (!bulk_trash::restore_item_from_trash(conn, trash_id, u_auth.id, restored_key, err_msg)) {
+        send_error(worker, header, "400 Bad Request", err_msg.empty() ? "Restore failed" : err_msg);
+        return;
+    }
+
+    auto ev_payload = json::json_value::make_object();
+    ev_payload.add_str("key", restored_key);
+    realtime::get_engine().publish("item_created", ev_payload.to_string(), u_auth.id, u_auth.display_name, 0, restored_key);
+
+    auto res = json::json_value::make_object();
+    res.add_bool("success", true);
+    res.add_str("restored_key", restored_key);
+    send_json(worker, header, "200 OK", res);
+}
+
+// DELETE | POST /api/trash/([0-9]+)/purge
+static void handle_trash_purge(backend::wsworker *worker,
+                               const std::map<std::string, std::string> &header,
+                               const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing trash item ID");
+        return;
+    }
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    int trash_id = std::atoi(uri_params.front().c_str());
+    std::string err_msg;
+    if (!bulk_trash::purge_item_from_trash(conn, trash_id, g_blobs_dir, err_msg)) {
+        send_error(worker, header, "400 Bad Request", err_msg.empty() ? "Purge failed" : err_msg);
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_bool("success", true);
+    res.add_int("purged_id", trash_id);
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET | DELETE /api/trash/([0-9]+)
+static void handle_trash_detail(backend::wsworker *worker,
+                                const std::map<std::string, std::string> &header,
+                                const std::list<std::string> &uri_params) {
+    std::string method = get_header(header, "REQUEST_METHOD");
+    if (method == "DELETE") {
+        handle_trash_purge(worker, header, uri_params);
+        return;
+    }
+    send_error(worker, header, "405 Method Not Allowed", "Method not allowed");
 }
 
 // PATCH | POST /api/items/([A-Za-z0-9_-]+)/state & POST /api/items/([A-Za-z0-9_-]+)/transitions
@@ -17354,7 +17634,10 @@ int main(int argc, char *argv[]) {
         {"^/api/sprints/([0-9]+)/start$",           backend::POST,                  handle_sprint_start         },
         {"^/api/sprints/([0-9]+)/complete$",        backend::POST,                  handle_sprint_complete      },
         {"^/api/items/rank$",                           backend::POST,                  handle_items_rank           },
+        {"^/api/items/bulk$",                           backend::POST,                  handle_items_bulk           },
         {"^/api/items$",                                backend::GET | backend::POST,   handle_items                },
+        {"^/api/items/([A-Za-z0-9_-]+)/clone$",         backend::POST,                  handle_item_clone           },
+        {"^/api/items/([A-Za-z0-9_-]+)/move$",          backend::POST,                  handle_item_move            },
         {"^/api/items/([A-Za-z0-9_-]+)$",               backend::GET | backend::PUT | backend::DELETE, handle_item_detail },
         {"^/api/items/([A-Za-z0-9_-]+)/transitions$",   backend::GET | backend::POST,   handle_item_available_transitions},
         {"^/api/items/([A-Za-z0-9_-]+)/state$",         backend::PATCH | backend::POST, handle_item_state_transition},
@@ -17478,6 +17761,11 @@ int main(int argc, char *argv[]) {
         {"^/api/events/live$",                          backend::GET,                   handle_events_live          },
         {"^/api/events/poll$",                          backend::GET,                   handle_events_poll          },
         {"^/api/presence$",                             backend::GET | backend::POST,   handle_presence             },
+        {"^/api/trash$",                                backend::GET | backend::DELETE, handle_trash                },
+        {"^/api/trash/purge-all$",                      backend::POST | backend::DELETE,handle_trash_purge_all      },
+        {"^/api/trash/([0-9]+)/restore$",               backend::POST,                  handle_trash_restore        },
+        {"^/api/trash/([0-9]+)/purge$",                 backend::POST | backend::DELETE,handle_trash_purge          },
+        {"^/api/trash/([0-9]+)$",                       backend::GET | backend::DELETE, handle_trash_detail         },
     });
 
     server.init(socket_name.c_str(), backlog, worker_num);

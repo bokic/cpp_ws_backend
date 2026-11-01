@@ -83,6 +83,8 @@ import {
   WorkflowState,
   WorkflowStatusNode,
   WorkflowTransitionDef,
+  TrashItem,
+  BulkOperationRequest,
   WorkflowTransitionRule,
   ServiceDesk,
   RequestType,
@@ -2827,5 +2829,81 @@ export class ApiService {
     const q = itemId ? `?item_id=${itemId}` : '';
     const res = await this.request<{ active_users: PresenceUser[] }>(`/api/presence${q}`);
     return res.active_users || [];
+  }
+
+  // ============================================================================
+  // Step 17: Bulk Operations, Move/Clone & Trash Bin
+  // ============================================================================
+
+  async cloneItem(
+    idOrKey: string | number,
+    options: {
+      prefix_summary?: string;
+      summary?: string;
+      project_id?: number;
+      clone_subtasks?: boolean;
+      clone_attachments?: boolean;
+      clone_links?: boolean;
+    }
+  ): Promise<{ success: boolean; id: number; key: string; cloned_item: WorkItemDetail }> {
+    return this.request<{ success: boolean; id: number; key: string; cloned_item: WorkItemDetail }>(
+      `/api/items/${idOrKey}/clone`,
+      {
+        method: 'POST',
+        body: JSON.stringify(options),
+      }
+    );
+  }
+
+  async moveItem(
+    idOrKey: string | number,
+    options: {
+      target_project_id?: number;
+      target_type?: string;
+      target_status?: string;
+      custom_fields?: any;
+    }
+  ): Promise<{ success: boolean; old_key: string; new_key: string; item: WorkItemDetail }> {
+    return this.request<{ success: boolean; old_key: string; new_key: string; item: WorkItemDetail }>(
+      `/api/items/${idOrKey}/move`,
+      {
+        method: 'POST',
+        body: JSON.stringify(options),
+      }
+    );
+  }
+
+  async bulkOperateItems(
+    payload: BulkOperationRequest
+  ): Promise<{ success: boolean; operation: string; total: number; processed_count: number; affected_ids: number[] }> {
+    return this.request<{ success: boolean; operation: string; total: number; processed_count: number; affected_ids: number[] }>(
+      '/api/items/bulk',
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    );
+  }
+
+  async getTrashItems(): Promise<TrashItem[]> {
+    return this.request<TrashItem[]>('/api/trash');
+  }
+
+  async restoreTrashItem(trashId: number): Promise<{ success: boolean; restored_key: string }> {
+    return this.request<{ success: boolean; restored_key: string }>(`/api/trash/${trashId}/restore`, {
+      method: 'POST',
+    });
+  }
+
+  async purgeTrashItem(trashId: number): Promise<{ success: boolean; purged_id: number }> {
+    return this.request<{ success: boolean; purged_id: number }>(`/api/trash/${trashId}/purge`, {
+      method: 'DELETE',
+    });
+  }
+
+  async purgeAllTrash(): Promise<{ success: boolean; purged_count: number }> {
+    return this.request<{ success: boolean; purged_count: number }>('/api/trash/purge-all', {
+      method: 'POST',
+    });
   }
 }

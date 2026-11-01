@@ -18,6 +18,7 @@ import { AutomationAdminComponent } from './pages/automation-admin/automation-ad
 import { NotificationsAdminComponent } from './pages/notifications-admin/notifications-admin.component';
 import { ServiceDeskPortalComponent } from './pages/servicedesk-portal/servicedesk-portal.component';
 import { ServiceDeskAgentComponent } from './pages/servicedesk-agent/servicedesk-agent.component';
+import { TrashComponent } from './pages/trash/trash.component';
 
 export const routes: Routes = [
   { path: '', pathMatch: 'full', redirectTo: 'dashboards' },
@@ -28,6 +29,8 @@ export const routes: Routes = [
   { path: 'servicedesk/request/:key', component: ServiceDeskPortalComponent },
   { path: 'servicedesk/agent', component: ServiceDeskAgentComponent },
   { path: 'settings/servicedesk', component: ServiceDeskAgentComponent },
+  { path: 'trash', component: TrashComponent },
+  { path: 'settings/trash', component: TrashComponent },
   { path: 'board', component: BoardComponent },
   { path: 'backlog', component: BoardComponent },
   { path: 'search', component: SearchComponent },

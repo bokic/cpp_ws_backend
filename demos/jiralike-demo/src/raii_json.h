@@ -189,6 +189,22 @@ public:
         return json_object_get_int(field);
     }
 
+    int64_t get_int64(const char *key, int64_t default_val = 0) const noexcept {
+        if (!m_obj || !json_object_is_type(m_obj, json_type_object)) return default_val;
+        json_object *field = nullptr;
+        if (!json_object_object_get_ex(m_obj, key, &field) || !field) return default_val;
+        if (json_object_is_type(field, json_type_null)) return 0;
+        return json_object_get_int64(field);
+    }
+
+    json_value get_object(const char *key) const {
+        return get_child(key);
+    }
+
+    json_value get_array(const char *key) const {
+        return get_child(key);
+    }
+
     bool get_bool(const char *key, bool default_val = false) const noexcept {
         if (!m_obj || !json_object_is_type(m_obj, json_type_object)) return default_val;
         json_object *field = nullptr;

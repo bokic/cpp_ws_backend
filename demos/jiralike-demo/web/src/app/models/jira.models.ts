@@ -1701,6 +1701,45 @@ export interface PresenceUser {
   action: 'viewing' | 'editing' | 'typing';
 }
 
+export interface TrashItem {
+  id: number;
+  original_id: number;
+  item_key: string;
+  project_id: number;
+  project_key: string;
+  item_type: string;
+  title: string;
+  deleted_by?: number;
+  deleted_by_name: string;
+  deleted_at: string;
+  purge_at: string;
+  days_remaining: number;
+}
+
+export interface BulkOperationRequest {
+  operation: 'edit' | 'transition' | 'assign' | 'move' | 'delete';
+  item_ids: number[];
+  fields?: {
+    priority?: string;
+    status?: string;
+    assignee_id?: number;
+    sprint_id?: number;
+    story_points?: number;
+    labels?: string;
+    due_date?: string;
+  };
+  to_status?: string;
+  comment?: string;
+  resolution_id?: number;
+  assignee_id?: number;
+  target_project_id?: number;
+  target_type?: string;
+  target_status?: string;
+  custom_fields?: any;
+  soft_delete?: boolean;
+}
+
+
 
 
 

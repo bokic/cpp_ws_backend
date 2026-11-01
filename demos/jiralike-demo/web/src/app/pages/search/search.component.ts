@@ -599,6 +599,9 @@ ORDER BY {{ info.order_by_sql || 'w.board_order ASC, w.id ASC' }}</pre>
             <table class="jql-results-table">
               <thead>
                 <tr>
+                  <th style="width: 36px; text-align: center;">
+                    <input type="checkbox" [checked]="isAllSelected()" (change)="toggleSelectAll()" title="Select / Deselect All Items" />
+                  </th>
                   <th>Key</th>
                   <th>Type</th>
                   <th>Category</th>
@@ -621,6 +624,9 @@ ORDER BY {{ info.order_by_sql || 'w.board_order ASC, w.id ASC' }}</pre>
                     [class.selected]="selectedItem()?.id === item.id"
                     (click)="selectItemForSplit(item)"
                   >
+                    <td style="width: 36px; text-align: center;" (click)="$event.stopPropagation()">
+                      <input type="checkbox" [checked]="isItemSelected(item.id)" (change)="toggleSelectItem(item.id)" />
+                    </td>
                     <td class="col-key">
                       <a [routerLink]="['/items', item.key]" class="issue-key-link" (click)="$event.stopPropagation()">
                         {{ item.key }}
@@ -953,6 +959,190 @@ ORDER BY {{ info.order_by_sql || 'w.board_order ASC, w.id ASC' }}</pre>
             </button>
             <button type="button" class="btn btn-primary" (click)="createSubscriptionSubmit()">
               + Subscribe to Filter
+            </button>
+          </div>
+        </div>
+      </div>
+    }
+
+    <!-- Step 17: Sticky Bulk Actions Floating Dock -->
+    @if (selectedItemIds().length > 0) {
+      <div class="bulk-dock-bar">
+        <div class="bulk-dock-info">
+          <span class="bulk-dock-pill">{{ selectedItemIds().length }} selected</span>
+          <span class="bulk-dock-text">Bulk Operations:</span>
+        </div>
+        <div class="bulk-dock-buttons">
+          <button type="button" class="btn btn-secondary btn-sm" (click)="openBulkModal('edit')">
+            ✏️ Bulk Edit
+          </button>
+          <button type="button" class="btn btn-secondary btn-sm" (click)="openBulkModal('transition')">
+            🔄 Bulk Transition
+          </button>
+          <button type="button" class="btn btn-secondary btn-sm" (click)="openBulkModal('assign')">
+            👤 Bulk Assign
+          </button>
+          <button type="button" class="btn btn-danger btn-sm" (click)="openBulkModal('delete')">
+            🗑️ Bulk Delete (Trash)
+          </button>
+          <button type="button" class="btn btn-ghost btn-sm" (click)="clearSelection()">
+            ✕ Deselect
+          </button>
+        </div>
+      </div>
+    }
+
+    <!-- Step 17: Bulk Operations Wizard Modal -->
+    @if (showBulkModal()) {
+      <div class="modal-backdrop" (click)="closeBulkModal()">
+        <div class="modal-panel" style="max-width: 540px;" (click)="$event.stopPropagation()">
+          <div class="modal-header">
+            <div>
+              <h3>⚡ Bulk Operations Wizard</h3>
+              <small class="text-muted">Applying to {{ selectedItemIds().length }} selected work items</small>
+            </div>
+            <button type="button" class="modal-close" (click)="closeBulkModal()">&times;</button>
+          </div>
+
+          <div class="modal-body">
+            @if (bulkError()) {
+              <div style="margin-bottom: 12px; padding: 8px 12px; background: #ffebe6; color: #de350b; border-radius: 4px; font-size: 12px;">
+                {{ bulkError() }}
+              </div>
+            }
+
+            <div style="display: flex; gap: 8px; margin-bottom: 16px; border-bottom: 1px solid #dfe1e6; padding-bottom: 8px;">
+              <button
+                type="button"
+                class="btn btn-sm"
+                [class.btn-primary]="bulkOperation() === 'edit'"
+                [class.btn-secondary]="bulkOperation() !== 'edit'"
+                (click)="bulkOperation.set('edit')"
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                class="btn btn-sm"
+                [class.btn-primary]="bulkOperation() === 'transition'"
+                [class.btn-secondary]="bulkOperation() !== 'transition'"
+                (click)="bulkOperation.set('transition')"
+              >
+                Transition
+              </button>
+              <button
+                type="button"
+                class="btn btn-sm"
+                [class.btn-primary]="bulkOperation() === 'assign'"
+                [class.btn-secondary]="bulkOperation() !== 'assign'"
+                (click)="bulkOperation.set('assign')"
+              >
+                Assign
+              </button>
+              <button
+                type="button"
+                class="btn btn-sm"
+                [class.btn-danger]="bulkOperation() === 'delete'"
+                [class.btn-secondary]="bulkOperation() !== 'delete'"
+                (click)="bulkOperation.set('delete')"
+              >
+                Delete (Trash)
+              </button>
+            </div>
+
+            @if (bulkOperation() === 'edit') {
+              <div class="form-group" style="margin-bottom: 12px;">
+                <label>Set Priority</label>
+                <select [(ngModel)]="bulkEditDraft.priority" class="form-control">
+                  <option value="">(No change)</option>
+                  <option value="Lowest">Lowest</option>
+                  <option value="Low">Low</option>
+                  <option value="Medium">Medium</option>
+                  <option value="High">High</option>
+                  <option value="Highest">Highest</option>
+                </select>
+              </div>
+
+              <div class="form-group" style="margin-bottom: 12px;">
+                <label>Set Story Points</label>
+                <input
+                  type="number"
+                  [(ngModel)]="bulkEditDraft.story_points"
+                  class="form-control"
+                  placeholder="e.g. 5 (leave blank for no change)"
+                />
+              </div>
+
+              <div class="form-group" style="margin-bottom: 12px;">
+                <label>Set Labels</label>
+                <input
+                  type="text"
+                  [(ngModel)]="bulkEditDraft.labels"
+                  class="form-control"
+                  placeholder="e.g. backend, urgent"
+                />
+              </div>
+            }
+
+            @if (bulkOperation() === 'transition') {
+              <div class="form-group" style="margin-bottom: 12px;">
+                <label>Target Status *</label>
+                <select [(ngModel)]="bulkTransitionDraft.to_status" class="form-control">
+                  <option value="To Do">To Do</option>
+                  <option value="In Progress">In Progress</option>
+                  <option value="In Review">In Review</option>
+                  <option value="QA / Testing">QA / Testing</option>
+                  <option value="Done">Done</option>
+                </select>
+              </div>
+              <div class="form-group" style="margin-bottom: 12px;">
+                <label>Transition Comment</label>
+                <input
+                  type="text"
+                  [(ngModel)]="bulkTransitionDraft.comment"
+                  class="form-control"
+                  placeholder="e.g. Batch completed via sprint triage"
+                />
+              </div>
+            }
+
+            @if (bulkOperation() === 'assign') {
+              <div class="form-group" style="margin-bottom: 12px;">
+                <label>Assign To</label>
+                <select [(ngModel)]="bulkAssignDraft.assignee_id" class="form-control">
+                  <option [value]="0">Unassigned</option>
+                  @for (u of api.users(); track u.id) {
+                    <option [value]="u.id">{{ u.display_name }} ({{ u.role }})</option>
+                  }
+                </select>
+              </div>
+            }
+
+            @if (bulkOperation() === 'delete') {
+              <div style="background: #fff0b3; padding: 12px; border-radius: 6px; margin-bottom: 12px; font-size: 13px; color: #172b4d;">
+                ⚠️ You are about to delete <strong>{{ selectedItemIds().length }}</strong> selected issues.
+                By default, they will be moved to the <strong>Trash Bin</strong> with a 30-day retention countdown and can be restored anytime from <em>Settings &gt; Trash Bin</em>.
+              </div>
+              <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
+                <input type="checkbox" [(ngModel)]="bulkDeleteSoft" />
+                <span>Soft Delete (Retain in Trash Bin for 30 days)</span>
+              </label>
+            }
+          </div>
+
+          <div class="modal-footer">
+            <button type="button" class="btn btn-ghost" (click)="closeBulkModal()">
+              Cancel
+            </button>
+            <button
+              type="button"
+              class="btn"
+              [class.btn-primary]="bulkOperation() !== 'delete'"
+              [class.btn-danger]="bulkOperation() === 'delete'"
+              (click)="executeBulkOperation()"
+              [disabled]="isBulkRunning()"
+            >
+              {{ isBulkRunning() ? "Processing..." : "Confirm & Execute Bulk " + bulkOperation() }}
             </button>
           </div>
         </div>
@@ -1545,6 +1735,49 @@ ORDER BY {{ info.order_by_sql || 'w.board_order ASC, w.id ASC' }}</pre>
         border-radius: 4px;
         font-size: 11px;
       }
+      .bulk-dock-bar {
+        position: fixed;
+        bottom: 24px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #091e42;
+        color: white;
+        padding: 10px 20px;
+        border-radius: 30px;
+        display: flex;
+        align-items: center;
+        gap: 20px;
+        box-shadow: 0 10px 30px rgba(9, 30, 66, 0.4);
+        z-index: 1000;
+        animation: slideUp 0.2s ease-out;
+      }
+      @keyframes slideUp {
+        from { transform: translate(-50%, 40px); opacity: 0; }
+        to { transform: translate(-50%, 0); opacity: 1; }
+      }
+      .bulk-dock-info {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .bulk-dock-pill {
+        background: #0052cc;
+        color: white;
+        font-size: 11px;
+        font-weight: 700;
+        padding: 4px 10px;
+        border-radius: 12px;
+      }
+      .bulk-dock-text {
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .bulk-dock-buttons {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
       .results-meta-bar {
         display: flex;
         align-items: center;
@@ -1978,6 +2211,100 @@ export class SearchComponent implements OnInit {
     fixVersion: '',
     text: '',
   };
+
+  // Step 17: Bulk Operations state
+  readonly selectedItemIds = signal<number[]>([]);
+  readonly showBulkModal = signal<boolean>(false);
+  readonly bulkOperation = signal<'edit' | 'transition' | 'assign' | 'delete'>('edit');
+  readonly isBulkRunning = signal<boolean>(false);
+  readonly bulkError = signal<string>('');
+  bulkEditDraft = { priority: '', status: '', story_points: null as number | null, labels: '' };
+  bulkTransitionDraft = { to_status: 'Done', comment: 'Bulk transition' };
+  bulkAssignDraft = { assignee_id: 1 };
+  bulkDeleteSoft = true;
+
+  isItemSelected(id: number): boolean {
+    return this.selectedItemIds().includes(id);
+  }
+
+  toggleSelectItem(id: number): void {
+    const cur = this.selectedItemIds();
+    if (cur.includes(id)) {
+      this.selectedItemIds.set(cur.filter((x) => x !== id));
+    } else {
+      this.selectedItemIds.set([...cur, id]);
+    }
+  }
+
+  isAllSelected(): boolean {
+    const list = this.items();
+    if (list.length === 0) return false;
+    const cur = this.selectedItemIds();
+    return list.every((it) => cur.includes(it.id));
+  }
+
+  toggleSelectAll(): void {
+    const list = this.items();
+    if (this.isAllSelected()) {
+      this.selectedItemIds.set([]);
+    } else {
+      this.selectedItemIds.set(list.map((it) => it.id));
+    }
+  }
+
+  clearSelection(): void {
+    this.selectedItemIds.set([]);
+  }
+
+  openBulkModal(op: 'edit' | 'transition' | 'assign' | 'delete'): void {
+    this.bulkOperation.set(op);
+    this.bulkError.set('');
+    this.showBulkModal.set(true);
+  }
+
+  closeBulkModal(): void {
+    this.showBulkModal.set(false);
+  }
+
+  async executeBulkOperation(): Promise<void> {
+    const ids = this.selectedItemIds();
+    if (ids.length === 0) return;
+    this.isBulkRunning.set(true);
+    this.bulkError.set('');
+    try {
+      const op = this.bulkOperation();
+      const payload: any = {
+        operation: op,
+        item_ids: ids,
+      };
+      if (op === 'edit') {
+        payload.fields = {};
+        if (this.bulkEditDraft.priority) payload.fields.priority = this.bulkEditDraft.priority;
+        if (this.bulkEditDraft.story_points !== null && this.bulkEditDraft.story_points !== undefined) {
+          payload.fields.story_points = Number(this.bulkEditDraft.story_points);
+        }
+        if (this.bulkEditDraft.labels) payload.fields.labels = this.bulkEditDraft.labels;
+      } else if (op === 'transition') {
+        payload.to_status = this.bulkTransitionDraft.to_status;
+        payload.comment = this.bulkTransitionDraft.comment;
+      } else if (op === 'assign') {
+        payload.assignee_id = Number(this.bulkAssignDraft.assignee_id);
+      } else if (op === 'delete') {
+        payload.soft_delete = this.bulkDeleteSoft;
+      }
+
+      const res = await this.api.bulkOperateItems(payload);
+      this.toastMessage.set(`Bulk ${op} applied successfully to ${res.processed_count} issues.`);
+      this.toastIsError.set(false);
+      this.clearSelection();
+      this.closeBulkModal();
+      await this.executeJqlSearch();
+    } catch (err: any) {
+      this.bulkError.set(err.message || 'Bulk operation failed');
+    } finally {
+      this.isBulkRunning.set(false);
+    }
+  }
 
   // Save/Edit Filter Modal state
   readonly showFilterModal = signal<boolean>(false);
