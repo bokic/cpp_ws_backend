@@ -2,7 +2,13 @@ import { Injectable, computed, signal } from '@angular/core';
 import {
   AttachmentItem,
   CommentItem,
+  IssueTypeDef,
+  IssueTypeScheme,
   Project,
+  ProjectComponent,
+  ProjectVersion,
+  ReleaseNotesResponse,
+  Resolution,
   SetupStatus,
   Sprint,
   User,
@@ -26,6 +32,11 @@ export class ApiService {
   readonly activeProject = signal<Project | null>(null);
   readonly users = signal<User[]>([]);
   readonly sprints = signal<Sprint[]>([]);
+  readonly resolutions = signal<Resolution[]>([]);
+  readonly issueTypes = signal<IssueTypeDef[]>([]);
+  readonly issueTypeSchemes = signal<IssueTypeScheme[]>([]);
+  readonly components = signal<ProjectComponent[]>([]);
+  readonly versions = signal<ProjectVersion[]>([]);
   readonly currentSprint = computed<Sprint | null>(() => {
     const list = this.sprints();
     return (
@@ -148,10 +159,15 @@ export class ApiService {
   }
 
   async loadReferenceData(): Promise<void> {
-    const [projs, usrs, sprs] = await Promise.all([
+    const [projs, usrs, sprs, resList, typesList, schemesList, compsList, versList] = await Promise.all([
       this.getProjects(),
       this.getUsers(),
       this.getSprints(),
+      this.getResolutions().catch(() => [] as Resolution[]),
+      this.getIssueTypes().catch(() => [] as IssueTypeDef[]),
+      this.getIssueTypeSchemes().catch(() => [] as IssueTypeScheme[]),
+      this.getComponents().catch(() => [] as ProjectComponent[]),
+      this.getVersions().catch(() => [] as ProjectVersion[]),
     ]);
     this.projects.set(projs);
     if (projs.length > 0 && !this.activeProject()) {
@@ -159,6 +175,156 @@ export class ApiService {
     }
     this.users.set(usrs);
     this.sprints.set(sprs);
+    this.resolutions.set(resList);
+    this.issueTypes.set(typesList);
+    this.issueTypeSchemes.set(schemesList);
+    this.components.set(compsList);
+    this.versions.set(versList);
+  }
+
+  async getResolutions(): Promise<Resolution[]> {
+    return this.request<Resolution[]>('/api/resolutions');
+  }
+
+  async createResolution(payload: {
+    name: string;
+    description: string;
+    sort_order?: number;
+    is_default?: boolean;
+  }): Promise<Resolution> {
+    const r = await this.request<Resolution>('/api/resolutions', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    this.resolutions.set(await this.getResolutions());
+    return r;
+  }
+
+  async getIssueTypes(): Promise<IssueTypeDef[]> {
+    return this.request<IssueTypeDef[]>('/api/issue-types');
+  }
+
+  async createIssueType(payload: {
+    name: string;
+    description: string;
+    icon?: string;
+    color?: string;
+    hierarchy_level?: number;
+    is_subtask?: boolean;
+  }): Promise<IssueTypeDef> {
+    const t = await this.request<IssueTypeDef>('/api/issue-types', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    this.issueTypes.set(await this.getIssueTypes());
+    return t;
+  }
+
+  async getIssueTypeSchemes(): Promise<IssueTypeScheme[]> {
+    return this.request<IssueTypeScheme[]>('/api/issue-type-schemes');
+  }
+
+  async createIssueTypeScheme(payload: {
+    name: string;
+    description: string;
+    issue_type_ids: number[];
+  }): Promise<IssueTypeScheme> {
+    const s = await this.request<IssueTypeScheme>('/api/issue-type-schemes', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    this.issueTypeSchemes.set(await this.getIssueTypeSchemes());
+    return s;
+  }
+
+  async getComponents(projectId?: number): Promise<ProjectComponent[]> {
+    const url = projectId ? `/api/projects/${projectId}/components` : '/api/components';
+    return this.request<ProjectComponent[]>(url);
+  }
+
+  async createComponent(payload: {
+    project_id: number;
+    name: string;
+    description: string;
+    lead_user_id: number | null;
+    default_assignee_type: string;
+  }): Promise<ProjectComponent> {
+    const c = await this.request<ProjectComponent>(`/api/projects/${payload.project_id}/components`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    this.components.set(await this.getComponents());
+    return c;
+  }
+
+  async updateComponent(
+    id: number,
+    payload: {
+      name: string;
+      description: string;
+      lead_user_id: number | null;
+      default_assignee_type: string;
+    }
+  ): Promise<ProjectComponent> {
+    const c = await this.request<ProjectComponent>(`/api/components/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    this.components.set(await this.getComponents());
+    return c;
+  }
+
+  async deleteComponent(id: number): Promise<void> {
+    await this.request(`/api/components/${id}`, { method: 'DELETE' });
+    this.components.set(await this.getComponents());
+  }
+
+  async getVersions(projectId?: number): Promise<ProjectVersion[]> {
+    const url = projectId ? `/api/projects/${projectId}/versions` : '/api/versions';
+    return this.request<ProjectVersion[]>(url);
+  }
+
+  async createVersion(payload: {
+    project_id: number;
+    name: string;
+    description: string;
+    status: string;
+    start_date: string;
+    release_date: string;
+  }): Promise<ProjectVersion> {
+    const v = await this.request<ProjectVersion>(`/api/projects/${payload.project_id}/versions`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    this.versions.set(await this.getVersions());
+    return v;
+  }
+
+  async updateVersion(
+    id: number,
+    payload: {
+      name: string;
+      description: string;
+      status: string;
+      start_date: string;
+      release_date: string;
+    }
+  ): Promise<ProjectVersion> {
+    const v = await this.request<ProjectVersion>(`/api/versions/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    this.versions.set(await this.getVersions());
+    return v;
+  }
+
+  async deleteVersion(id: number): Promise<void> {
+    await this.request(`/api/versions/${id}`, { method: 'DELETE' });
+    this.versions.set(await this.getVersions());
+  }
+
+  async getReleaseNotes(versionId: number): Promise<ReleaseNotesResponse> {
+    return this.request<ReleaseNotesResponse>(`/api/versions/${versionId}/release-notes`);
   }
 
   async getProjects(): Promise<Project[]> {
@@ -292,6 +458,7 @@ export class ApiService {
       start_date?: string;
       due_date?: string;
       board_order?: number;
+      resolution_id?: number;
       comment?: string;
     } = {}
   ): Promise<WorkItem> {

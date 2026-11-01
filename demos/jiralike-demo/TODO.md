@@ -121,28 +121,28 @@ This document provides a comprehensive gap analysis and exhaustive development r
     - **Transition Screens**: Popups triggered during specific workflow transitions (e.g., prompt for *Resolution* and *Time Spent* on "Done").
 
 ### 1.4 Custom Issue Types & Extended Hierarchy
-- [ ] **Configurable Issue Types Table (`issue_types`)**:
+- [x] **Configurable Issue Types Table (`issue_types`)**:
   - Attributes: `id`, `name`, `description`, `icon_url`, `is_subtask`, `hierarchy_level`.
   - Hierarchy Levels:
     - Level -1: Subtask (`Sub-task`, `Technical Task`).
     - Level 0: Standard (`Story`, `Task`, `Bug`, `Improvement`, `New Feature`).
     - Level 1: Container (`Epic`).
     - Level 2+: Advanced Portfolio hierarchy (`Initiative`, `Theme`, `Capability`).
-- [ ] **Issue Type Schemes (`issue_type_schemes`)**:
+- [x] **Issue Type Schemes (`issue_type_schemes`)**:
   - Allow different projects to enable only a subset of issue types.
 
 ### 1.5 Resolutions & Lifecycle State
-- [ ] **Resolutions Subsystem (`resolutions`)**:
+- [x] **Resolutions Subsystem (`resolutions`)**:
   - Standard resolutions: `Fixed`, `Won't Fix`, `Duplicate`, `Incomplete`, `Cannot Reproduce`, `Declined`.
   - Add `resolution_id` and `resolution_date` columns to `work_items`.
   - Distinguish between **Status** (where an item is in the pipeline) and **Resolution** (outcome of the work).
   - Clear `resolution_id` and `resolution_date` automatically when transitioning an item from a closed state back to an active state ("Reopen").
 
 ### 1.6 Components & Versions Management
-- [ ] **Project Components (`components`)**:
+- [x] **Project Components (`components`)**:
   - Fields: `id`, `project_id`, `name`, `description`, `lead_user_id`, `default_assignee_type` (`project_lead`, `component_lead`, `unassigned`).
   - Work item component assignment table (`work_item_components`).
-- [ ] **Project Versions / Releases (`versions`)**:
+- [x] **Project Versions / Releases (`versions`)**:
   - Fields: `id`, `project_id`, `name`, `description`, `start_date`, `release_date`, `status` (`unreleased`, `released`, `archived`).
   - Work item multi-version associations: `affects_versions` and `fix_versions`.
   - Automated Release Notes Generator (export Markdown / HTML of all fixed issues in a release).
@@ -717,15 +717,15 @@ flowchart TD
 - **Frontend Deliverables**: None (transparent infrastructure upgrade).
 - **Verification**: Concurrency stress test verifying zero `SQLITE_BUSY` or locked database errors under 100 concurrent workers.
 
-#### Step 2: Core Jira Domain Model (Resolutions, Versions, Components, Issue Types Schemes)
+#### Step 2: Core Jira Domain Model (Resolutions, Versions, Components, Issue Types Schemes) *(Completed)*
 - **Why Next**: Jira’s issue identity relies on more than just raw types. An issue belongs to Components, affects/fixes Versions, and closes with a Resolution. These must be modeled before custom fields and screen mapping.
 - **Backend Deliverables**:
-  - Database Migration: Create `resolutions`, `components`, `versions`, `issue_types`, and `issue_type_schemes` tables.
-  - Add `resolution_id`, `resolution_date` to `work_items`.
-  - REST Endpoints: CRUD handlers for `/api/projects/:id/components`, `/api/projects/:id/versions`, `/api/resolutions`, `/api/issue-types`.
+  - [x] Database Migration: Create `resolutions`, `components`, `versions`, `issue_types`, and `issue_type_schemes` tables.
+  - [x] Add `resolution_id`, `resolution_date` to `work_items`.
+  - [x] REST Endpoints: CRUD handlers for `/api/projects/:id/components`, `/api/projects/:id/versions`, `/api/resolutions`, `/api/issue-types`.
 - **Frontend Deliverables**:
-  - Project Settings view: Manage project components (with component leads) and versions (unreleased/released).
-  - Update issue detail view and create modal to support selecting components, affected versions, and fix versions.
+  - [x] Project Settings view: Manage project components (with component leads) and versions (unreleased/released).
+  - [x] Update issue detail view and create modal to support selecting components, affected versions, and fix versions.
 - **Verification**: Creating and editing an issue retains component and version relationships; transitioning to closed records resolution.
 
 #### Step 3: Dynamic Custom Fields Engine & Screen Schemes

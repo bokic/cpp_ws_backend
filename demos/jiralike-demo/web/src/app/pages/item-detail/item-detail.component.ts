@@ -503,6 +503,74 @@ import {
                 />
               </div>
 
+              <div class="form-group">
+                <label for="detail-resolution">Resolution</label>
+                <select
+                  id="detail-resolution"
+                  name="detail_resolution_id"
+                  [(ngModel)]="it.resolution_id"
+                  (change)="saveChanges()"
+                >
+                  <option [ngValue]="null">— Unresolved —</option>
+                  @for (r of api.resolutions(); track r.id) {
+                    <option [ngValue]="r.id">✔ {{ r.name }}</option>
+                  }
+                </select>
+                @if (it.resolution_date) {
+                  <small class="text-muted" style="display: block; margin-top: 4px;">
+                    Resolved at: {{ it.resolution_date }}
+                  </small>
+                }
+              </div>
+
+              <div class="form-group">
+                <label>Components</label>
+                <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px;">
+                  @for (c of projectComponents(); track c.id) {
+                    <button
+                      type="button"
+                      class="pill"
+                      [class.active]="(it.component_ids || []).includes(c.id)"
+                      (click)="toggleRelation('component_ids', c.id)"
+                    >
+                      🧩 {{ c.name }}
+                    </button>
+                  }
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label>Fix Version/s</label>
+                <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px;">
+                  @for (v of projectVersions(); track v.id) {
+                    <button
+                      type="button"
+                      class="pill"
+                      [class.active]="(it.fix_version_ids || []).includes(v.id)"
+                      (click)="toggleRelation('fix_version_ids', v.id)"
+                    >
+                      🚀 {{ v.name }}
+                    </button>
+                  }
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label>Affects Version/s</label>
+                <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px;">
+                  @for (v of projectVersions(); track v.id) {
+                    <button
+                      type="button"
+                      class="pill"
+                      [class.active]="(it.affects_version_ids || []).includes(v.id)"
+                      (click)="toggleRelation('affects_version_ids', v.id)"
+                    >
+                      🏷 {{ v.name }}
+                    </button>
+                  }
+                </div>
+              </div>
+
               <div class="meta-timestamps">
                 <div>Reporter: <strong>{{ it.reporter_name || 'System' }}</strong></div>
                 <div>Created: {{ it.created_at }}</div>
@@ -553,6 +621,35 @@ export class ItemDetailComponent implements OnInit {
     this.item.set(d);
   }
 
+  projectComponents() {
+    const cur = this.item();
+    if (!cur) return [];
+    return this.api.components().filter((c) => c.project_id === cur.project_id);
+  }
+
+  projectVersions() {
+    const cur = this.item();
+    if (!cur) return [];
+    return this.api.versions().filter((v) => v.project_id === cur.project_id);
+  }
+
+  async toggleRelation(
+    field: 'component_ids' | 'fix_version_ids' | 'affects_version_ids',
+    id: number
+  ): Promise<void> {
+    const cur = this.item();
+    if (!cur) return;
+    const arr = [...(cur[field] || [])];
+    const idx = arr.indexOf(id);
+    if (idx >= 0) {
+      arr.splice(idx, 1);
+    } else {
+      arr.push(id);
+    }
+    cur[field] = arr;
+    await this.saveChanges();
+  }
+
   async transitionState(newState: WorkflowState): Promise<void> {
     const cur = this.item();
     if (!cur || cur.status === newState) return;
@@ -576,6 +673,10 @@ export class ItemDetailComponent implements OnInit {
       parent_id: cur.parent_id || 0,
       sprint_id: cur.sprint_id || 0,
       assignee_id: cur.assignee_id || 0,
+      resolution_id: cur.resolution_id || 0,
+      component_ids: cur.component_ids || [],
+      fix_version_ids: cur.fix_version_ids || [],
+      affects_version_ids: cur.affects_version_ids || [],
       story_points: cur.story_points,
       progress: cur.progress,
       start_date: cur.start_date,

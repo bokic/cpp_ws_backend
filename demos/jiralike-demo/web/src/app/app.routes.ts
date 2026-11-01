@@ -8,6 +8,7 @@ import { CreateItemComponent } from './pages/create-item/create-item.component';
 import { ItemDetailComponent } from './pages/item-detail/item-detail.component';
 import { WorkflowsComponent } from './pages/workflows/workflows.component';
 import { SprintsComponent } from './pages/sprints/sprints.component';
+import { ProjectSettingsComponent } from './pages/project-settings/project-settings.component';
 
 export const routes: Routes = [
   { path: '', pathMatch: 'full', redirectTo: 'board' },
@@ -18,6 +19,7 @@ export const routes: Routes = [
   { path: 'states', component: StatesComponent },
   { path: 'create', component: CreateItemComponent },
   { path: 'sprints', component: SprintsComponent },
+  { path: 'project-settings', component: ProjectSettingsComponent },
   { path: 'workflows', component: WorkflowsComponent },
   { path: 'items/:id', component: ItemDetailComponent },
   { path: ':id', component: ItemDetailComponent },

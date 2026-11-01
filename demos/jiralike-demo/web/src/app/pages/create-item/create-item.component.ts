@@ -234,6 +234,63 @@ import {
           </div>
         </div>
 
+        <!-- Components, Fix Versions, and Affects Versions -->
+        <div class="grid-3">
+          <div class="form-group">
+            <label>Components (Auto-routes Assignee if Unassigned)</label>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px;">
+              @for (c of projectComponents(); track c.id) {
+                <button
+                  type="button"
+                  class="pill"
+                  [class.active]="form.component_ids.includes(c.id)"
+                  (click)="toggleId(form.component_ids, c.id)"
+                >
+                  🧩 {{ c.name }}
+                </button>
+              }
+              @if (projectComponents().length === 0) {
+                <span class="text-muted" style="font-size: 0.82rem;">No components in project</span>
+              }
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Fix Version/s (Target Release)</label>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px;">
+              @for (v of projectVersions(); track v.id) {
+                <button
+                  type="button"
+                  class="pill"
+                  [class.active]="form.fix_version_ids.includes(v.id)"
+                  (click)="toggleId(form.fix_version_ids, v.id)"
+                >
+                  🚀 {{ v.name }} ({{ v.status }})
+                </button>
+              }
+              @if (projectVersions().length === 0) {
+                <span class="text-muted" style="font-size: 0.82rem;">No versions in project</span>
+              }
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Affects Version/s</label>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px;">
+              @for (v of projectVersions(); track v.id) {
+                <button
+                  type="button"
+                  class="pill"
+                  [class.active]="form.affects_version_ids.includes(v.id)"
+                  (click)="toggleId(form.affects_version_ids, v.id)"
+                >
+                  🏷 {{ v.name }}
+                </button>
+              }
+            </div>
+          </div>
+        </div>
+
         <!-- File Attachments Upload to blobs/ -->
         <div class="form-group">
           <label for="create-file-input">Attachments (Uploaded to <code>blobs/</code> directory)</label>
@@ -300,6 +357,9 @@ export class CreateItemComponent implements OnInit {
     severity: string;
     steps_to_reproduce: string;
     labels: string;
+    component_ids: number[];
+    fix_version_ids: number[];
+    affects_version_ids: number[];
   } = {
     project_id: 1,
     type: 'Task',
@@ -317,7 +377,27 @@ export class CreateItemComponent implements OnInit {
     severity: 'Major',
     steps_to_reproduce: '',
     labels: '',
+    component_ids: [],
+    fix_version_ids: [],
+    affects_version_ids: [],
   };
+
+  projectComponents() {
+    return this.api.components().filter((c) => c.project_id === this.form.project_id);
+  }
+
+  projectVersions() {
+    return this.api.versions().filter((v) => v.project_id === this.form.project_id);
+  }
+
+  toggleId(arr: number[], id: number): void {
+    const idx = arr.indexOf(id);
+    if (idx >= 0) {
+      arr.splice(idx, 1);
+    } else {
+      arr.push(id);
+    }
+  }
 
   async ngOnInit(): Promise<void> {
     await this.api.loadReferenceData();
@@ -344,6 +424,8 @@ export class CreateItemComponent implements OnInit {
 
   typeDescription(t: WorkItemType): string {
     switch (t) {
+      case 'Initiative':
+        return 'Strategic cross-epic portfolio initiative';
       case 'Epic':
         return 'Large initiative spanning multiple sprints';
       case 'Story':
@@ -352,6 +434,8 @@ export class CreateItemComponent implements OnInit {
         return 'Engineering or operational task';
       case 'Subtask':
         return 'Granular child step under a parent item';
+      default:
+        return 'Custom project work item type';
     }
   }
 

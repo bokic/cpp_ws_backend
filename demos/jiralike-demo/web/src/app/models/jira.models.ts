@@ -1,4 +1,4 @@
-export type WorkItemType = 'Epic' | 'Story' | 'Task' | 'Subtask';
+export type WorkItemType = 'Initiative' | 'Epic' | 'Story' | 'Task' | 'Subtask' | string;
 
 export type WorkItemCategory = 'New Feature' | 'Improvement' | 'Bug' | 'Issue';
 
@@ -14,6 +14,7 @@ export type WorkflowState =
 export type PriorityType = 'Lowest' | 'Low' | 'Medium' | 'High' | 'Highest' | 'Critical';
 
 export const WORK_ITEM_TYPES: WorkItemType[] = [
+  'Initiative',
   'Epic',
   'Story',
   'Task',
@@ -78,8 +79,82 @@ export interface Project {
   lead_user_id: number | null;
   lead_name?: string;
   issue_seq: number;
+  issue_type_scheme_id?: number;
+  issue_type_scheme_name?: string;
   total_items?: number;
   created_at?: string;
+}
+
+export interface Resolution {
+  id: number;
+  name: string;
+  description: string;
+  sort_order: number;
+  is_default: boolean;
+}
+
+export interface IssueTypeDef {
+  id: number;
+  name: string;
+  description: string;
+  icon: string;
+  color: string;
+  hierarchy_level: number;
+  is_subtask: boolean;
+  is_system: boolean;
+}
+
+export interface IssueTypeScheme {
+  id: number;
+  name: string;
+  description: string;
+  is_default: boolean;
+  issue_types: {
+    id: number;
+    name: string;
+    icon: string;
+    color: string;
+    hierarchy_level: number;
+    is_subtask: boolean;
+    is_default: boolean;
+  }[];
+}
+
+export interface ProjectComponent {
+  id: number;
+  project_id: number;
+  name: string;
+  description: string;
+  lead_user_id: number | null;
+  lead_name: string;
+  default_assignee_type: 'PROJECT_DEFAULT' | 'COMPONENT_LEAD' | 'PROJECT_LEAD' | 'UNASSIGNED';
+  item_count?: number;
+  created_at?: string;
+}
+
+export interface ProjectVersion {
+  id: number;
+  project_id: number;
+  name: string;
+  description: string;
+  status: 'unreleased' | 'released' | 'archived';
+  start_date: string;
+  release_date: string;
+  fix_count?: number;
+  fix_done_count?: number;
+  affects_count?: number;
+  created_at?: string;
+}
+
+export interface ReleaseNotesResponse {
+  version_id: number;
+  version_name: string;
+  status: string;
+  release_date: string;
+  project_key: string;
+  project_name: string;
+  total_items: number;
+  markdown: string;
 }
 
 export interface Sprint {
@@ -111,6 +186,15 @@ export interface WorkItem {
   sprint_id: number | null;
   assignee_id: number | null;
   reporter_id: number | null;
+  resolution_id?: number | null;
+  resolution_name?: string;
+  resolution_date?: string;
+  components?: { id: number; name: string }[];
+  component_ids?: number[];
+  fix_versions?: { id: number; name: string; status: string }[];
+  fix_version_ids?: number[];
+  affects_versions?: { id: number; name: string; status: string }[];
+  affects_version_ids?: number[];
   story_points: number;
   progress: number;
   start_date: string;

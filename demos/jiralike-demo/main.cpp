@@ -508,6 +508,92 @@ static void seed_demo_workspace(db::sqlite_db &conn, int admin_id, int project_i
     ins_att.bind_int(5, static_cast<int>(sample_content.size()));
     ins_att.bind_text(6, blob_name);
     ins_att.step_done();
+
+    // Seed project Components & Versions and associate with demo work items
+    auto ins_comp = conn.prepare(R"SQL(
+        INSERT OR IGNORE INTO components (project_id, name, description, lead_user_id, default_assignee_type)
+        VALUES (?, ?, ?, ?, ?);
+    )SQL");
+    ins_comp.bind_int(1, project_id);
+    ins_comp.bind_text(2, "FastCGI Core");
+    ins_comp.bind_text(3, "C++23 FastCGI request routing, worker pool, and socket handling");
+    ins_comp.bind_int(4, admin_id);
+    ins_comp.bind_text(5, "component_lead");
+    ins_comp.step_done();
+
+    ins_comp.clear_and_reset();
+    ins_comp.bind_int(1, project_id);
+    ins_comp.bind_text(2, "SQLite Storage Engine");
+    ins_comp.bind_text(3, "Connection pooling, WAL migrations, and prepared statement cache");
+    ins_comp.bind_int(4, admin_id);
+    ins_comp.bind_text(5, "component_lead");
+    ins_comp.step_done();
+
+    ins_comp.clear_and_reset();
+    ins_comp.bind_int(1, project_id);
+    ins_comp.bind_text(2, "Angular Board UI");
+    ins_comp.bind_text(3, "Kanban drag-and-drop board, Gantt timeline, and SPA views");
+    ins_comp.bind_int(4, marcus_id);
+    ins_comp.bind_text(5, "component_lead");
+    ins_comp.step_done();
+
+    auto ins_ver = conn.prepare(R"SQL(
+        INSERT OR IGNORE INTO versions (project_id, name, description, start_date, release_date, status)
+        VALUES (?, ?, ?, ?, ?, ?);
+    )SQL");
+    ins_ver.bind_int(1, project_id);
+    ins_ver.bind_text(2, "v1.0.0");
+    ins_ver.bind_text(3, "Initial foundation release with FastCGI, SQLite migrations, and Kanban board");
+    ins_ver.bind_text(4, "2026-10-01");
+    ins_ver.bind_text(5, "2026-10-25");
+    ins_ver.bind_text(6, "released");
+    ins_ver.step_done();
+
+    ins_ver.clear_and_reset();
+    ins_ver.bind_int(1, project_id);
+    ins_ver.bind_text(2, "v1.1.0");
+    ins_ver.bind_text(3, "Connection pooling, core Jira domain entities, components, and release management");
+    ins_ver.bind_text(4, "2026-10-26");
+    ins_ver.bind_text(5, "2026-11-10");
+    ins_ver.bind_text(6, "unreleased");
+    ins_ver.step_done();
+
+    ins_ver.clear_and_reset();
+    ins_ver.bind_int(1, project_id);
+    ins_ver.bind_text(2, "v2.0.0");
+    ins_ver.bind_text(3, "Custom fields engine, directed workflows, and JQL search compiler");
+    ins_ver.bind_text(4, "2026-11-11");
+    ins_ver.bind_text(5, "2026-12-01");
+    ins_ver.bind_text(6, "unreleased");
+    ins_ver.step_done();
+
+    conn.exec(R"SQL(
+        UPDATE work_items
+        SET resolution_id = 1,
+            resolution_date = COALESCE(NULLIF(updated_at, ''), datetime('now'))
+        WHERE status = 'Done' AND resolution_id IS NULL;
+
+        INSERT OR IGNORE INTO work_item_components (work_item_id, component_id)
+        SELECT w.id, c.id
+        FROM work_items w
+        JOIN components c ON c.project_id = w.project_id
+        WHERE (w.id % 3 = 1 AND c.name = 'FastCGI Core')
+           OR (w.id % 3 = 2 AND c.name = 'SQLite Storage Engine')
+           OR (w.id % 3 = 0 AND c.name = 'Angular Board UI');
+
+        INSERT OR IGNORE INTO work_item_versions (work_item_id, version_id, relation_type)
+        SELECT w.id, v.id, 'fix'
+        FROM work_items w
+        JOIN versions v ON v.project_id = w.project_id
+        WHERE (w.status = 'Done' AND v.name = 'v1.0.0')
+           OR (w.status != 'Done' AND v.name = 'v1.1.0');
+
+        INSERT OR IGNORE INTO work_item_versions (work_item_id, version_id, relation_type)
+        SELECT w.id, v.id, 'affects'
+        FROM work_items w
+        JOIN versions v ON v.project_id = w.project_id
+        WHERE w.category = 'Bug' AND v.name = 'v1.0.0';
+    )SQL");
 }
 
 // POST /api/setup/init
@@ -801,7 +887,10 @@ static void handle_projects(backend::wsworker *worker,
         auto stmt = conn.prepare(R"SQL(
             SELECT p.id, p.key, p.name, p.description, p.lead_user_id,
                    COALESCE(u.display_name, ''), p.issue_seq, p.created_at,
-                   (SELECT COUNT(*) FROM work_items w WHERE w.project_id = p.id) AS total_items
+                   (SELECT COUNT(*) FROM work_items w WHERE w.project_id = p.id) AS total_items,
+                   COALESCE(p.issue_type_scheme_id, 1),
+                   (SELECT COUNT(*) FROM components c WHERE c.project_id = p.id) AS component_count,
+                   (SELECT COUNT(*) FROM versions v WHERE v.project_id = p.id) AS version_count
             FROM projects p
             LEFT JOIN users u ON u.id = p.lead_user_id
             ORDER BY p.id ASC;
@@ -818,6 +907,9 @@ static void handle_projects(backend::wsworker *worker,
             p.add_int("issue_seq", stmt.column_int(6));
             p.add_str("created_at", stmt.column_str(7));
             p.add_int("total_items", stmt.column_int(8));
+            p.add_int("issue_type_scheme_id", stmt.column_int(9));
+            p.add_int("component_count", stmt.column_int(10));
+            p.add_int("version_count", stmt.column_int(11));
             arr.add(std::move(p));
         }
         send_json(worker, header, "200 OK", arr);
@@ -839,6 +931,7 @@ static void handle_projects(backend::wsworker *worker,
     std::string key = body.get_string("key");
     std::string name = body.get_string("name");
     std::string desc = body.get_string("description");
+    int scheme_id = body.get_int("issue_type_scheme_id", 1);
     if (key.empty() || name.empty()) {
         send_error(worker, header, "400 Bad Request", "Project key and name are required");
         return;
@@ -848,11 +941,15 @@ static void handle_projects(backend::wsworker *worker,
     int pid = 0;
     {
         db::sqlite_transaction tx(conn);
-        auto ins = conn.prepare("INSERT INTO projects (key, name, description, lead_user_id) VALUES (?, ?, ?, ?);");
+        auto ins = conn.prepare(R"SQL(
+            INSERT INTO projects (key, name, description, lead_user_id, issue_type_scheme_id)
+            VALUES (?, ?, ?, ?, ?);
+        )SQL");
         ins.bind_text(1, key);
         ins.bind_text(2, name);
         ins.bind_text(3, desc);
         ins.bind_int(4, u_auth.id);
+        ins.bind_int(5, scheme_id > 0 ? scheme_id : 1);
         ins.step_done();
         pid = static_cast<int>(conn.last_insert_rowid());
         tx.commit();
@@ -863,7 +960,797 @@ static void handle_projects(backend::wsworker *worker,
     res.add_str("key", key);
     res.add_str("name", name);
     res.add_str("description", desc);
+    res.add_int("issue_type_scheme_id", scheme_id > 0 ? scheme_id : 1);
     send_json(worker, header, "201 Created", res);
+}
+
+// GET / POST /api/resolutions
+static void handle_resolutions(backend::wsworker *worker,
+                               const std::map<std::string, std::string> &header,
+                               const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto stmt = conn.prepare(R"SQL(
+            SELECT r.id, r.name, r.description, r.sort_order, r.is_default, r.created_at,
+                   (SELECT COUNT(*) FROM work_items w WHERE w.resolution_id = r.id) AS item_count
+            FROM resolutions r
+            ORDER BY r.sort_order ASC, r.id ASC;
+        )SQL");
+        auto arr = json::json_value::make_array();
+        while (stmt.step() == SQLITE_ROW) {
+            auto r = json::json_value::make_object();
+            r.add_int("id", stmt.column_int(0));
+            r.add_str("name", stmt.column_str(1));
+            r.add_str("description", stmt.column_str(2));
+            r.add_int("sort_order", stmt.column_int(3));
+            r.add_bool("is_default", stmt.column_int(4) != 0);
+            r.add_str("created_at", stmt.column_str(5));
+            r.add_int("item_count", stmt.column_int(6));
+            arr.add(std::move(r));
+        }
+        send_json(worker, header, "200 OK", arr);
+        return;
+    }
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string name = body.get_string("name");
+    std::string description = body.get_string("description");
+    int sort_order = body.get_int("sort_order", 100);
+    bool is_default = body.get_bool("is_default", false);
+
+    if (name.empty()) {
+        send_error(worker, header, "400 Bad Request", "Resolution name is required");
+        return;
+    }
+
+    int new_id = 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        if (is_default) {
+            conn.exec("UPDATE resolutions SET is_default = 0;");
+        }
+        auto ins = conn.prepare(R"SQL(
+            INSERT INTO resolutions (name, description, sort_order, is_default)
+            VALUES (?, ?, ?, ?);
+        )SQL");
+        ins.bind_text(1, name);
+        ins.bind_text(2, description);
+        ins.bind_int(3, sort_order);
+        ins.bind_int(4, is_default ? 1 : 0);
+        ins.step_done();
+        new_id = static_cast<int>(conn.last_insert_rowid());
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", new_id);
+    res.add_str("name", name);
+    res.add_str("description", description);
+    res.add_int("sort_order", sort_order);
+    res.add_bool("is_default", is_default);
+    res.add_int("item_count", 0);
+    send_json(worker, header, "201 Created", res);
+}
+
+// GET / POST /api/issue-types
+static void handle_issue_types(backend::wsworker *worker,
+                               const std::map<std::string, std::string> &header,
+                               const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+        int project_id = std::atoi(args["project_id"].c_str());
+
+        std::string sql;
+        if (project_id > 0) {
+            sql = R"SQL(
+                SELECT it.id, it.name, it.description, it.icon_color, it.is_subtask, it.hierarchy_level, it.created_at
+                FROM issue_types it
+                INNER JOIN issue_type_scheme_items si ON si.issue_type_id = it.id
+                INNER JOIN projects p ON p.issue_type_scheme_id = si.scheme_id
+                WHERE p.id = ?
+                ORDER BY si.sort_order ASC, it.hierarchy_level DESC, it.id ASC;
+            )SQL";
+        } else {
+            sql = R"SQL(
+                SELECT id, name, description, icon_color, is_subtask, hierarchy_level, created_at
+                FROM issue_types
+                ORDER BY hierarchy_level DESC, id ASC;
+            )SQL";
+        }
+
+        auto stmt = conn.prepare(sql);
+        if (project_id > 0) {
+            stmt.bind_int(1, project_id);
+        }
+
+        auto arr = json::json_value::make_array();
+        while (stmt.step() == SQLITE_ROW) {
+            auto t = json::json_value::make_object();
+            t.add_int("id", stmt.column_int(0));
+            t.add_str("name", stmt.column_str(1));
+            t.add_str("description", stmt.column_str(2));
+            t.add_str("icon_color", stmt.column_str(3));
+            t.add_str("color", stmt.column_str(3));
+            t.add_bool("is_subtask", stmt.column_int(4) != 0);
+            t.add_int("hierarchy_level", stmt.column_int(5));
+            t.add_bool("is_system", stmt.column_int(0) <= 5);
+            t.add_str("created_at", stmt.column_str(6));
+            arr.add(std::move(t));
+        }
+        send_json(worker, header, "200 OK", arr);
+        return;
+    }
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string name = body.get_string("name");
+    std::string description = body.get_string("description");
+    std::string icon_color = body.get_string("icon_color", "#0052CC");
+    bool is_subtask = body.get_bool("is_subtask", false);
+    int hierarchy_level = body.get_int("hierarchy_level", is_subtask ? -1 : 0);
+
+    if (name.empty()) {
+        send_error(worker, header, "400 Bad Request", "Issue type name is required");
+        return;
+    }
+
+    int new_id = 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare(R"SQL(
+            INSERT INTO issue_types (name, description, icon_color, is_subtask, hierarchy_level)
+            VALUES (?, ?, ?, ?, ?);
+        )SQL");
+        ins.bind_text(1, name);
+        ins.bind_text(2, description);
+        ins.bind_text(3, icon_color);
+        ins.bind_int(4, is_subtask ? 1 : 0);
+        ins.bind_int(5, hierarchy_level);
+        ins.step_done();
+        new_id = static_cast<int>(conn.last_insert_rowid());
+
+        // Automatically attach new issue type to the Default scheme (scheme_id = 1)
+        auto link_scheme = conn.prepare(R"SQL(
+            INSERT OR IGNORE INTO issue_type_scheme_items (scheme_id, issue_type_id, sort_order)
+            VALUES (1, ?, ?);
+        )SQL");
+        link_scheme.bind_int(1, new_id);
+        link_scheme.bind_int(2, new_id * 10);
+        link_scheme.step_done();
+
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", new_id);
+    res.add_str("name", name);
+    res.add_str("description", description);
+    res.add_str("icon_color", icon_color);
+    res.add_bool("is_subtask", is_subtask);
+    res.add_int("hierarchy_level", hierarchy_level);
+    send_json(worker, header, "201 Created", res);
+}
+
+// GET / POST /api/issue-type-schemes
+static void handle_issue_type_schemes(backend::wsworker *worker,
+                                      const std::map<std::string, std::string> &header,
+                                      const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto stmt = conn.prepare("SELECT id, name, description, is_default, created_at FROM issue_type_schemes ORDER BY id ASC;");
+        auto arr = json::json_value::make_array();
+        while (stmt.step() == SQLITE_ROW) {
+            int sid = stmt.column_int(0);
+            auto s = json::json_value::make_object();
+            s.add_int("id", sid);
+            s.add_str("name", stmt.column_str(1));
+            s.add_str("description", stmt.column_str(2));
+            s.add_bool("is_default", stmt.column_int(3) != 0);
+            s.add_str("created_at", stmt.column_str(4));
+
+            auto it_stmt = conn.prepare(R"SQL(
+                SELECT it.id, it.name, it.icon_color, it.is_subtask, it.hierarchy_level
+                FROM issue_type_scheme_items si
+                INNER JOIN issue_types it ON it.id = si.issue_type_id
+                WHERE si.scheme_id = ?
+                ORDER BY si.sort_order ASC, it.hierarchy_level DESC;
+            )SQL");
+            it_stmt.bind_int(1, sid);
+            auto types_arr = json::json_value::make_array();
+            while (it_stmt.step() == SQLITE_ROW) {
+                auto tobj = json::json_value::make_object();
+                tobj.add_int("id", it_stmt.column_int(0));
+                tobj.add_str("name", it_stmt.column_str(1));
+                tobj.add_str("icon_color", it_stmt.column_str(2));
+                tobj.add_bool("is_subtask", it_stmt.column_int(3) != 0);
+                tobj.add_int("hierarchy_level", it_stmt.column_int(4));
+                types_arr.add(std::move(tobj));
+            }
+            s.add("issue_types", std::move(types_arr));
+            arr.add(std::move(s));
+        }
+        send_json(worker, header, "200 OK", arr);
+        return;
+    }
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string name = body.get_string("name");
+    std::string description = body.get_string("description");
+    auto type_ids = body.get_int_array("issue_type_ids");
+
+    if (name.empty()) {
+        send_error(worker, header, "400 Bad Request", "Scheme name is required");
+        return;
+    }
+
+    int scheme_id = 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare("INSERT INTO issue_type_schemes (name, description, is_default) VALUES (?, ?, 0);");
+        ins.bind_text(1, name);
+        ins.bind_text(2, description);
+        ins.step_done();
+        scheme_id = static_cast<int>(conn.last_insert_rowid());
+
+        auto ins_item = conn.prepare("INSERT OR IGNORE INTO issue_type_scheme_items (scheme_id, issue_type_id, sort_order) VALUES (?, ?, ?);");
+        int ord = 10;
+        for (int tid : type_ids) {
+            ins_item.clear_and_reset();
+            ins_item.bind_int(1, scheme_id);
+            ins_item.bind_int(2, tid);
+            ins_item.bind_int(3, ord);
+            ins_item.step_done();
+            ord += 10;
+        }
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", scheme_id);
+    res.add_str("name", name);
+    res.add_str("description", description);
+    res.add_bool("is_default", false);
+    send_json(worker, header, "201 Created", res);
+}
+
+// GET / POST /api/projects/([0-9]+)/components and /api/components
+static void handle_components(backend::wsworker *worker,
+                              const std::map<std::string, std::string> &header,
+                              const std::list<std::string> &uri_params) {
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+
+    int project_id = 0;
+    if (!uri_params.empty()) {
+        project_id = std::atoi(uri_params.front().c_str());
+    } else if (!args["project_id"].empty()) {
+        project_id = std::atoi(args["project_id"].c_str());
+    }
+
+    if (method == "GET") {
+        std::string sql = R"SQL(
+            SELECT c.id, c.project_id, c.name, c.description, c.lead_user_id,
+                   COALESCE(u.display_name, ''), c.default_assignee_type, c.created_at,
+                   (SELECT COUNT(*) FROM work_item_components wc WHERE wc.component_id = c.id) AS item_count
+            FROM components c
+            LEFT JOIN users u ON u.id = c.lead_user_id
+        )SQL";
+        if (project_id > 0) {
+            sql += " WHERE c.project_id = ? ";
+        }
+        sql += " ORDER BY c.name ASC;";
+
+        auto stmt = conn.prepare(sql);
+        if (project_id > 0) {
+            stmt.bind_int(1, project_id);
+        }
+
+        auto arr = json::json_value::make_array();
+        while (stmt.step() == SQLITE_ROW) {
+            auto c = json::json_value::make_object();
+            c.add_int("id", stmt.column_int(0));
+            c.add_int("project_id", stmt.column_int(1));
+            c.add_str("name", stmt.column_str(2));
+            c.add_str("description", stmt.column_str(3));
+            c.add_nullable_int("lead_user_id", stmt.column_int(4));
+            c.add_str("lead_name", stmt.column_str(5));
+            c.add_str("default_assignee_type", stmt.column_str(6));
+            c.add_str("created_at", stmt.column_str(7));
+            c.add_int("item_count", stmt.column_int(8));
+            arr.add(std::move(c));
+        }
+        send_json(worker, header, "200 OK", arr);
+        return;
+    }
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    if (project_id <= 0) {
+        project_id = body.get_int("project_id", 1);
+    }
+    std::string name = body.get_string("name");
+    std::string description = body.get_string("description");
+    int lead_user_id = body.get_int("lead_user_id", 0);
+    std::string default_assignee_type = body.get_string("default_assignee_type", "project_lead");
+
+    if (name.empty()) {
+        send_error(worker, header, "400 Bad Request", "Component name is required");
+        return;
+    }
+
+    int comp_id = 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare(R"SQL(
+            INSERT INTO components (project_id, name, description, lead_user_id, default_assignee_type)
+            VALUES (?, ?, ?, ?, ?);
+        )SQL");
+        ins.bind_int(1, project_id);
+        ins.bind_text(2, name);
+        ins.bind_text(3, description);
+        ins.bind_optional_int(4, lead_user_id);
+        ins.bind_text(5, default_assignee_type);
+        ins.step_done();
+        comp_id = static_cast<int>(conn.last_insert_rowid());
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    std::string lead_name;
+    if (lead_user_id > 0) {
+        auto ustmt = conn.prepare("SELECT display_name FROM users WHERE id = ?;");
+        ustmt.bind_int(1, lead_user_id);
+        if (ustmt.step() == SQLITE_ROW) lead_name = ustmt.column_str(0);
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", comp_id);
+    res.add_int("project_id", project_id);
+    res.add_str("name", name);
+    res.add_str("description", description);
+    res.add_nullable_int("lead_user_id", lead_user_id);
+    res.add_str("lead_name", lead_name);
+    res.add_str("default_assignee_type", default_assignee_type);
+    res.add_int("item_count", 0);
+    send_json(worker, header, "201 Created", res);
+}
+
+// PUT / DELETE /api/components/([0-9]+)
+static void handle_component_detail(backend::wsworker *worker,
+                                    const std::map<std::string, std::string> &header,
+                                    const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing component ID");
+        return;
+    }
+    int comp_id = std::atoi(uri_params.front().c_str());
+
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    std::string method = get_header(header, "REQUEST_METHOD");
+    if (method == "DELETE") {
+        db::sqlite_transaction tx(conn);
+        auto del = conn.prepare("DELETE FROM components WHERE id = ?;");
+        del.bind_int(1, comp_id);
+        del.step_done();
+        tx.commit();
+        auto res = json::json_value::make_object();
+        res.add_bool("deleted", true);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string name = body.get_string("name");
+    std::string description = body.get_string("description");
+    int lead_user_id = body.get_int("lead_user_id", 0);
+    std::string default_assignee_type = body.get_string("default_assignee_type", "project_lead");
+
+    if (name.empty()) {
+        send_error(worker, header, "400 Bad Request", "Component name is required");
+        return;
+    }
+
+    try {
+        db::sqlite_transaction tx(conn);
+        auto upd = conn.prepare(R"SQL(
+            UPDATE components
+            SET name = ?, description = ?, lead_user_id = ?, default_assignee_type = ?
+            WHERE id = ?;
+        )SQL");
+        upd.bind_text(1, name);
+        upd.bind_text(2, description);
+        upd.bind_optional_int(3, lead_user_id);
+        upd.bind_text(4, default_assignee_type);
+        upd.bind_int(5, comp_id);
+        upd.step_done();
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", comp_id);
+    res.add_str("name", name);
+    res.add_str("description", description);
+    res.add_nullable_int("lead_user_id", lead_user_id);
+    res.add_str("default_assignee_type", default_assignee_type);
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET / POST /api/projects/([0-9]+)/versions and /api/versions
+static void handle_versions(backend::wsworker *worker,
+                            const std::map<std::string, std::string> &header,
+                            const std::list<std::string> &uri_params) {
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+
+    int project_id = 0;
+    if (!uri_params.empty()) {
+        project_id = std::atoi(uri_params.front().c_str());
+    } else if (!args["project_id"].empty()) {
+        project_id = std::atoi(args["project_id"].c_str());
+    }
+
+    if (method == "GET") {
+        std::string sql = R"SQL(
+            SELECT v.id, v.project_id, v.name, v.description, v.start_date, v.release_date, v.status, v.created_at,
+                   (SELECT COUNT(*) FROM work_item_versions wv WHERE wv.version_id = v.id AND wv.relation_type = 'fix') AS fix_count,
+                   (SELECT COUNT(*) FROM work_item_versions wv INNER JOIN work_items w ON w.id = wv.work_item_id WHERE wv.version_id = v.id AND wv.relation_type = 'fix' AND w.status = 'Done') AS done_count,
+                   (SELECT COUNT(*) FROM work_item_versions wv WHERE wv.version_id = v.id AND wv.relation_type = 'affects') AS affects_count
+            FROM versions v
+        )SQL";
+        if (project_id > 0) {
+            sql += " WHERE v.project_id = ? ";
+        }
+        sql += " ORDER BY v.id DESC;";
+
+        auto stmt = conn.prepare(sql);
+        if (project_id > 0) {
+            stmt.bind_int(1, project_id);
+        }
+
+        auto arr = json::json_value::make_array();
+        while (stmt.step() == SQLITE_ROW) {
+            auto v = json::json_value::make_object();
+            v.add_int("id", stmt.column_int(0));
+            v.add_int("project_id", stmt.column_int(1));
+            v.add_str("name", stmt.column_str(2));
+            v.add_str("description", stmt.column_str(3));
+            v.add_str("start_date", stmt.column_str(4));
+            v.add_str("release_date", stmt.column_str(5));
+            v.add_str("status", stmt.column_str(6));
+            v.add_str("created_at", stmt.column_str(7));
+            v.add_int("fix_item_count", stmt.column_int(8));
+            v.add_int("done_item_count", stmt.column_int(9));
+            v.add_int("affects_item_count", stmt.column_int(10));
+            v.add_int("fix_count", stmt.column_int(8));
+            v.add_int("fix_done_count", stmt.column_int(9));
+            v.add_int("affects_count", stmt.column_int(10));
+            arr.add(std::move(v));
+        }
+        send_json(worker, header, "200 OK", arr);
+        return;
+    }
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    if (project_id <= 0) {
+        project_id = body.get_int("project_id", 1);
+    }
+    std::string name = body.get_string("name");
+    std::string description = body.get_string("description");
+    std::string start_date = body.get_string("start_date");
+    std::string release_date = body.get_string("release_date");
+    std::string status = body.get_string("status", "unreleased");
+
+    if (name.empty()) {
+        send_error(worker, header, "400 Bad Request", "Version name is required");
+        return;
+    }
+
+    int ver_id = 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare(R"SQL(
+            INSERT INTO versions (project_id, name, description, start_date, release_date, status)
+            VALUES (?, ?, ?, ?, ?, ?);
+        )SQL");
+        ins.bind_int(1, project_id);
+        ins.bind_text(2, name);
+        ins.bind_text(3, description);
+        ins.bind_text(4, start_date);
+        ins.bind_text(5, release_date);
+        ins.bind_text(6, status);
+        ins.step_done();
+        ver_id = static_cast<int>(conn.last_insert_rowid());
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", ver_id);
+    res.add_int("project_id", project_id);
+    res.add_str("name", name);
+    res.add_str("description", description);
+    res.add_str("start_date", start_date);
+    res.add_str("release_date", release_date);
+    res.add_str("status", status);
+    res.add_int("fix_item_count", 0);
+    res.add_int("done_item_count", 0);
+    res.add_int("affects_item_count", 0);
+    send_json(worker, header, "201 Created", res);
+}
+
+// PUT / DELETE /api/versions/([0-9]+)
+static void handle_version_detail(backend::wsworker *worker,
+                                  const std::map<std::string, std::string> &header,
+                                  const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing version ID");
+        return;
+    }
+    int ver_id = std::atoi(uri_params.front().c_str());
+
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    std::string method = get_header(header, "REQUEST_METHOD");
+    if (method == "DELETE") {
+        db::sqlite_transaction tx(conn);
+        auto del = conn.prepare("DELETE FROM versions WHERE id = ?;");
+        del.bind_int(1, ver_id);
+        del.step_done();
+        tx.commit();
+        auto res = json::json_value::make_object();
+        res.add_bool("deleted", true);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string name = body.get_string("name");
+    std::string description = body.get_string("description");
+    std::string start_date = body.get_string("start_date");
+    std::string release_date = body.get_string("release_date");
+    std::string status = body.get_string("status", "unreleased");
+
+    if (name.empty()) {
+        send_error(worker, header, "400 Bad Request", "Version name is required");
+        return;
+    }
+
+    try {
+        db::sqlite_transaction tx(conn);
+        auto upd = conn.prepare(R"SQL(
+            UPDATE versions
+            SET name = ?, description = ?, start_date = ?, release_date = ?, status = ?
+            WHERE id = ?;
+        )SQL");
+        upd.bind_text(1, name);
+        upd.bind_text(2, description);
+        upd.bind_text(3, start_date);
+        upd.bind_text(4, release_date);
+        upd.bind_text(5, status);
+        upd.bind_int(6, ver_id);
+        upd.step_done();
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", ver_id);
+    res.add_str("name", name);
+    res.add_str("description", description);
+    res.add_str("start_date", start_date);
+    res.add_str("release_date", release_date);
+    res.add_str("status", status);
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET /api/versions/([0-9]+)/release-notes
+static void handle_version_release_notes(backend::wsworker *worker,
+                                         const std::map<std::string, std::string> &header,
+                                         const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing version ID");
+        return;
+    }
+    int ver_id = std::atoi(uri_params.front().c_str());
+
+    auto conn = acquire_db_connection();
+    std::string ver_name;
+    std::string ver_desc;
+    std::string ver_date;
+    std::string ver_status;
+    std::string proj_name;
+    {
+        auto vstmt = conn.prepare(R"SQL(
+            SELECT v.name, v.description, v.release_date, v.status, p.name
+            FROM versions v
+            INNER JOIN projects p ON p.id = v.project_id
+            WHERE v.id = ?;
+        )SQL");
+        vstmt.bind_int(1, ver_id);
+        if (vstmt.step() != SQLITE_ROW) {
+            send_error(worker, header, "404 Not Found", "Version not found");
+            return;
+        }
+        ver_name = vstmt.column_str(0);
+        ver_desc = vstmt.column_str(1);
+        ver_date = vstmt.column_str(2);
+        ver_status = vstmt.column_str(3);
+        proj_name = vstmt.column_str(4);
+    }
+
+    auto istmt = conn.prepare(R"SQL(
+        SELECT w.id, w.key, w.type, w.category, w.status, w.priority, w.title,
+               COALESCE(r.name, 'Unresolved'), COALESCE(u.display_name, 'Unassigned')
+        FROM work_item_versions wv
+        INNER JOIN work_items w ON w.id = wv.work_item_id
+        LEFT JOIN resolutions r ON r.id = w.resolution_id
+        LEFT JOIN users u ON u.id = w.assignee_id
+        WHERE wv.version_id = ? AND wv.relation_type = 'fix'
+        ORDER BY w.category ASC, w.id ASC;
+    )SQL");
+    istmt.bind_int(1, ver_id);
+
+    std::map<std::string, std::vector<std::pair<std::string, std::string>>> grouped;
+    int total_items = 0;
+    auto items_arr = json::json_value::make_array();
+    while (istmt.step() == SQLITE_ROW) {
+        ++total_items;
+        std::string key = istmt.column_str(1);
+        std::string type = istmt.column_str(2);
+        std::string cat = istmt.column_str(3);
+        std::string status = istmt.column_str(4);
+        std::string priority = istmt.column_str(5);
+        std::string title = istmt.column_str(6);
+        std::string res_name = istmt.column_str(7);
+        std::string assignee = istmt.column_str(8);
+
+        grouped[cat].emplace_back(key, title + " (" + status + " - " + res_name + ")");
+
+        auto it = json::json_value::make_object();
+        it.add_int("id", istmt.column_int(0));
+        it.add_str("key", key);
+        it.add_str("type", type);
+        it.add_str("category", cat);
+        it.add_str("status", status);
+        it.add_str("priority", priority);
+        it.add_str("title", title);
+        it.add_str("resolution_name", res_name);
+        it.add_str("assignee_name", assignee);
+        items_arr.add(std::move(it));
+    }
+
+    std::ostringstream md;
+    md << "# Release Notes — " << proj_name << " " << ver_name << "\n\n";
+    if (!ver_date.empty()) {
+        md << "**Release Date:** " << ver_date << "  \n";
+    }
+    md << "**Status:** " << ver_status << "\n\n";
+    if (!ver_desc.empty()) {
+        md << ver_desc << "\n\n";
+    }
+    if (grouped.empty()) {
+        md << "_No work items are currently assigned to this Fix Version._\n";
+    } else {
+        for (const auto &[cat, entries] : grouped) {
+            md << "## " << cat << "s\n";
+            for (const auto &[k, summary] : entries) {
+                md << "- **[" << k << "]** " << summary << "\n";
+            }
+            md << "\n";
+        }
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("version_id", ver_id);
+    res.add_str("version_name", ver_name);
+    res.add_str("project_name", proj_name);
+    res.add_str("release_date", ver_date);
+    res.add_str("status", ver_status);
+    res.add_int("total_items", total_items);
+    res.add_str("markdown", md.str());
+    res.add("items", std::move(items_arr));
+    send_json(worker, header, "200 OK", res);
 }
 
 // GET /api/sprints & POST /api/sprints
@@ -1124,9 +2011,68 @@ static void handle_sprint_set_current(backend::wsworker *worker,
     send_json(worker, header, "200 OK", res);
 }
 
-static json::json_value row_to_work_item_json(db::sqlite_stmt &stmt) {
+static int resolve_default_resolution_id(db::sqlite_db &conn) {
+    auto stmt = conn.prepare("SELECT id FROM resolutions WHERE is_default = 1 ORDER BY id ASC LIMIT 1;");
+    if (stmt.step() == SQLITE_ROW) {
+        return stmt.column_int(0);
+    }
+    return 1;
+}
+
+static void sync_item_components_and_versions(db::sqlite_db &conn,
+                                              int item_id,
+                                              const json::json_value &body,
+                                              bool is_create) {
+    if (is_create || body.has_key("component_ids")) {
+        auto del = conn.prepare("DELETE FROM work_item_components WHERE work_item_id = ?;");
+        del.bind_int(1, item_id);
+        del.step_done();
+
+        auto comp_ids = body.get_int_array("component_ids");
+        auto ins = conn.prepare("INSERT OR IGNORE INTO work_item_components (work_item_id, component_id) VALUES (?, ?);");
+        for (int cid : comp_ids) {
+            ins.clear_and_reset();
+            ins.bind_int(1, item_id);
+            ins.bind_int(2, cid);
+            ins.step_done();
+        }
+    }
+
+    if (is_create || body.has_key("fix_version_ids")) {
+        auto del = conn.prepare("DELETE FROM work_item_versions WHERE work_item_id = ? AND relation_type = 'fix';");
+        del.bind_int(1, item_id);
+        del.step_done();
+
+        auto fix_ids = body.get_int_array("fix_version_ids");
+        auto ins = conn.prepare("INSERT OR IGNORE INTO work_item_versions (work_item_id, version_id, relation_type) VALUES (?, ?, 'fix');");
+        for (int vid : fix_ids) {
+            ins.clear_and_reset();
+            ins.bind_int(1, item_id);
+            ins.bind_int(2, vid);
+            ins.step_done();
+        }
+    }
+
+    if (is_create || body.has_key("affects_version_ids")) {
+        auto del = conn.prepare("DELETE FROM work_item_versions WHERE work_item_id = ? AND relation_type = 'affects';");
+        del.bind_int(1, item_id);
+        del.step_done();
+
+        auto aff_ids = body.get_int_array("affects_version_ids");
+        auto ins = conn.prepare("INSERT OR IGNORE INTO work_item_versions (work_item_id, version_id, relation_type) VALUES (?, ?, 'affects');");
+        for (int vid : aff_ids) {
+            ins.clear_and_reset();
+            ins.bind_int(1, item_id);
+            ins.bind_int(2, vid);
+            ins.step_done();
+        }
+    }
+}
+
+static json::json_value row_to_work_item_json(db::sqlite_db &conn, db::sqlite_stmt &stmt) {
     auto item = json::json_value::make_object();
-    item.add_int("id", stmt.column_int(0));
+    int item_id = stmt.column_int(0);
+    item.add_int("id", item_id);
     item.add_int("project_id", stmt.column_int(1));
     item.add_str("key", stmt.column_str(2));
     item.add_str("type", stmt.column_str(3));
@@ -1158,6 +2104,69 @@ static json::json_value row_to_work_item_json(db::sqlite_stmt &stmt) {
     item.add_int("comment_count", stmt.column_int(29));
     item.add_int("attachment_count", stmt.column_int(30));
     item.add_str("category", stmt.column_str(31));
+    item.add_nullable_int("resolution_id", stmt.column_int(32));
+    item.add_str("resolution_name", stmt.column_str(33));
+    item.add_str("resolution_date", stmt.column_str(34));
+
+    // Load associated components
+    auto comp_arr = json::json_value::make_array();
+    auto comp_ids_arr = json::json_value::make_array();
+    {
+        auto cstmt = conn.prepare(R"SQL(
+            SELECT c.id, c.name
+            FROM work_item_components wc
+            INNER JOIN components c ON c.id = wc.component_id
+            WHERE wc.work_item_id = ?
+            ORDER BY c.name ASC;
+        )SQL");
+        cstmt.bind_int(1, item_id);
+        while (cstmt.step() == SQLITE_ROW) {
+            int cid = cstmt.column_int(0);
+            auto co = json::json_value::make_object();
+            co.add_int("id", cid);
+            co.add_str("name", cstmt.column_str(1));
+            comp_arr.add(std::move(co));
+            comp_ids_arr.add(json::json_value::make_int(cid));
+        }
+    }
+    item.add("components", std::move(comp_arr));
+    item.add("component_ids", std::move(comp_ids_arr));
+
+    // Load associated fix_versions and affects_versions
+    auto fix_arr = json::json_value::make_array();
+    auto fix_ids_arr = json::json_value::make_array();
+    auto aff_arr = json::json_value::make_array();
+    auto aff_ids_arr = json::json_value::make_array();
+    {
+        auto vstmt = conn.prepare(R"SQL(
+            SELECT v.id, v.name, v.status, wv.relation_type
+            FROM work_item_versions wv
+            INNER JOIN versions v ON v.id = wv.version_id
+            WHERE wv.work_item_id = ?
+            ORDER BY v.id ASC;
+        )SQL");
+        vstmt.bind_int(1, item_id);
+        while (vstmt.step() == SQLITE_ROW) {
+            int vid = vstmt.column_int(0);
+            std::string rel = vstmt.column_str(3);
+            auto vo = json::json_value::make_object();
+            vo.add_int("id", vid);
+            vo.add_str("name", vstmt.column_str(1));
+            vo.add_str("status", vstmt.column_str(2));
+            if (rel == "affects") {
+                aff_arr.add(std::move(vo));
+                aff_ids_arr.add(json::json_value::make_int(vid));
+            } else {
+                fix_arr.add(std::move(vo));
+                fix_ids_arr.add(json::json_value::make_int(vid));
+            }
+        }
+    }
+    item.add("fix_versions", std::move(fix_arr));
+    item.add("fix_version_ids", std::move(fix_ids_arr));
+    item.add("affects_versions", std::move(aff_arr));
+    item.add("affects_version_ids", std::move(aff_ids_arr));
+
     return item;
 }
 
@@ -1175,12 +2184,16 @@ static const char *BASE_WORK_ITEM_SELECT = R"SQL(
         (SELECT COUNT(*) FROM work_items sub WHERE sub.parent_id = w.id),
         (SELECT COUNT(*) FROM comments c WHERE c.work_item_id = w.id),
         (SELECT COUNT(*) FROM attachments a WHERE a.work_item_id = w.id),
-        w.category
+        w.category,
+        w.resolution_id,
+        COALESCE(res.name, ''),
+        COALESCE(w.resolution_date, '')
     FROM work_items w
     LEFT JOIN users ua ON ua.id = w.assignee_id
     LEFT JOIN users ur ON ur.id = w.reporter_id
     LEFT JOIN work_items wp ON wp.id = w.parent_id
     LEFT JOIN sprints sp ON sp.id = w.sprint_id
+    LEFT JOIN resolutions res ON res.id = w.resolution_id
 )SQL";
 
 // GET /api/items & POST /api/items
@@ -1223,6 +2236,22 @@ static void handle_items(backend::wsworker *worker,
             sql += " AND w.parent_id = ? ";
             bind_vals.push_back(args["parent_id"]);
         }
+        if (!args["resolution_id"].empty()) {
+            sql += " AND w.resolution_id = ? ";
+            bind_vals.push_back(args["resolution_id"]);
+        }
+        if (!args["component_id"].empty()) {
+            sql += " AND EXISTS (SELECT 1 FROM work_item_components wc WHERE wc.work_item_id = w.id AND wc.component_id = ?) ";
+            bind_vals.push_back(args["component_id"]);
+        }
+        if (!args["fix_version_id"].empty()) {
+            sql += " AND EXISTS (SELECT 1 FROM work_item_versions wv WHERE wv.work_item_id = w.id AND wv.version_id = ? AND wv.relation_type = 'fix') ";
+            bind_vals.push_back(args["fix_version_id"]);
+        }
+        if (!args["affects_version_id"].empty()) {
+            sql += " AND EXISTS (SELECT 1 FROM work_item_versions wv WHERE wv.work_item_id = w.id AND wv.version_id = ? AND wv.relation_type = 'affects') ";
+            bind_vals.push_back(args["affects_version_id"]);
+        }
         if (!args["search"].empty()) {
             sql += " AND (w.title LIKE ? OR w.key LIKE ? OR w.description LIKE ? OR w.labels LIKE ?) ";
             std::string pattern = "%" + args["search"] + "%";
@@ -1240,7 +2269,7 @@ static void handle_items(backend::wsworker *worker,
 
         auto arr = json::json_value::make_array();
         while (stmt.step() == SQLITE_ROW) {
-            arr.add(row_to_work_item_json(stmt));
+            arr.add(row_to_work_item_json(conn, stmt));
         }
         send_json(worker, header, "200 OK", arr);
         return;
@@ -1277,10 +2306,37 @@ static void handle_items(backend::wsworker *worker,
     std::string severity = body.get_string("severity");
     std::string steps = body.get_string("steps_to_reproduce");
     std::string labels = body.get_string("labels");
+    int resolution_id = body.get_int("resolution_id", 0);
 
     if (title.empty()) {
         send_error(worker, header, "400 Bad Request", "Work item title is required");
         return;
+    }
+
+    // Component default assignee auto-routing when assignee_id is not explicitly specified
+    auto comp_ids = body.get_int_array("component_ids");
+    if (assignee_id <= 0 && !comp_ids.empty()) {
+        auto cstmt = conn.prepare(R"SQL(
+            SELECT c.lead_user_id, c.default_assignee_type, p.lead_user_id
+            FROM components c
+            INNER JOIN projects p ON p.id = c.project_id
+            WHERE c.id = ?;
+        )SQL");
+        cstmt.bind_int(1, comp_ids.front());
+        if (cstmt.step() == SQLITE_ROW) {
+            int comp_lead = cstmt.column_int(0);
+            std::string def_type = cstmt.column_str(1);
+            int proj_lead = cstmt.column_int(2);
+            if ((def_type == "component_lead" || def_type == "COMPONENT_LEAD") && comp_lead > 0) {
+                assignee_id = comp_lead;
+            } else if ((def_type == "project_lead" || def_type == "PROJECT_LEAD" || def_type == "project_default" || def_type == "PROJECT_DEFAULT") && proj_lead > 0) {
+                assignee_id = proj_lead;
+            }
+        }
+    }
+
+    if (status == "Done" && resolution_id <= 0) {
+        resolution_id = resolve_default_resolution_id(conn);
     }
 
     int new_item_id = 0;
@@ -1308,8 +2364,9 @@ static void handle_items(backend::wsworker *worker,
             INSERT INTO work_items (
                 project_id, key, type, category, status, priority, title, description,
                 parent_id, sprint_id, assignee_id, reporter_id, story_points,
-                progress, start_date, due_date, severity, steps_to_reproduce, labels, board_order
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                progress, start_date, due_date, severity, steps_to_reproduce, labels, board_order,
+                resolution_id, resolution_date
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? > 0 THEN datetime('now') ELSE '' END);
         )SQL");
         ins.bind_int(1, project_id);
         ins.bind_text(2, item_key);
@@ -1331,8 +2388,12 @@ static void handle_items(backend::wsworker *worker,
         ins.bind_text(18, steps);
         ins.bind_text(19, labels);
         ins.bind_int(20, next_seq * 10);
+        ins.bind_optional_int(21, resolution_id);
+        ins.bind_int(22, resolution_id);
         ins.step_done();
         new_item_id = static_cast<int>(conn.last_insert_rowid());
+
+        sync_item_components_and_versions(conn, new_item_id, body, true);
 
         auto hist = conn.prepare(R"SQL(
             INSERT INTO workflow_history (work_item_id, from_status, to_status, changed_by, comment)
@@ -1352,7 +2413,7 @@ static void handle_items(backend::wsworker *worker,
     auto q = conn.prepare(std::string(BASE_WORK_ITEM_SELECT) + " WHERE w.id = ?;");
     q.bind_int(1, new_item_id);
     if (q.step() == SQLITE_ROW) {
-        send_json(worker, header, "201 Created", row_to_work_item_json(q));
+        send_json(worker, header, "201 Created", row_to_work_item_json(conn, q));
     } else {
         send_error(worker, header, "500 Internal Server Error", "Failed to load created item");
     }
@@ -1402,7 +2463,7 @@ static void handle_item_detail(backend::wsworker *worker,
             send_error(worker, header, "404 Not Found", "Work item not found");
             return;
         }
-        auto item = row_to_work_item_json(q);
+        auto item = row_to_work_item_json(conn, q);
         q.reset();
 
         // Subtasks / child items
@@ -1410,7 +2471,7 @@ static void handle_item_detail(backend::wsworker *worker,
         sub_stmt.bind_int(1, item_id);
         auto subtasks = json::json_value::make_array();
         while (sub_stmt.step() == SQLITE_ROW) {
-            subtasks.add(row_to_work_item_json(sub_stmt));
+            subtasks.add(row_to_work_item_json(conn, sub_stmt));
         }
         item.add("subtasks", std::move(subtasks));
 
@@ -1563,14 +2624,18 @@ static void handle_item_detail(backend::wsworker *worker,
     }
 
     std::string old_status;
+    int old_resolution_id = 0;
+    std::string old_resolution_date;
     {
-        auto cur = conn.prepare("SELECT status FROM work_items WHERE id = ?;");
+        auto cur = conn.prepare("SELECT status, COALESCE(resolution_id, 0), COALESCE(resolution_date, '') FROM work_items WHERE id = ?;");
         cur.bind_int(1, item_id);
         if (cur.step() != SQLITE_ROW) {
             send_error(worker, header, "404 Not Found", "Work item not found");
             return;
         }
         old_status = cur.column_str(0);
+        old_resolution_id = cur.column_int(1);
+        old_resolution_date = cur.column_str(2);
     }
 
     std::string type = body.get_string("type", "Task");
@@ -1590,6 +2655,27 @@ static void handle_item_detail(backend::wsworker *worker,
     std::string steps = body.get_string("steps_to_reproduce");
     std::string labels = body.get_string("labels");
 
+    int resolution_id = body.has_key("resolution_id") ? body.get_int("resolution_id", 0) : old_resolution_id;
+    bool set_res_now = false;
+    std::string resolution_date = old_resolution_date;
+
+    if (status == "Done") {
+        if (resolution_id <= 0) {
+            resolution_id = resolve_default_resolution_id(conn);
+        }
+        if (resolution_date.empty() || resolution_id != old_resolution_id) {
+            set_res_now = true;
+        }
+    } else if (old_status == "Done" && status != "Done" && !body.has_key("resolution_id")) {
+        // Reopening a closed issue clears its resolution
+        resolution_id = 0;
+        resolution_date.clear();
+    } else if (resolution_id <= 0) {
+        resolution_date.clear();
+    } else if (resolution_id != old_resolution_id) {
+        set_res_now = true;
+    }
+
     {
         db::sqlite_transaction tx(conn);
         auto upd = conn.prepare(R"SQL(
@@ -1597,7 +2683,10 @@ static void handle_item_detail(backend::wsworker *worker,
             SET type = ?, category = ?, status = ?, priority = ?, title = ?, description = ?,
                 parent_id = ?, sprint_id = ?, assignee_id = ?, story_points = ?,
                 progress = ?, start_date = ?, due_date = ?, severity = ?,
-                steps_to_reproduce = ?, labels = ?, updated_at = datetime('now')
+                steps_to_reproduce = ?, labels = ?,
+                resolution_id = ?,
+                resolution_date = CASE WHEN ? = 1 THEN datetime('now') ELSE ? END,
+                updated_at = datetime('now')
             WHERE id = ?;
         )SQL");
         upd.bind_text(1, type);
@@ -1616,8 +2705,13 @@ static void handle_item_detail(backend::wsworker *worker,
         upd.bind_text(14, severity);
         upd.bind_text(15, steps);
         upd.bind_text(16, labels);
-        upd.bind_int(17, item_id);
+        upd.bind_optional_int(17, resolution_id);
+        upd.bind_int(18, set_res_now ? 1 : 0);
+        upd.bind_text(19, resolution_date);
+        upd.bind_int(20, item_id);
         upd.step_done();
+
+        sync_item_components_and_versions(conn, item_id, body, false);
 
         if (status != old_status) {
             auto hist = conn.prepare(R"SQL(
@@ -1636,7 +2730,7 @@ static void handle_item_detail(backend::wsworker *worker,
     auto q = conn.prepare(std::string(BASE_WORK_ITEM_SELECT) + " WHERE w.id = ?;");
     q.bind_int(1, item_id);
     if (q.step() == SQLITE_ROW) {
-        send_json(worker, header, "200 OK", row_to_work_item_json(q));
+        send_json(worker, header, "200 OK", row_to_work_item_json(conn, q));
     } else {
         send_error(worker, header, "404 Not Found", "Work item not found");
     }
@@ -1673,8 +2767,14 @@ static void handle_item_state_transition(backend::wsworker *worker,
     std::string old_start;
     std::string old_due;
     int old_order = 0;
+    int old_res_id = 0;
+    std::string old_res_date;
     {
-        auto cur = conn.prepare("SELECT status, progress, start_date, due_date, board_order FROM work_items WHERE id = ?;");
+        auto cur = conn.prepare(R"SQL(
+            SELECT status, progress, start_date, due_date, board_order,
+                   COALESCE(resolution_id, 0), COALESCE(resolution_date, '')
+            FROM work_items WHERE id = ?;
+        )SQL");
         cur.bind_int(1, item_id);
         if (cur.step() != SQLITE_ROW) {
             send_error(worker, header, "404 Not Found", "Work item not found");
@@ -1685,6 +2785,8 @@ static void handle_item_state_transition(backend::wsworker *worker,
         old_start = cur.column_str(2);
         old_due = cur.column_str(3);
         old_order = cur.column_int(4);
+        old_res_id = cur.column_int(5);
+        old_res_date = cur.column_str(6);
     }
 
     std::string new_status = body.get_string("status", old_status);
@@ -1701,11 +2803,33 @@ static void handle_item_state_transition(backend::wsworker *worker,
     int new_order = body.has_key("board_order") ? body.get_int("board_order", old_order) : old_order;
     std::string comment = body.get_string("comment", "Transitioned via board drag-and-drop");
 
+    int new_res_id = body.has_key("resolution_id") ? body.get_int("resolution_id", 0) : old_res_id;
+    bool set_res_now = false;
+    std::string new_res_date = old_res_date;
+
+    if (new_status == "Done") {
+        if (new_res_id <= 0) {
+            new_res_id = resolve_default_resolution_id(conn);
+        }
+        if (new_res_date.empty() || new_res_id != old_res_id) {
+            set_res_now = true;
+        }
+    } else if (old_status == "Done" && new_status != "Done" && !body.has_key("resolution_id")) {
+        // Clear resolution when transitioning out of Done (Reopen)
+        new_res_id = 0;
+        new_res_date.clear();
+    } else if (new_res_id <= 0) {
+        new_res_date.clear();
+    }
+
     {
         db::sqlite_transaction tx(conn);
         auto upd = conn.prepare(R"SQL(
             UPDATE work_items
-            SET status = ?, progress = ?, start_date = ?, due_date = ?, board_order = ?, updated_at = datetime('now')
+            SET status = ?, progress = ?, start_date = ?, due_date = ?, board_order = ?,
+                resolution_id = ?,
+                resolution_date = CASE WHEN ? = 1 THEN datetime('now') ELSE ? END,
+                updated_at = datetime('now')
             WHERE id = ?;
         )SQL");
         upd.bind_text(1, new_status);
@@ -1713,7 +2837,10 @@ static void handle_item_state_transition(backend::wsworker *worker,
         upd.bind_text(3, new_start);
         upd.bind_text(4, new_due);
         upd.bind_int(5, new_order);
-        upd.bind_int(6, item_id);
+        upd.bind_optional_int(6, new_res_id);
+        upd.bind_int(7, set_res_now ? 1 : 0);
+        upd.bind_text(8, new_res_date);
+        upd.bind_int(9, item_id);
         upd.step_done();
 
         if (new_status != old_status) {
@@ -1734,7 +2861,7 @@ static void handle_item_state_transition(backend::wsworker *worker,
     auto q = conn.prepare(std::string(BASE_WORK_ITEM_SELECT) + " WHERE w.id = ?;");
     q.bind_int(1, item_id);
     if (q.step() == SQLITE_ROW) {
-        send_json(worker, header, "200 OK", row_to_work_item_json(q));
+        send_json(worker, header, "200 OK", row_to_work_item_json(conn, q));
     } else {
         send_error(worker, header, "404 Not Found", "Work item not found");
     }
@@ -2172,6 +3299,16 @@ int main(int argc, char *argv[]) {
         {"^/api/auth/me$",                          backend::GET,                   handle_auth_me              },
         {"^/api/users$",                            backend::GET | backend::POST,   handle_users                },
         {"^/api/projects$",                         backend::GET | backend::POST,   handle_projects             },
+        {"^/api/resolutions$",                      backend::GET | backend::POST,   handle_resolutions          },
+        {"^/api/issue-types$",                      backend::GET | backend::POST,   handle_issue_types          },
+        {"^/api/issue-type-schemes$",               backend::GET | backend::POST,   handle_issue_type_schemes   },
+        {"^/api/components$",                       backend::GET | backend::POST,   handle_components           },
+        {"^/api/projects/([0-9]+)/components$",     backend::GET | backend::POST,   handle_components           },
+        {"^/api/components/([0-9]+)$",              backend::PUT | backend::DELETE, handle_component_detail     },
+        {"^/api/versions$",                         backend::GET | backend::POST,   handle_versions             },
+        {"^/api/projects/([0-9]+)/versions$",       backend::GET | backend::POST,   handle_versions             },
+        {"^/api/versions/([0-9]+)$",                backend::PUT | backend::DELETE, handle_version_detail       },
+        {"^/api/versions/([0-9]+)/release-notes$",  backend::GET,                   handle_version_release_notes},
         {"^/api/sprints$",                          backend::GET | backend::POST,   handle_sprints              },
         {"^/api/sprints/([0-9]+)$",                 backend::PUT | backend::DELETE, handle_sprint_detail        },
         {"^/api/sprints/([0-9]+)/current$",         backend::POST,                  handle_sprint_set_current   },

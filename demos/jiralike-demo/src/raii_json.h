@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace json {
 
@@ -165,6 +166,24 @@ public:
         json_object *field = nullptr;
         if (!json_object_object_get_ex(m_obj, key, &field) || !field) return default_val;
         return json_object_get_boolean(field) != 0;
+    }
+
+    std::vector<int> get_int_array(const char *key) const {
+        std::vector<int> out;
+        if (!m_obj || !json_object_is_type(m_obj, json_type_object)) return out;
+        json_object *arr = nullptr;
+        if (!json_object_object_get_ex(m_obj, key, &arr) || !arr) return out;
+        if (!json_object_is_type(arr, json_type_array)) return out;
+        size_t len = json_object_array_length(arr);
+        out.reserve(len);
+        for (size_t i = 0; i < len; ++i) {
+            json_object *elem = json_object_array_get_idx(arr, i);
+            if (elem && !json_object_is_type(elem, json_type_null)) {
+                int v = json_object_get_int(elem);
+                if (v > 0) out.push_back(v);
+            }
+        }
+        return out;
     }
 
 private:

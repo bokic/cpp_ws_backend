@@ -173,8 +173,17 @@ import {
                     {{ item.title }}
                   </a>
 
-                  @if (item.labels) {
+                  @if (item.labels || (item.components && item.components.length > 0) || (item.fix_versions && item.fix_versions.length > 0) || item.resolution_name) {
                     <div class="card-labels">
+                      @if (item.resolution_name) {
+                        <span class="label-chip" style="background: #dcfce7; color: #166534;">✔ {{ item.resolution_name }}</span>
+                      }
+                      @for (comp of item.components || []; track comp.id) {
+                        <span class="label-chip" style="background: #e0f2fe; color: #0369a1;">🧩 {{ comp.name }}</span>
+                      }
+                      @for (fv of item.fix_versions || []; track fv.id) {
+                        <span class="label-chip" style="background: #f3e8ff; color: #6b21a8;">🚀 {{ fv.name }}</span>
+                      }
                       @for (lbl of splitLabels(item.labels); track lbl) {
                         <span class="label-chip">{{ lbl }}</span>
                       }
