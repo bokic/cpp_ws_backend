@@ -3,11 +3,14 @@
 #include "wsroute.h"
 
 #include "src/raii_sqlite.h"
+#include "src/connection_pool.h"
 #include "src/raii_json.h"
 #include "src/crypto_utils.h"
 #include "src/db_migrator.h"
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
@@ -16,6 +19,7 @@
 #include <iostream>
 #include <list>
 #include <map>
+#include <memory>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
@@ -26,17 +30,31 @@
 
 static std::string g_db_path = "db/jiralike.db";
 static std::string g_blobs_dir = "blobs";
+static std::shared_ptr<db::connection_pool<db::sqlite_db>> g_db_pool;
 
-// Keeps the SQLite database connection open across requests on each worker thread
-// and resets its state before handling every incoming request.
-static db::sqlite_db &acquire_db_connection() {
-    thread_local db::sqlite_db tl_conn;
-    if (!tl_conn || tl_conn.path() != g_db_path) {
-        tl_conn.open(g_db_path);
-    } else {
-        tl_conn.reset_for_request();
+static void init_db_pool(int worker_num) {
+    size_t workers = worker_num > 0 ? static_cast<size_t>(worker_num) : 4;
+    db::pool_options opts;
+    opts.min_size = std::max<size_t>(4, workers);
+    opts.max_size = std::max<size_t>(32, workers * 4);
+    opts.acquire_timeout = std::chrono::milliseconds(5000);
+    opts.idle_timeout = std::chrono::milliseconds(60000);
+    opts.ping_on_acquire = true;
+
+    g_db_pool = std::make_shared<db::connection_pool<db::sqlite_db>>(
+        []() { return std::make_unique<db::sqlite_db>(g_db_path); },
+        opts
+    );
+}
+
+// Acquires a leased SQLite database connection from the thread-safe connection pool.
+// When the returned pooled_connection leaves scope, its state is automatically reset
+// and the underlying handle is returned to the pool.
+static db::pooled_connection<db::sqlite_db> acquire_db_connection() {
+    if (!g_db_pool) {
+        init_db_pool(4);
     }
-    return tl_conn;
+    return g_db_pool->acquire();
 }
 
 static const std::string &get_header(const std::map<std::string, std::string> &header, const std::string &key) {
@@ -135,11 +153,43 @@ static json::json_value user_to_json(const auth_user &u) {
     return obj;
 }
 
+static json::json_value pool_stats_to_json() {
+    auto obj = json::json_value::make_object();
+    if (!g_db_pool) return obj;
+    db::pool_stats st = g_db_pool->stats();
+    obj.add_int("total_connections", static_cast<int>(st.total_connections));
+    obj.add_int("idle_connections", static_cast<int>(st.idle_connections));
+    obj.add_int("active_leases", static_cast<int>(st.active_leases));
+    obj.add_int("min_size", static_cast<int>(st.min_size));
+    obj.add_int("max_size", static_cast<int>(st.max_size));
+    obj.add_int64("total_acquisitions", static_cast<int64_t>(st.total_acquisitions));
+    obj.add_int64("total_timeouts", static_cast<int64_t>(st.total_timeouts));
+    obj.add_int64("total_health_failures", static_cast<int64_t>(st.total_health_failures));
+    obj.add_int64("stmt_cache_hits", static_cast<int64_t>(st.total_stmt_cache_hits));
+    obj.add_int64("stmt_cache_misses", static_cast<int64_t>(st.total_stmt_cache_misses));
+    obj.add_int("cached_statements", static_cast<int>(st.total_cached_statements));
+    return obj;
+}
+
+// GET /api/health
+static void handle_health(backend::wsworker *worker,
+                          const std::map<std::string, std::string> &header,
+                          const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    bool db_ok = conn.ping();
+
+    auto res = json::json_value::make_object();
+    res.add_str("status", db_ok ? "ok" : "degraded");
+    res.add_bool("db_healthy", db_ok);
+    res.add("db_pool", pool_stats_to_json());
+    send_json(worker, header, db_ok ? "200 OK" : "503 Service Unavailable", res);
+}
+
 // GET /api/setup/status
 static void handle_setup_status(backend::wsworker *worker,
                                 const std::map<std::string, std::string> &header,
                                 const std::list<std::string> &) {
-    db::sqlite_db &conn = acquire_db_connection();
+    auto conn = acquire_db_connection();
 
     bool is_setup = false;
     std::string instance_name = "JiraLike Workspace";
@@ -177,6 +227,7 @@ static void handle_setup_status(backend::wsworker *worker,
     res.add_int("schema_version", schema_ver);
     res.add_int("latest_schema_version", db::LATEST_SCHEMA_VERSION);
     res.add("migrations", std::move(migrations_arr));
+    res.add("db_pool", pool_stats_to_json());
     send_json(worker, header, "200 OK", res);
 }
 
@@ -469,7 +520,7 @@ static void handle_setup_init(backend::wsworker *worker,
         return;
     }
 
-    db::sqlite_db &conn = acquire_db_connection();
+    auto conn = acquire_db_connection();
     {
         auto chk = conn.prepare("SELECT is_setup_complete FROM app_config WHERE id = 1;");
         if (chk.step() == SQLITE_ROW && chk.column_int(0) != 0) {
@@ -584,7 +635,7 @@ static void handle_auth_login(backend::wsworker *worker,
         return;
     }
 
-    db::sqlite_db &conn = acquire_db_connection();
+    auto conn = acquire_db_connection();
     auto stmt = conn.prepare(R"SQL(
         SELECT id, username, email, password_hash, display_name, role, avatar_color
         FROM users
@@ -639,7 +690,7 @@ static void handle_auth_logout(backend::wsworker *worker,
                                const std::list<std::string> &) {
     std::string token = extract_token(worker, header);
     if (!token.empty()) {
-        db::sqlite_db &conn = acquire_db_connection();
+        auto conn = acquire_db_connection();
         db::sqlite_transaction tx(conn);
         auto stmt = conn.prepare("DELETE FROM sessions WHERE token = ?;");
         stmt.bind_text(1, token);
@@ -655,7 +706,7 @@ static void handle_auth_logout(backend::wsworker *worker,
 static void handle_auth_me(backend::wsworker *worker,
                            const std::map<std::string, std::string> &header,
                            const std::list<std::string> &) {
-    db::sqlite_db &conn = acquire_db_connection();
+    auto conn = acquire_db_connection();
     auto u = get_authenticated_user(conn, worker, header);
     if (!u.authenticated) {
         send_error(worker, header, "401 Unauthorized", "Not authenticated");
@@ -668,7 +719,7 @@ static void handle_auth_me(backend::wsworker *worker,
 static void handle_users(backend::wsworker *worker,
                          const std::map<std::string, std::string> &header,
                          const std::list<std::string> &) {
-    db::sqlite_db &conn = acquire_db_connection();
+    auto conn = acquire_db_connection();
     std::string method = get_header(header, "REQUEST_METHOD");
 
     if (method == "GET") {
@@ -743,7 +794,7 @@ static void handle_users(backend::wsworker *worker,
 static void handle_projects(backend::wsworker *worker,
                             const std::map<std::string, std::string> &header,
                             const std::list<std::string> &) {
-    db::sqlite_db &conn = acquire_db_connection();
+    auto conn = acquire_db_connection();
     std::string method = get_header(header, "REQUEST_METHOD");
 
     if (method == "GET") {
@@ -819,7 +870,7 @@ static void handle_projects(backend::wsworker *worker,
 static void handle_sprints(backend::wsworker *worker,
                            const std::map<std::string, std::string> &header,
                            const std::list<std::string> &) {
-    db::sqlite_db &conn = acquire_db_connection();
+    auto conn = acquire_db_connection();
     std::string method = get_header(header, "REQUEST_METHOD");
 
     if (method == "GET") {
@@ -948,7 +999,7 @@ static void handle_sprint_detail(backend::wsworker *worker,
     }
     int sprint_id = std::atoi(uri_params.front().c_str());
 
-    db::sqlite_db &conn = acquire_db_connection();
+    auto conn = acquire_db_connection();
     auto u_auth = get_authenticated_user(conn, worker, header);
     if (!u_auth.authenticated) {
         send_error(worker, header, "401 Unauthorized", "Authentication required");
@@ -1042,7 +1093,7 @@ static void handle_sprint_set_current(backend::wsworker *worker,
     }
     int sprint_id = std::atoi(uri_params.front().c_str());
 
-    db::sqlite_db &conn = acquire_db_connection();
+    auto conn = acquire_db_connection();
     auto u_auth = get_authenticated_user(conn, worker, header);
     if (!u_auth.authenticated) {
         send_error(worker, header, "401 Unauthorized", "Authentication required");
@@ -1136,7 +1187,7 @@ static const char *BASE_WORK_ITEM_SELECT = R"SQL(
 static void handle_items(backend::wsworker *worker,
                          const std::map<std::string, std::string> &header,
                          const std::list<std::string> &) {
-    db::sqlite_db &conn = acquire_db_connection();
+    auto conn = acquire_db_connection();
     std::string method = get_header(header, "REQUEST_METHOD");
 
     if (method == "GET") {
@@ -1336,7 +1387,7 @@ static void handle_item_detail(backend::wsworker *worker,
         send_error(worker, header, "400 Bad Request", "Missing item ID or key");
         return;
     }
-    db::sqlite_db &conn = acquire_db_connection();
+    auto conn = acquire_db_connection();
     int item_id = resolve_work_item_id(conn, uri_params.front());
     if (item_id <= 0) {
         send_error(worker, header, "404 Not Found", "Work item not found");
@@ -1599,7 +1650,7 @@ static void handle_item_state_transition(backend::wsworker *worker,
         send_error(worker, header, "400 Bad Request", "Missing item ID or key");
         return;
     }
-    db::sqlite_db &conn = acquire_db_connection();
+    auto conn = acquire_db_connection();
     int item_id = resolve_work_item_id(conn, uri_params.front());
     if (item_id <= 0) {
         send_error(worker, header, "404 Not Found", "Work item not found");
@@ -1697,7 +1748,7 @@ static void handle_item_comments(backend::wsworker *worker,
         send_error(worker, header, "400 Bad Request", "Missing item ID or key");
         return;
     }
-    db::sqlite_db &conn = acquire_db_connection();
+    auto conn = acquire_db_connection();
     int item_id = resolve_work_item_id(conn, uri_params.front());
     if (item_id <= 0) {
         send_error(worker, header, "404 Not Found", "Work item not found");
@@ -1751,7 +1802,7 @@ static void handle_item_links(backend::wsworker *worker,
         send_error(worker, header, "400 Bad Request", "Missing item ID or key");
         return;
     }
-    db::sqlite_db &conn = acquire_db_connection();
+    auto conn = acquire_db_connection();
     int source_id = resolve_work_item_id(conn, uri_params.front());
     if (source_id <= 0) {
         send_error(worker, header, "404 Not Found", "Work item not found");
@@ -1800,7 +1851,7 @@ static void handle_item_links(backend::wsworker *worker,
 static void handle_all_links(backend::wsworker *worker,
                              const std::map<std::string, std::string> &header,
                              const std::list<std::string> &) {
-    db::sqlite_db &conn = acquire_db_connection();
+    auto conn = acquire_db_connection();
     auto stmt = conn.prepare(R"SQL(
         SELECT l.id, l.source_item_id, l.target_item_id, l.link_type,
                ws.key, ws.title, ws.status, ws.type,
@@ -1839,7 +1890,7 @@ static void handle_delete_link(backend::wsworker *worker,
         return;
     }
     int link_id = std::atoi(uri_params.front().c_str());
-    db::sqlite_db &conn = acquire_db_connection();
+    auto conn = acquire_db_connection();
     auto u_auth = get_authenticated_user(conn, worker, header);
     if (!u_auth.authenticated) {
         send_error(worker, header, "401 Unauthorized", "Authentication required");
@@ -1867,7 +1918,7 @@ static void handle_item_attachments(backend::wsworker *worker,
         send_error(worker, header, "400 Bad Request", "Missing item ID or key");
         return;
     }
-    db::sqlite_db &conn = acquire_db_connection();
+    auto conn = acquire_db_connection();
     int item_id = resolve_work_item_id(conn, uri_params.front());
     if (item_id <= 0) {
         send_error(worker, header, "404 Not Found", "Work item not found");
@@ -1973,7 +2024,7 @@ static void handle_blob_download(backend::wsworker *worker,
     std::string mime_type = "application/octet-stream";
     std::string orig_name = blob_name;
     {
-        db::sqlite_db &conn = acquire_db_connection();
+        auto conn = acquire_db_connection();
         auto stmt = conn.prepare("SELECT original_filename, mime_type FROM attachments WHERE blob_filename = ?;");
         stmt.bind_text(1, blob_name);
         if (stmt.step() == SQLITE_ROW) {
@@ -2011,7 +2062,7 @@ static void handle_delete_attachment(backend::wsworker *worker,
     }
     int att_id = std::atoi(uri_params.front().c_str());
 
-    db::sqlite_db &conn = acquire_db_connection();
+    auto conn = acquire_db_connection();
     auto u_auth = get_authenticated_user(conn, worker, header);
     if (!u_auth.authenticated) {
         send_error(worker, header, "401 Unauthorized", "Authentication required");
@@ -2094,6 +2145,7 @@ int main(int argc, char *argv[]) {
 
     try {
         db::ensure_storage_and_migrate(g_db_path, g_blobs_dir);
+        init_db_pool(worker_num);
         (void)acquire_db_connection();
     } catch (const std::exception &ex) {
         std::cerr << "[jiralike-demo] FATAL: Database initialization/migration failed: " << ex.what() << std::endl;
@@ -2112,6 +2164,7 @@ int main(int argc, char *argv[]) {
     sigaction(SIGUSR1, &sa, nullptr);
 
     server.add_routes({
+        {"^/api/health$",                           backend::GET,                   handle_health               },
         {"^/api/setup/status$",                     backend::GET,                   handle_setup_status         },
         {"^/api/setup/init$",                       backend::POST,                  handle_setup_init           },
         {"^/api/auth/login$",                       backend::POST,                  handle_auth_login           },
@@ -2138,5 +2191,8 @@ int main(int argc, char *argv[]) {
 
     int ret = server.run();
     g_server.store(nullptr);
+    if (g_db_pool) {
+        g_db_pool->shutdown();
+    }
     return ret;
 }

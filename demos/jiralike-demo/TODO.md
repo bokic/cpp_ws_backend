@@ -575,12 +575,12 @@ This document provides a comprehensive gap analysis and exhaustive development r
 ## 16. Epic 15: C++ Backend Architecture & Infrastructure Enhancements
 
 ### 16.1 Connection Pooling & Persistent DB Handles
-- [ ] **Thread-Safe SQLite Connection Pool**:
+- [x] **Thread-Safe SQLite Connection Pool**:
   - Replace per-worker thread-local handles with a formal RAII `connection_pool<sqlite_db>` as detailed in root `TODO.md`.
   - Lease timeout bounds, health validation, and coordinated graceful shutdown.
 
 ### 16.2 High-Concurrency SQLite Tuning
-- [ ] **WAL Mode & Concurrent Optimizations**:
+- [x] **WAL Mode & Concurrent Optimizations**:
   - Enforce `PRAGMA journal_mode=WAL;`, `PRAGMA synchronous=NORMAL;`, and `PRAGMA busy_timeout=5000;`.
   - Prepared statement cache per pooled connection to eliminate SQL re-compilation overhead.
 
@@ -709,13 +709,13 @@ flowchart TD
 
 ### 17.3 Chronological Step-by-Step Execution Plan
 
-#### Step 1: Backend Infrastructure & SQLite Connection Pooling
+#### Step 1: Backend Infrastructure & SQLite Connection Pooling *(Completed)*
 - **Why First**: The current C++ FastCGI backend creates a single `thread_local` connection per worker. Upgrading to a pooled RAII resource manager with WAL mode is essential before introducing complex join queries, concurrent transactions, and full-text indexes.
 - **Backend Deliverables**:
-  - Implement `connection_pool<sqlite_db>` supporting lease acquisition timeouts and graceful shutdown.
-  - Enable `PRAGMA journal_mode = WAL;`, `PRAGMA synchronous = NORMAL;`, `PRAGMA busy_timeout = 5000;`, and statement caching.
+  - [x] Implement `connection_pool<sqlite_db>` supporting lease acquisition timeouts and graceful shutdown.
+  - [x] Enable `PRAGMA journal_mode = WAL;`, `PRAGMA synchronous = NORMAL;`, `PRAGMA busy_timeout = 5000;`, and statement caching.
 - **Frontend Deliverables**: None (transparent infrastructure upgrade).
-- **Verification**: Concurrency stress test (`wrk` or `autocannon`) verifying zero `SQLITE_BUSY` or locked database errors under 100 concurrent workers.
+- **Verification**: Concurrency stress test verifying zero `SQLITE_BUSY` or locked database errors under 100 concurrent workers.
 
 #### Step 2: Core Jira Domain Model (Resolutions, Versions, Components, Issue Types Schemes)
 - **Why Next**: Jira’s issue identity relies on more than just raw types. An issue belongs to Components, affects/fixes Versions, and closes with a Resolution. These must be modeled before custom fields and screen mapping.
