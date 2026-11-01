@@ -14,6 +14,7 @@
 #include "src/dashboard_engine.h"
 #include "src/collaboration_engine.h"
 #include "src/security_engine.h"
+#include "src/automation_engine.h"
 
 #include <algorithm>
 #include <atomic>
@@ -8193,6 +8194,19 @@ static void handle_items(backend::wsworker *worker,
         }
 
         tx.commit();
+
+        // Step 12: Dispatch issue_created automation event
+        automation::AutomationEvent a_ev;
+        a_ev.type = automation::EventType::IssueCreated;
+        a_ev.project_id = project_id;
+        a_ev.issue_id = new_item_id;
+        a_ev.issue_key = item_key;
+        a_ev.user_id = u_auth.id;
+        a_ev.user_username = u_auth.username;
+        a_ev.user_display_name = u_auth.display_name;
+        a_ev.from_status = "";
+        a_ev.to_status = status;
+        automation::dispatch_event(conn, a_ev);
     } catch (const std::exception &ex) {
         send_error(worker, header, "500 Internal Server Error", ex.what());
         return;
@@ -8712,6 +8726,41 @@ static void handle_item_detail(backend::wsworker *worker,
         }
 
         tx.commit();
+
+        // Step 12: Dispatch automation events for status or field changes
+        std::string cur_item_key;
+        {
+            auto kq = conn.prepare("SELECT key FROM work_items WHERE id = ?;");
+            kq.bind_int(1, item_id);
+            if (kq.step() == SQLITE_ROW) cur_item_key = kq.column_str(0);
+        }
+        if (status != old_status) {
+            automation::AutomationEvent a_ev;
+            a_ev.type = automation::EventType::StatusChanged;
+            a_ev.project_id = old_project_id;
+            a_ev.issue_id = item_id;
+            a_ev.issue_key = cur_item_key;
+            a_ev.user_id = u_auth.id;
+            a_ev.user_username = u_auth.username;
+            a_ev.user_display_name = u_auth.display_name;
+            a_ev.from_status = old_status;
+            a_ev.to_status = status;
+            automation::dispatch_event(conn, a_ev);
+        }
+        if (priority != old_priority) {
+            automation::AutomationEvent a_ev;
+            a_ev.type = automation::EventType::FieldValueChanged;
+            a_ev.project_id = old_project_id;
+            a_ev.issue_id = item_id;
+            a_ev.issue_key = cur_item_key;
+            a_ev.user_id = u_auth.id;
+            a_ev.user_username = u_auth.username;
+            a_ev.user_display_name = u_auth.display_name;
+            a_ev.field_name = "priority";
+            a_ev.old_value = old_priority;
+            a_ev.new_value = priority;
+            automation::dispatch_event(conn, a_ev);
+        }
     }
 
     auto q = conn.prepare(std::string(BASE_WORK_ITEM_SELECT) + " WHERE w.id = ?;");
@@ -9153,6 +9202,27 @@ static void handle_item_state_transition(backend::wsworker *worker,
         }
 
         tx.commit();
+
+        // Step 12: Dispatch status_changed automation event
+        if (new_status != old_status) {
+            std::string cur_item_key;
+            {
+                auto kq = conn.prepare("SELECT key FROM work_items WHERE id = ?;");
+                kq.bind_int(1, item_id);
+                if (kq.step() == SQLITE_ROW) cur_item_key = kq.column_str(0);
+            }
+            automation::AutomationEvent a_ev;
+            a_ev.type = automation::EventType::StatusChanged;
+            a_ev.project_id = project_id;
+            a_ev.issue_id = item_id;
+            a_ev.issue_key = cur_item_key;
+            a_ev.user_id = u_auth.id;
+            a_ev.user_username = u_auth.username;
+            a_ev.user_display_name = u_auth.display_name;
+            a_ev.from_status = old_status;
+            a_ev.to_status = new_status;
+            automation::dispatch_event(conn, a_ev);
+        }
     }
 
     auto q = conn.prepare(std::string(BASE_WORK_ITEM_SELECT) + " WHERE w.id = ?;");
@@ -9234,6 +9304,25 @@ static void handle_item_comments(backend::wsworker *worker,
         wstmt.step_done();
 
         tx.commit();
+
+        // Step 12: Dispatch comment_added automation event
+        std::string cur_item_key;
+        {
+            auto kq = conn.prepare("SELECT key FROM work_items WHERE id = ?;");
+            kq.bind_int(1, item_id);
+            if (kq.step() == SQLITE_ROW) cur_item_key = kq.column_str(0);
+        }
+        automation::AutomationEvent a_ev;
+        a_ev.type = automation::EventType::CommentAdded;
+        a_ev.project_id = proj_id;
+        a_ev.issue_id = item_id;
+        a_ev.issue_key = cur_item_key;
+        a_ev.user_id = u_auth.id;
+        a_ev.user_username = u_auth.username;
+        a_ev.user_display_name = u_auth.display_name;
+        a_ev.comment_id = cid;
+        a_ev.comment_body = text;
+        automation::dispatch_event(conn, a_ev);
     }
 
     auto res = json::json_value::make_object();
@@ -12908,6 +12997,543 @@ static void handle_my_permissions(backend::wsworker *worker,
     send_json(worker, header, "200 OK", res);
 }
 
+// ============================================================================
+// Step 12: No-Code Automation Engine Endpoints
+// ============================================================================
+
+static json::json_value rule_row_to_json(db::sqlite_stmt &stmt) {
+    auto obj = json::json_value::make_object();
+    obj.add_int("id", stmt.column_int(0));
+    if (stmt.column_is_null(1)) {
+        obj.add_null("project_id");
+    } else {
+        obj.add_int("project_id", stmt.column_int(1));
+    }
+    obj.add_str("project_key", stmt.column_str(2));
+    obj.add_str("project_name", stmt.column_str(3));
+    obj.add_str("name", stmt.column_str(4));
+    obj.add_str("description", stmt.column_str(5));
+    obj.add_bool("is_enabled", stmt.column_int(6) != 0);
+    obj.add_str("trigger_type", stmt.column_str(7));
+
+    std::string tr_cfg_raw = stmt.column_str(8);
+    auto tr_cfg = json::json_value::parse(tr_cfg_raw);
+    if (tr_cfg) obj.add("trigger_config", std::move(tr_cfg));
+    else obj.add("trigger_config", json::json_value::make_object());
+
+    std::string cond_raw = stmt.column_str(9);
+    auto cond = json::json_value::parse(cond_raw);
+    if (cond) obj.add("conditions", std::move(cond));
+    else obj.add("conditions", json::json_value::make_array());
+
+    std::string act_raw = stmt.column_str(10);
+    auto act = json::json_value::parse(act_raw);
+    if (act) obj.add("actions", std::move(act));
+    else obj.add("actions", json::json_value::make_array());
+
+    if (stmt.column_is_null(11)) obj.add_null("created_by");
+    else obj.add_int("created_by", stmt.column_int(11));
+    obj.add_str("creator_name", stmt.column_str(12));
+    obj.add_str("created_at", stmt.column_str(13));
+    obj.add_str("updated_at", stmt.column_str(14));
+    obj.add_int("execution_count", stmt.column_int(15));
+    obj.add_str("last_executed_at", stmt.column_str(16));
+    return obj;
+}
+
+// GET | POST /api/automation/rules
+static void handle_automation_rules(backend::wsworker *worker,
+                                    const std::map<std::string, std::string> &header,
+                                    const std::list<std::string> &uri_params) {
+    (void)uri_params;
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+        std::string sql = R"SQL(
+            SELECT r.id, r.project_id, COALESCE(p.key, ''), COALESCE(p.name, ''),
+                   r.name, r.description, r.is_enabled, r.trigger_type, r.trigger_config,
+                   r.conditions_json, r.actions_json, r.created_by, COALESCE(u.display_name, ''),
+                   r.created_at, r.updated_at, r.execution_count, r.last_executed_at
+            FROM automation_rules r
+            LEFT JOIN projects p ON p.id = r.project_id
+            LEFT JOIN users u ON u.id = r.created_by
+        )SQL";
+        std::vector<std::string> bind_vals;
+        if (!args["project_id"].empty()) {
+            sql += " WHERE (r.project_id = ? OR r.project_id IS NULL) ";
+            bind_vals.push_back(args["project_id"]);
+        }
+        sql += " ORDER BY r.id ASC;";
+
+        auto q = conn.prepare(sql);
+        for (size_t i = 0; i < bind_vals.size(); ++i) {
+            q.bind_text(static_cast<int>(i + 1), bind_vals[i]);
+        }
+        auto arr = json::json_value::make_array();
+        while (q.step() == SQLITE_ROW) {
+            arr.add(rule_row_to_json(q));
+        }
+        send_json(worker, header, "200 OK", arr);
+        return;
+    }
+
+    // POST
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Administrator privileges required to create automation rules");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string name = body.get_string("name");
+    if (name.empty()) {
+        send_error(worker, header, "400 Bad Request", "Rule name is required");
+        return;
+    }
+    std::string description = body.get_string("description");
+    int project_id = body.get_int("project_id", 0);
+    std::string trigger_type = body.get_string("trigger_type", "issue_created");
+    int is_enabled = body.get_bool("is_enabled", true) ? 1 : 0;
+
+    std::string trigger_config = "{}";
+    if (body.has_key("trigger_config")) {
+        trigger_config = body.get_child("trigger_config").to_string();
+    }
+    std::string conditions_json = "[]";
+    if (body.has_key("conditions")) {
+        conditions_json = body.get_child("conditions").to_string();
+    } else if (body.has_key("conditions_json")) {
+        conditions_json = body.get_string("conditions_json", "[]");
+    }
+    std::string actions_json = "[]";
+    if (body.has_key("actions")) {
+        actions_json = body.get_child("actions").to_string();
+    } else if (body.has_key("actions_json")) {
+        actions_json = body.get_string("actions_json", "[]");
+    }
+
+    int new_id = 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare(R"SQL(
+            INSERT INTO automation_rules (
+                project_id, name, description, is_enabled, trigger_type,
+                trigger_config, conditions_json, actions_json, created_by
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+        )SQL");
+        ins.bind_optional_int(1, project_id);
+        ins.bind_text(2, name);
+        ins.bind_text(3, description);
+        ins.bind_int(4, is_enabled);
+        ins.bind_text(5, trigger_type);
+        ins.bind_text(6, trigger_config);
+        ins.bind_text(7, conditions_json);
+        ins.bind_text(8, actions_json);
+        ins.bind_int(9, u_auth.id);
+        ins.step_done();
+        new_id = static_cast<int>(conn.last_insert_rowid());
+
+        automation::sync_rule_child_tables(conn, new_id, trigger_type, trigger_config, conditions_json, actions_json);
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "500 Internal Server Error", ex.what());
+        return;
+    }
+
+    auto rq = conn.prepare(R"SQL(
+        SELECT r.id, r.project_id, COALESCE(p.key, ''), COALESCE(p.name, ''),
+               r.name, r.description, r.is_enabled, r.trigger_type, r.trigger_config,
+               r.conditions_json, r.actions_json, r.created_by, COALESCE(u.display_name, ''),
+               r.created_at, r.updated_at, r.execution_count, r.last_executed_at
+        FROM automation_rules r
+        LEFT JOIN projects p ON p.id = r.project_id
+        LEFT JOIN users u ON u.id = r.created_by
+        WHERE r.id = ?;
+    )SQL");
+    rq.bind_int(1, new_id);
+    if (rq.step() == SQLITE_ROW) {
+        send_json(worker, header, "201 Created", rule_row_to_json(rq));
+    } else {
+        send_error(worker, header, "500 Internal Server Error", "Failed to retrieve created rule");
+    }
+}
+
+// GET | PUT | DELETE /api/automation/rules/([0-9]+)
+static void handle_automation_rule_detail(backend::wsworker *worker,
+                                          const std::map<std::string, std::string> &header,
+                                          const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing rule ID");
+        return;
+    }
+    int rule_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto rq = conn.prepare(R"SQL(
+            SELECT r.id, r.project_id, COALESCE(p.key, ''), COALESCE(p.name, ''),
+                   r.name, r.description, r.is_enabled, r.trigger_type, r.trigger_config,
+                   r.conditions_json, r.actions_json, r.created_by, COALESCE(u.display_name, ''),
+                   r.created_at, r.updated_at, r.execution_count, r.last_executed_at
+            FROM automation_rules r
+            LEFT JOIN projects p ON p.id = r.project_id
+            LEFT JOIN users u ON u.id = r.created_by
+            WHERE r.id = ?;
+        )SQL");
+        rq.bind_int(1, rule_id);
+        if (rq.step() == SQLITE_ROW) {
+            send_json(worker, header, "200 OK", rule_row_to_json(rq));
+        } else {
+            send_error(worker, header, "404 Not Found", "Automation rule not found");
+        }
+        return;
+    }
+
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Administrator privileges required");
+        return;
+    }
+
+    if (method == "DELETE") {
+        auto del = conn.prepare("DELETE FROM automation_rules WHERE id = ?;");
+        del.bind_int(1, rule_id);
+        del.step_done();
+        auto res = json::json_value::make_object();
+        res.add_bool("success", true);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    // PUT
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string name = body.get_string("name");
+    std::string description = body.get_string("description");
+    int project_id = body.get_int("project_id", 0);
+    std::string trigger_type = body.get_string("trigger_type", "issue_created");
+    int is_enabled = body.get_bool("is_enabled", true) ? 1 : 0;
+
+    std::string trigger_config = "{}";
+    if (body.has_key("trigger_config")) {
+        trigger_config = body.get_child("trigger_config").to_string();
+    }
+    std::string conditions_json = "[]";
+    if (body.has_key("conditions")) {
+        conditions_json = body.get_child("conditions").to_string();
+    } else if (body.has_key("conditions_json")) {
+        conditions_json = body.get_string("conditions_json", "[]");
+    }
+    std::string actions_json = "[]";
+    if (body.has_key("actions")) {
+        actions_json = body.get_child("actions").to_string();
+    } else if (body.has_key("actions_json")) {
+        actions_json = body.get_string("actions_json", "[]");
+    }
+
+    try {
+        db::sqlite_transaction tx(conn);
+        auto upd = conn.prepare(R"SQL(
+            UPDATE automation_rules
+            SET project_id = ?, name = ?, description = ?, is_enabled = ?,
+                trigger_type = ?, trigger_config = ?, conditions_json = ?, actions_json = ?,
+                updated_at = datetime('now')
+            WHERE id = ?;
+        )SQL");
+        upd.bind_optional_int(1, project_id);
+        upd.bind_text(2, name);
+        upd.bind_text(3, description);
+        upd.bind_int(4, is_enabled);
+        upd.bind_text(5, trigger_type);
+        upd.bind_text(6, trigger_config);
+        upd.bind_text(7, conditions_json);
+        upd.bind_text(8, actions_json);
+        upd.bind_int(9, rule_id);
+        upd.step_done();
+
+        automation::sync_rule_child_tables(conn, rule_id, trigger_type, trigger_config, conditions_json, actions_json);
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "500 Internal Server Error", ex.what());
+        return;
+    }
+
+    auto rq = conn.prepare(R"SQL(
+        SELECT r.id, r.project_id, COALESCE(p.key, ''), COALESCE(p.name, ''),
+               r.name, r.description, r.is_enabled, r.trigger_type, r.trigger_config,
+               r.conditions_json, r.actions_json, r.created_by, COALESCE(u.display_name, ''),
+               r.created_at, r.updated_at, r.execution_count, r.last_executed_at
+        FROM automation_rules r
+        LEFT JOIN projects p ON p.id = r.project_id
+        LEFT JOIN users u ON u.id = r.created_by
+        WHERE r.id = ?;
+    )SQL");
+    rq.bind_int(1, rule_id);
+    if (rq.step() == SQLITE_ROW) {
+        send_json(worker, header, "200 OK", rule_row_to_json(rq));
+    } else {
+        send_error(worker, header, "404 Not Found", "Automation rule not found");
+    }
+}
+
+// POST /api/automation/rules/([0-9]+)/toggle
+static void handle_automation_rule_toggle(backend::wsworker *worker,
+                                          const std::map<std::string, std::string> &header,
+                                          const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing rule ID");
+        return;
+    }
+    int rule_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Administrator privileges required");
+        return;
+    }
+
+    auto upd = conn.prepare("UPDATE automation_rules SET is_enabled = CASE WHEN is_enabled = 1 THEN 0 ELSE 1 END WHERE id = ?;");
+    upd.bind_int(1, rule_id);
+    upd.step_done();
+
+    int new_state = 0;
+    auto q = conn.prepare("SELECT is_enabled FROM automation_rules WHERE id = ?;");
+    q.bind_int(1, rule_id);
+    if (q.step() == SQLITE_ROW) {
+        new_state = q.column_int(0);
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", rule_id);
+    res.add_bool("is_enabled", new_state != 0);
+    send_json(worker, header, "200 OK", res);
+}
+
+// POST /api/automation/rules/([0-9]+)/execute
+static void handle_automation_rule_execute(backend::wsworker *worker,
+                                           const std::map<std::string, std::string> &header,
+                                           const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing rule ID");
+        return;
+    }
+    int rule_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Administrator privileges required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    int issue_id = 0;
+    std::string issue_key;
+    if (body) {
+        issue_id = body.get_int("issue_id", 0);
+        issue_key = body.get_string("issue_key");
+        if (issue_id <= 0 && !issue_key.empty()) {
+            issue_id = resolve_work_item_id(conn, issue_key);
+        }
+    }
+    if (issue_id > 0 && issue_key.empty()) {
+        auto kq = conn.prepare("SELECT key FROM work_items WHERE id = ?;");
+        kq.bind_int(1, issue_id);
+        if (kq.step() == SQLITE_ROW) issue_key = kq.column_str(0);
+    }
+
+    // Load rule
+    auto rq = conn.prepare(R"SQL(
+        SELECT name, trigger_type, trigger_config, conditions_json, actions_json, project_id
+        FROM automation_rules WHERE id = ?;
+    )SQL");
+    rq.bind_int(1, rule_id);
+    if (rq.step() != SQLITE_ROW) {
+        send_error(worker, header, "404 Not Found", "Automation rule not found");
+        return;
+    }
+    std::string r_name = rq.column_str(0);
+    std::string r_trig = rq.column_str(1);
+    std::string r_trig_cfg = rq.column_str(2);
+    std::string r_conds = rq.column_str(3);
+    std::string r_acts = rq.column_str(4);
+    int r_proj_id = rq.column_is_null(5) ? 0 : rq.column_int(5);
+
+    automation::AutomationEvent a_ev;
+    a_ev.type = automation::EventType::Manual;
+    a_ev.project_id = r_proj_id;
+    a_ev.issue_id = issue_id;
+    a_ev.issue_key = issue_key;
+    a_ev.user_id = u_auth.id;
+    a_ev.user_username = u_auth.username;
+    a_ev.user_display_name = u_auth.display_name;
+    a_ev.user_email = u_auth.email;
+
+    std::string status, trace;
+    double duration_ms = 0.0;
+    try {
+        automation::run_rule(conn, rule_id, r_name, r_trig, r_trig_cfg, r_conds, r_acts, a_ev,
+                             status, duration_ms, trace);
+    } catch (const std::exception &ex) {
+        status = "ERROR";
+        trace += std::string("\n[Fatal Exception] ") + ex.what();
+    }
+
+    // Record log
+    auto ins_log = conn.prepare(R"SQL(
+        INSERT INTO automation_logs (rule_id, rule_name, trigger_type, issue_id, issue_key, status, duration_ms, log_trace)
+        VALUES (?, ?, 'manual', ?, ?, ?, ?, ?);
+    )SQL");
+    ins_log.bind_int(1, rule_id);
+    ins_log.bind_text(2, r_name);
+    ins_log.bind_optional_int(3, issue_id);
+    ins_log.bind_text(4, issue_key);
+    ins_log.bind_text(5, status);
+    ins_log.bind_double(6, duration_ms);
+    ins_log.bind_text(7, trace);
+    ins_log.step_done();
+
+    auto upd_rule = conn.prepare("UPDATE automation_rules SET execution_count = execution_count + 1, last_executed_at = datetime('now') WHERE id = ?;");
+    upd_rule.bind_int(1, rule_id);
+    upd_rule.step_done();
+
+    auto res = json::json_value::make_object();
+    res.add_int("rule_id", rule_id);
+    res.add_str("rule_name", r_name);
+    res.add_str("status", status);
+    res.add_double("duration_ms", duration_ms);
+    res.add_str("trace", trace);
+    send_json(worker, header, "200 OK", res);
+}
+
+// Helper to convert automation_logs row to JSON
+static json::json_value log_row_to_json(db::sqlite_stmt &q) {
+    auto obj = json::json_value::make_object();
+    obj.add_int("id", q.column_int(0));
+    if (q.column_is_null(1)) obj.add_null("rule_id");
+    else obj.add_int("rule_id", q.column_int(1));
+    obj.add_str("rule_name", q.column_str(2));
+    obj.add_str("trigger_type", q.column_str(3));
+    if (q.column_is_null(4)) obj.add_null("issue_id");
+    else obj.add_int("issue_id", q.column_int(4));
+    obj.add_str("issue_key", q.column_str(5));
+    obj.add_str("status", q.column_str(6));
+    obj.add_double("duration_ms", q.column_double(7));
+    obj.add_str("log_trace", q.column_str(8));
+    obj.add_str("created_at", q.column_str(9));
+    return obj;
+}
+
+// GET /api/automation/rules/([0-9]+)/logs
+static void handle_automation_rule_logs(backend::wsworker *worker,
+                                        const std::map<std::string, std::string> &header,
+                                        const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing rule ID");
+        return;
+    }
+    int rule_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+
+    auto q = conn.prepare(R"SQL(
+        SELECT id, rule_id, rule_name, trigger_type, issue_id, issue_key, status, duration_ms, log_trace, created_at
+        FROM automation_logs
+        WHERE rule_id = ?
+        ORDER BY id DESC
+        LIMIT 100;
+    )SQL");
+    q.bind_int(1, rule_id);
+    auto arr = json::json_value::make_array();
+    while (q.step() == SQLITE_ROW) {
+        arr.add(log_row_to_json(q));
+    }
+    send_json(worker, header, "200 OK", arr);
+}
+
+// GET /api/automation/logs
+static void handle_automation_logs(backend::wsworker *worker,
+                                   const std::map<std::string, std::string> &header,
+                                   const std::list<std::string> &uri_params) {
+    (void)uri_params;
+    auto conn = acquire_db_connection();
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+
+    std::string sql = R"SQL(
+        SELECT id, rule_id, rule_name, trigger_type, issue_id, issue_key, status, duration_ms, log_trace, created_at
+        FROM automation_logs
+    )SQL";
+    std::vector<std::string> params;
+    if (!args["rule_id"].empty()) {
+        sql += " WHERE rule_id = ? ";
+        params.push_back(args["rule_id"]);
+    }
+    sql += " ORDER BY id DESC LIMIT 100;";
+
+    auto q = conn.prepare(sql);
+    for (size_t i = 0; i < params.size(); ++i) {
+        q.bind_text(static_cast<int>(i + 1), params[i]);
+    }
+    auto arr = json::json_value::make_array();
+    while (q.step() == SQLITE_ROW) {
+        arr.add(log_row_to_json(q));
+    }
+    send_json(worker, header, "200 OK", arr);
+}
+
+// POST /api/automation/webhook/([A-Za-z0-9_-]+)
+static void handle_automation_webhook(backend::wsworker *worker,
+                                      const std::map<std::string, std::string> &header,
+                                      const std::list<std::string> &uri_params) {
+    std::string token = uri_params.empty() ? "" : uri_params.front();
+    auto conn = acquire_db_connection();
+
+    automation::AutomationEvent a_ev;
+    a_ev.type = automation::EventType::IncomingWebhook;
+    a_ev.webhook_payload = worker->body();
+    automation::dispatch_event(conn, a_ev);
+
+    auto res = json::json_value::make_object();
+    res.add_bool("success", true);
+    res.add_str("token", token);
+    res.add_str("message", "Webhook event dispatched");
+    send_json(worker, header, "200 OK", res);
+}
+
+// POST /api/automation/cron
+static void handle_automation_cron(backend::wsworker *worker,
+                                   const std::map<std::string, std::string> &header,
+                                   const std::list<std::string> &uri_params) {
+    (void)uri_params;
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Administrator privileges required");
+        return;
+    }
+
+    automation::AutomationEvent a_ev;
+    a_ev.type = automation::EventType::ScheduledCron;
+    a_ev.cron_name = "manual_cron_trigger";
+    a_ev.user_id = u_auth.id;
+    automation::dispatch_event(conn, a_ev);
+
+    auto res = json::json_value::make_object();
+    res.add_bool("success", true);
+    res.add_str("message", "Scheduled cron automation evaluated");
+    send_json(worker, header, "200 OK", res);
+}
+
 static constexpr auto DEFAULT_SOCKET_NAME = ":9002";
 static constexpr auto DEFAULT_BACKLOG = 100;
 
@@ -13105,6 +13731,14 @@ int main(int argc, char *argv[]) {
         {"^/api/tokens$",                               backend::GET | backend::POST,   handle_personal_access_tokens },
         {"^/api/tokens/([0-9]+)$",                      backend::DELETE,                handle_personal_access_token_delete },
         {"^/api/permissions/my$",                       backend::GET,                   handle_my_permissions       },
+        {"^/api/automation/rules$",                     backend::GET | backend::POST,   handle_automation_rules     },
+        {"^/api/automation/rules/([0-9]+)$",            backend::GET | backend::PUT | backend::DELETE, handle_automation_rule_detail},
+        {"^/api/automation/rules/([0-9]+)/toggle$",     backend::POST,                  handle_automation_rule_toggle},
+        {"^/api/automation/rules/([0-9]+)/execute$",    backend::POST,                  handle_automation_rule_execute},
+        {"^/api/automation/rules/([0-9]+)/logs$",       backend::GET,                   handle_automation_rule_logs },
+        {"^/api/automation/logs$",                      backend::GET,                   handle_automation_logs      },
+        {"^/api/automation/webhook/([A-Za-z0-9_-]+)$",  backend::POST,                  handle_automation_webhook   },
+        {"^/api/automation/cron$",                      backend::POST,                  handle_automation_cron      },
     });
 
     server.init(socket_name.c_str(), backlog, worker_num);

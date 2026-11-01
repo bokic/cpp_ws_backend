@@ -142,6 +142,10 @@ public:
         add(key, make_double(val));
     }
 
+    void add_null(const char *key) {
+        add(key, make_null());
+    }
+
     void add_nullable_int(const char *key, int val) {
         if (val <= 0) {
             add(key, make_null());
@@ -201,6 +205,26 @@ public:
         json_object *field = nullptr;
         if (!json_object_object_get_ex(m_obj, key, &field) || !field) return true;
         return json_object_is_type(field, json_type_null) != 0;
+    }
+
+    bool is_array() const noexcept {
+        return m_obj && json_object_is_type(m_obj, json_type_array);
+    }
+
+    bool is_object() const noexcept {
+        return m_obj && json_object_is_type(m_obj, json_type_object);
+    }
+
+    size_t array_length() const noexcept {
+        return is_array() ? static_cast<size_t>(json_object_array_length(m_obj)) : 0;
+    }
+
+    json_value array_get(size_t idx) const {
+        if (!is_array()) return json_value(nullptr);
+        json_object *elem = json_object_array_get_idx(m_obj, idx);
+        if (!elem) return json_value(nullptr);
+        json_object_get(elem);
+        return json_value(elem);
     }
 
     std::vector<int> get_int_array(const char *key) const {

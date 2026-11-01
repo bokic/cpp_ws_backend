@@ -11,7 +11,7 @@
 
 namespace db {
 
-static constexpr int LATEST_SCHEMA_VERSION = 16;
+static constexpr int LATEST_SCHEMA_VERSION = 17;
 
 struct migration_step {
     int version;
@@ -1684,6 +1684,130 @@ VALUES
 
 UPDATE projects SET permission_scheme_id = 1 WHERE permission_scheme_id IS NULL;
 UPDATE projects SET security_scheme_id = 1 WHERE security_scheme_id IS NULL;
+)SQL"
+        },
+        {
+            17,
+            "db/migrations/017_automation_engine.sql",
+            "No-Code Automation Engine: automation_rules, triggers, conditions, actions, and audit logs",
+            R"SQL(
+CREATE TABLE IF NOT EXISTS automation_rules (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id        INTEGER DEFAULT NULL,
+    name              TEXT NOT NULL,
+    description       TEXT DEFAULT '',
+    is_enabled        INTEGER NOT NULL DEFAULT 1,
+    trigger_type      TEXT NOT NULL,
+    trigger_config    TEXT NOT NULL DEFAULT '{}',
+    conditions_json   TEXT NOT NULL DEFAULT '[]',
+    actions_json      TEXT NOT NULL DEFAULT '[]',
+    created_by        INTEGER DEFAULT NULL,
+    created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    execution_count   INTEGER NOT NULL DEFAULT 0,
+    last_executed_at  TEXT DEFAULT '',
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_automation_rules_project ON automation_rules(project_id);
+CREATE INDEX IF NOT EXISTS idx_automation_rules_trigger ON automation_rules(trigger_type, is_enabled);
+
+CREATE TABLE IF NOT EXISTS automation_triggers (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    rule_id      INTEGER NOT NULL,
+    trigger_type TEXT NOT NULL,
+    config_json  TEXT NOT NULL DEFAULT '{}',
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (rule_id) REFERENCES automation_rules(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_automation_triggers_rule ON automation_triggers(rule_id);
+CREATE INDEX IF NOT EXISTS idx_automation_triggers_type ON automation_triggers(trigger_type);
+
+CREATE TABLE IF NOT EXISTS automation_conditions (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    rule_id        INTEGER NOT NULL,
+    condition_type TEXT NOT NULL,
+    config_json    TEXT NOT NULL DEFAULT '{}',
+    sort_order     INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (rule_id) REFERENCES automation_rules(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_automation_conditions_rule ON automation_conditions(rule_id);
+
+CREATE TABLE IF NOT EXISTS automation_actions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    rule_id     INTEGER NOT NULL,
+    action_type TEXT NOT NULL,
+    config_json TEXT NOT NULL DEFAULT '{}',
+    sort_order  INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY (rule_id) REFERENCES automation_rules(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_automation_actions_rule ON automation_actions(rule_id);
+
+CREATE TABLE IF NOT EXISTS automation_logs (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    rule_id      INTEGER DEFAULT NULL,
+    rule_name    TEXT NOT NULL,
+    trigger_type TEXT NOT NULL,
+    issue_id     INTEGER DEFAULT NULL,
+    issue_key    TEXT DEFAULT '',
+    status       TEXT NOT NULL,
+    duration_ms  REAL NOT NULL DEFAULT 0.0,
+    log_trace    TEXT DEFAULT '',
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (rule_id) REFERENCES automation_rules(id) ON DELETE SET NULL,
+    FOREIGN KEY (issue_id) REFERENCES work_items(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_automation_logs_rule ON automation_logs(rule_id);
+CREATE INDEX IF NOT EXISTS idx_automation_logs_issue ON automation_logs(issue_id);
+CREATE INDEX IF NOT EXISTS idx_automation_logs_status ON automation_logs(status);
+CREATE INDEX IF NOT EXISTS idx_automation_logs_created ON automation_logs(created_at DESC);
+
+INSERT OR IGNORE INTO automation_rules (
+    id, project_id, name, description, is_enabled, trigger_type, trigger_config,
+    conditions_json, actions_json, created_by
+) VALUES (
+    1, NULL, 'Auto-close Subtasks when Issue is Done',
+    'When an issue transitions to Done, automatically transition all child subtasks to Done.',
+    1, 'status_changed', '{"to_status": "Done"}',
+    '[{"type": "has_subtasks"}]',
+    '[{"type": "branch", "target": "subtasks", "actions": [{"type": "transition_issue", "status": "Done"}]}]',
+    NULL
+);
+
+INSERT OR IGNORE INTO automation_triggers (id, rule_id, trigger_type, config_json)
+VALUES (1, 1, 'status_changed', '{"to_status": "Done"}');
+
+INSERT OR IGNORE INTO automation_conditions (id, rule_id, condition_type, config_json, sort_order)
+VALUES (1, 1, 'has_subtasks', '{}', 1);
+
+INSERT OR IGNORE INTO automation_actions (id, rule_id, action_type, config_json, sort_order)
+VALUES (1, 1, 'branch', '{"target": "subtasks", "actions": [{"type": "transition_issue", "status": "Done"}]}', 1);
+
+INSERT OR IGNORE INTO automation_rules (
+    id, project_id, name, description, is_enabled, trigger_type, trigger_config,
+    conditions_json, actions_json, created_by
+) VALUES (
+    2, NULL, 'Critical Bug Auto-Triage',
+    'When a Critical or Highest priority Bug is submitted, add an automated priority triage comment.',
+    1, 'issue_created', '{}',
+    '[{"type": "jql", "jql": "type = ''Bug'' AND priority IN (''High'', ''Highest'')"}, {"type": "issue_field", "field": "priority", "operator": "in", "value": "High,Highest"}]',
+    '[{"type": "add_comment", "body": "⚠️ Critical Bug {{issue.key}} created by {{issue.reporter}}! Priority is {{issue.priority}}. Auto-alerting QA and Dev teams."}]',
+    NULL
+);
+
+INSERT OR IGNORE INTO automation_triggers (id, rule_id, trigger_type, config_json)
+VALUES (2, 2, 'issue_created', '{}');
+
+INSERT OR IGNORE INTO automation_conditions (id, rule_id, condition_type, config_json, sort_order)
+VALUES (2, 2, 'jql', '{"jql": "type = ''Bug'' AND priority IN (''High'', ''Highest'')"}', 1);
+
+INSERT OR IGNORE INTO automation_actions (id, rule_id, action_type, config_json, sort_order)
+VALUES (2, 2, 'add_comment', '{"body": "⚠️ Critical Bug {{issue.key}} created by {{issue.reporter}}! Priority is {{issue.priority}}. Auto-alerting QA and Dev teams."}', 1);
 )SQL"
         }
     };

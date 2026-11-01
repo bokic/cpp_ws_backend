@@ -1,6 +1,11 @@
 import { Injectable, computed, signal } from '@angular/core';
 import {
   AttachmentItem,
+  AutomationAction,
+  AutomationCondition,
+  AutomationLog,
+  AutomationRule,
+  AutomationTriggerConfig,
   BoardColumn,
   BoardConfig,
   BoardItemsPayload,
@@ -2005,5 +2010,69 @@ export class ApiService {
   async getMyPermissions(projectId?: number): Promise<UserMyPermissions> {
     const q = projectId ? `?project_id=${projectId}` : '';
     return this.request<UserMyPermissions>(`/api/permissions/my${q}`);
+  }
+
+  // Step 12: Automation for Jira Rules Engine APIs
+  async getAutomationRules(projectId?: number): Promise<AutomationRule[]> {
+    const q = projectId ? `?project_id=${projectId}` : '';
+    return this.request<AutomationRule[]>(`/api/automation/rules${q}`);
+  }
+
+  async getAutomationRule(id: number): Promise<AutomationRule> {
+    return this.request<AutomationRule>(`/api/automation/rules/${id}`);
+  }
+
+  async createAutomationRule(data: Partial<AutomationRule>): Promise<AutomationRule> {
+    return this.request<AutomationRule>('/api/automation/rules', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateAutomationRule(id: number, data: Partial<AutomationRule>): Promise<AutomationRule> {
+    return this.request<AutomationRule>(`/api/automation/rules/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteAutomationRule(id: number): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>(`/api/automation/rules/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async toggleAutomationRule(id: number): Promise<{ id: number; is_enabled: boolean }> {
+    return this.request<{ id: number; is_enabled: boolean }>(`/api/automation/rules/${id}/toggle`, {
+      method: 'POST',
+    });
+  }
+
+  async executeAutomationRule(
+    id: number,
+    payload?: { issue_id?: number; issue_key?: string }
+  ): Promise<{ rule_id: number; rule_name: string; status: string; duration_ms: number; trace: string }> {
+    return this.request<{ rule_id: number; rule_name: string; status: string; duration_ms: number; trace: string }>(
+      `/api/automation/rules/${id}/execute`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload || {}),
+      }
+    );
+  }
+
+  async getAutomationLogs(ruleId?: number): Promise<AutomationLog[]> {
+    const q = ruleId ? `?rule_id=${ruleId}` : '';
+    return this.request<AutomationLog[]>(`/api/automation/logs${q}`);
+  }
+
+  async getAutomationRuleLogs(ruleId: number): Promise<AutomationLog[]> {
+    return this.request<AutomationLog[]>(`/api/automation/rules/${ruleId}/logs`);
+  }
+
+  async triggerAutomationCron(): Promise<{ success: boolean; message: string }> {
+    return this.request<{ success: boolean; message: string }>('/api/automation/cron', {
+      method: 'POST',
+    });
   }
 }

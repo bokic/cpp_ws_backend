@@ -1251,6 +1251,79 @@ export interface UserMyPermissions {
   permissions: string[];
 }
 
+// ============================================================================
+// Step 12: No-Code Automation Engine Interfaces
+// ============================================================================
+
+export interface AutomationTriggerConfig {
+  to_status?: string;
+  from_status?: string;
+  field_name?: string;
+  [key: string]: any;
+}
+
+export interface AutomationCondition {
+  type: 'jql' | 'issue_field' | 'user_condition' | 'has_subtasks';
+  jql?: string;
+  field?: string;
+  operator?: string;
+  value?: string;
+  check?: string;
+  group?: string;
+  [key: string]: any;
+}
+
+export interface AutomationAction {
+  type: 'transition_issue' | 'edit_field' | 'create_subtask' | 'create_issue' | 'add_comment' | 'send_notification' | 'http_request' | 'branch';
+  status?: string;
+  field?: string;
+  value?: string;
+  title?: string;
+  description?: string;
+  body?: string;
+  target?: string;
+  jql?: string;
+  url?: string;
+  method?: string;
+  issue_type?: string;
+  priority?: string;
+  actions?: AutomationAction[];
+  [key: string]: any;
+}
+
+export interface AutomationRule {
+  id: number;
+  project_id?: number | null;
+  project_key?: string;
+  project_name?: string;
+  name: string;
+  description: string;
+  is_enabled: boolean;
+  trigger_type: string;
+  trigger_config: AutomationTriggerConfig;
+  conditions: AutomationCondition[];
+  actions: AutomationAction[];
+  created_by?: number | null;
+  creator_name?: string;
+  created_at: string;
+  updated_at: string;
+  execution_count: number;
+  last_executed_at?: string;
+}
+
+export interface AutomationLog {
+  id: number;
+  rule_id?: number | null;
+  rule_name: string;
+  trigger_type: string;
+  issue_id?: number | null;
+  issue_key: string;
+  status: 'SUCCESS' | 'FAILED' | 'NO_ACTIONS' | 'ERROR';
+  duration_ms: number;
+  log_trace: string;
+  created_at: string;
+}
+
 
 
 

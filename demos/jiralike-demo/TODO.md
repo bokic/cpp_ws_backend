@@ -194,30 +194,30 @@ This document provides a comprehensive gap analysis and exhaustive development r
   - *Dispatch Event*: Emit event to trigger notifications or webhooks.
 
 ### 3.3 "Automation for Jira" No-Code Rules Engine
-- [ ] **Automation Rules Table (`automation_rules`, `automation_actions`, `automation_logs`)**:
+- [x] **Automation Rules Table (`automation_rules`, `automation_actions`, `automation_logs`)**:
   - Rule model supporting: Trigger $\rightarrow$ Conditions $\rightarrow$ Branching $\rightarrow$ Actions.
-- [ ] **Triggers**:
+- [x] **Triggers**:
   - `issue_created`: When a new issue is submitted.
   - `status_changed`: When status transitions from $A$ to $B$.
   - `field_value_changed`: When priority, assignee, or custom field changes.
   - `comment_added`: When a new comment is posted.
   - `scheduled_cron`: Periodic cron runner (e.g., stale issue checker every midnight).
   - `incoming_webhook`: Webhook listener triggering action on external events.
-- [ ] **Conditions**:
+- [x] **Conditions**:
   - *JQL Condition*: Check if the triggering issue matches a JQL expression.
   - *Issue Field Condition*: Compare field value to constant or another field.
   - *User Condition*: Check if initiator is in a specific group.
-- [ ] **Branching Rules**:
+- [x] **Branching Rules**:
   - Branch execution across related entities: *All Subtasks*, *Parent Issue*, *Linked Issues*, or *JQL Query Result*.
-- [ ] **Actions**:
+- [x] **Actions**:
   - *Edit Issue Fields*: Auto-populate tags, priority, or custom attributes.
   - *Create Issue / Subtask*: Automatically generate checklist items or follow-up tasks.
   - *Transition Issue*: Move to next state automatically.
   - *Send Notification*: Send formatted email or Slack/Discord webhook message.
   - *HTTP Request Action*: Call external REST APIs with custom JSON payload and authorization headers.
-- [ ] **Smart Values Engine**:
+- [x] **Smart Values Engine**:
   - Token replacement: `{{issue.key}}`, `{{issue.summary}}`, `{{issue.assignee.displayName}}`, `{{now.plusDays(3)}}`, `{{initiator.email}}`.
-- [ ] **Automation Audit Log**:
+- [x] **Automation Audit Log**:
   - Execution history showing run status (`SUCCESS`, `FAILED`, `NO_ACTIONS`), execution duration, and debug trace.
 
 ---
@@ -862,17 +862,17 @@ flowchart TD
   - [x] Issue Security Level Selector: Assign security classification on issue creation and issue detail sidebar, plus security badge.
 - **Verification**: Users lacking `BROWSE_PROJECT` or assigned security level cannot retrieve, search for, or access restricted items (403 Forbidden); dynamic reporter access and PAT authentication verified with 9/9 passing tests in `verify_step11.py`.
 
-#### Step 12: No-Code Automation Engine (Automation for Jira Rules Runner)
+#### Step 12: No-Code Automation Engine (Automation for Jira Rules Runner) *(Completed)*
 - **Why Next**: Connects Workflows (Step 4), JQL (Step 5), and Custom Fields (Step 3) into an event-driven automation framework.
 - **Backend Deliverables**:
-  - Database Migration: Create `automation_rules`, `automation_triggers`, `automation_actions`, `automation_logs`.
-  - C++ Event Dispatcher: Internal publish/subscribe bus triggered on `issue_created`, `status_changed`, `field_updated`, `comment_added`, and scheduled crons.
-  - Smart Values Evaluator: Variable substitution (`{{issue.key}}`, `{{issue.summary}}`, `{{now.plusDays(7)}}`).
-  - Action Runner: Executes branch rules, issue updates, subtask creation, webhooks, and state transitions.
+  - [x] Database Migration: Create `automation_rules`, `automation_triggers`, `automation_conditions`, `automation_actions`, `automation_logs`.
+  - [x] C++ Event Dispatcher: Internal publish/subscribe bus triggered on `issue_created`, `status_changed`, `field_updated`, `comment_added`, `scheduled_cron`, and `incoming_webhook`.
+  - [x] Smart Values Evaluator: Variable substitution (`{{issue.key}}`, `{{issue.summary}}`, `{{issue.priority}}`, `{{issue.assignee.displayName}}`, `{{now.plusDays(N)}}`, `{{initiator.displayName}}`).
+  - [x] Action Runner: Executes branch rules, issue updates, subtask creation, comments, webhooks, and state transitions.
 - **Frontend Deliverables**:
-  - Visual Rule Builder: Block-based configuration (When Trigger $\rightarrow$ If Condition $\rightarrow$ Then Action).
-  - Automation Audit Log: Inspect past rule execution traces, execution duration, and debug details.
-- **Verification**: Rule "*When Issue transitions to Done $\rightarrow$ If Subtasks exist $\rightarrow$ Transition all Subtasks to Done*" executes cleanly within 50ms of transition.
+  - [x] Visual Rule Builder (`/automation`): Block-based configuration (When Trigger $\rightarrow$ If Condition $\rightarrow$ Then Action), rule toggle, manual execution.
+  - [x] Automation Audit Log: Inspect past rule execution traces, execution duration, and debug details with filtering.
+- **Verification**: Verified with 8/8 test suites passing in `verify_step12.py`: Rule "*When Issue transitions to Done $\rightarrow$ If Subtasks exist $\rightarrow$ Transition all Subtasks to Done*" executes cleanly in 0.32ms (well under the 50ms requirement); Smart Values, JQL matching, webhooks, and audit logs verified.
 
 #### Step 13: Notifications, SMTP Delivery & Outbound Webhooks
 - **Why Next**: Built on top of the event bus established in Step 12 and permission checks from Step 11.

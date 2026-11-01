@@ -1,0 +1,837 @@
+<div class="automation-page">
+  <!-- Top Header -->
+  <div class="page-header">
+    <div class="header-left">
+      <div class="header-title-row">
+        <span class="header-icon">⚡</span>
+        <h1>Automation for Jira</h1>
+        <span class="schema-badge">Engine v1.0</span>
+      </div>
+      <p class="subtitle">
+        Build event-driven no-code rules with triggers, conditions, branching, actions, and smart value interpolation.
+      </p>
+    </div>
+
+    <div class="header-actions">
+      <button class="btn btn-secondary" (click)="triggerCron()" [disabled]="isLoading()">
+        ⏱️ Run Cron Jobs
+      </button>
+      <button class="btn btn-primary" (click)="openCreateRuleModal()">
+        + Create Rule
+      </button>
+    </div>
+  </div>
+
+  <!-- Feedback Banners -->
+  @if (successMessage()) {
+    <div class="alert alert-success">
+      <span>✓ {{ successMessage() }}</span>
+      <button class="close-btn" (click)="successMessage.set('')">×</button>
+    </div>
+  }
+  @if (errorMessage()) {
+    <div class="alert alert-danger">
+      <span>⚠️ {{ errorMessage() }}</span>
+      <button class="close-btn" (click)="errorMessage.set('')">×</button>
+    </div>
+  }
+
+  <!-- Stats Ribbon -->
+  <div class="stats-ribbon">
+    <div class="stat-card">
+      <div class="stat-value">{{ rules().length }}</div>
+      <div class="stat-label">Total Rules</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value text-success">{{ activeRulesCount() }}</div>
+      <div class="stat-label">Active Rules</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value text-info">{{ totalExecutions() }}</div>
+      <div class="stat-label">Total Executions</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value text-purple">{{ logs().length }}</div>
+      <div class="stat-label">Audit Logs Recorded</div>
+    </div>
+  </div>
+
+  <!-- Main Tabs -->
+  <div class="nav-tabs">
+    <button
+      class="tab-btn"
+      [class.active]="activeTab() === 'rules'"
+      (click)="activeTab.set('rules')"
+    >
+      ⚙️ Automation Rules ({{ rules().length }})
+    </button>
+    <button
+      class="tab-btn"
+      [class.active]="activeTab() === 'logs'"
+      (click)="activeTab.set('logs')"
+    >
+      📋 Audit Logs ({{ logs().length }})
+    </button>
+  </div>
+
+  <!-- TAB 1: RULES LIST -->
+  @if (activeTab() === 'rules') {
+    <div class="tab-content">
+      <div class="toolbar">
+        <div class="search-box">
+          <span class="search-icon">🔍</span>
+          <input
+            type="text"
+            placeholder="Search rules by name, description or trigger..."
+            [ngModel]="searchQuery()"
+            (ngModelChange)="searchQuery.set($event)"
+          />
+        </div>
+
+        <div class="filter-group">
+          <label>Scope:</label>
+          <select
+            [ngModel]="selectedProjectFilter()"
+            (ngModelChange)="selectedProjectFilter.set($event ? +$event : null)"
+          >
+            <option [ngValue]="null">All Projects (Global &amp; Local)</option>
+            @for (p of projects(); track p.id) {
+              <option [ngValue]="p.id">{{ p.name }} ({{ p.key }})</option>
+            }
+          </select>
+        </div>
+      </div>
+
+      @if (filteredRules().length === 0) {
+        <div class="empty-state">
+          <div class="empty-icon">⚡</div>
+          <h3>No automation rules found</h3>
+          <p>Get started by building your first no-code automation rule or load a template.</p>
+          <button class="btn btn-primary" (click)="openCreateRuleModal()">
+            + Create First Rule
+          </button>
+        </div>
+      } @else {
+        <div class="rules-grid">
+          @for (rule of filteredRules(); track rule.id) {
+            <div class="rule-card" [class.disabled]="!rule.is_enabled">
+              <div class="rule-header">
+                <div class="rule-title-group">
+                  <div class="switch-wrapper" title="Toggle rule state">
+                    <input
+                      type="checkbox"
+                      [id]="'switch-' + rule.id"
+                      [checked]="rule.is_enabled"
+                      (change)="toggleRule(rule)"
+                    />
+                    <label [for]="'switch-' + rule.id"></label>
+                  </div>
+                  <div>
+                    <h3 class="rule-name">{{ rule.name }}</h3>
+                    <div class="rule-meta">
+                      <span class="scope-pill" [class.global]="!rule.project_id">
+                        {{ rule.project_key ? rule.project_key : 'Global Rule' }}
+                      </span>
+                      <span class="exec-pill">
+                        ⚡ {{ rule.execution_count }} runs
+                      </span>
+                      @if (rule.last_executed_at) {
+                        <span class="time-pill">
+                          Last run: {{ rule.last_executed_at }}
+                        </span>
+                      }
+                    </div>
+                  </div>
+                </div>
+
+                <div class="rule-actions">
+                  <button class="btn btn-sm btn-outline" (click)="openRunModal(rule)" title="Test rule manually">
+                    ▶ Run
+                  </button>
+                  <button class="btn btn-sm btn-outline" (click)="openEditRuleModal(rule)" title="Edit rule configuration">
+                    ✏ Edit
+                  </button>
+                  <button class="btn btn-sm btn-outline" (click)="viewRuleLogs(rule)" title="Inspect execution audit logs">
+                    📜 Logs
+                  </button>
+                  <button class="btn btn-sm btn-danger-outline" (click)="deleteRule(rule)" title="Delete rule">
+                    🗑
+                  </button>
+                </div>
+              </div>
+
+              @if (rule.description) {
+                <p class="rule-description">{{ rule.description }}</p>
+              }
+
+              <!-- Visual Flow Badges -->
+              <div class="flow-diagram">
+                <!-- Trigger -->
+                <div class="flow-step trigger-step">
+                  <span class="flow-badge trigger-badge">
+                    <span class="flow-icon">{{ getTriggerIcon(rule.trigger_type) }}</span>
+                    <span>When: <strong>{{ getTriggerLabel(rule.trigger_type) }}</strong></span>
+                  </span>
+                  @if (rule.trigger_type === 'status_changed' && rule.trigger_config.to_status) {
+                    <span class="config-tag">➔ {{ rule.trigger_config.to_status }}</span>
+                  }
+                  @if (rule.trigger_type === 'field_value_changed' && rule.trigger_config.field_name) {
+                    <span class="config-tag">Field: {{ rule.trigger_config.field_name }}</span>
+                  }
+                </div>
+
+                <div class="flow-arrow">➔</div>
+
+                <!-- Conditions -->
+                <div class="flow-step condition-step">
+                  <span class="flow-badge condition-badge">
+                    <span class="flow-icon">❓</span>
+                    <span>
+                      If: <strong>{{ rule.conditions.length }} Condition{{ rule.conditions.length === 1 ? '' : 's' }}</strong>
+                    </span>
+                  </span>
+                  @for (c of rule.conditions; track $index) {
+                    @if (c.type === 'jql') {
+                      <span class="config-tag" title="JQL Query">JQL: {{ c.jql }}</span>
+                    }
+                    @if (c.type === 'issue_field') {
+                      <span class="config-tag">{{ c.field }} {{ c.operator }} {{ c.value }}</span>
+                    }
+                    @if (c.type === 'has_subtasks') {
+                      <span class="config-tag">Has Subtasks</span>
+                    }
+                  }
+                </div>
+
+                <div class="flow-arrow">➔</div>
+
+                <!-- Actions -->
+                <div class="flow-step action-step">
+                  <span class="flow-badge action-badge">
+                    <span class="flow-icon">🚀</span>
+                    <span>
+                      Then: <strong>{{ rule.actions.length }} Action{{ rule.actions.length === 1 ? '' : 's' }}</strong>
+                    </span>
+                  </span>
+                  @for (a of rule.actions; track $index) {
+                    @if (a.type === 'transition_issue') {
+                      <span class="config-tag">Transition to {{ a.status }}</span>
+                    }
+                    @if (a.type === 'add_comment') {
+                      <span class="config-tag">Add Comment</span>
+                    }
+                    @if (a.type === 'edit_field') {
+                      <span class="config-tag">Set {{ a.field }}</span>
+                    }
+                    @if (a.type === 'create_subtask') {
+                      <span class="config-tag">Create Subtask</span>
+                    }
+                    @if (a.type === 'branch') {
+                      <span class="config-tag branch-tag">Branch: {{ a.target }} ({{ a.actions?.length || 0 }} actions)</span>
+                    }
+                  }
+                </div>
+              </div>
+            </div>
+          }
+        </div>
+      }
+    </div>
+  }
+
+  <!-- TAB 2: AUDIT LOGS -->
+  @if (activeTab() === 'logs') {
+    <div class="tab-content">
+      <div class="toolbar">
+        <div class="filter-group">
+          <label>Filter by Rule:</label>
+          <select
+            [ngModel]="logRuleFilter()"
+            (ngModelChange)="logRuleFilter.set($event ? +$event : null); refreshLogs()"
+          >
+            <option [ngValue]="null">All Rules</option>
+            @for (r of rules(); track r.id) {
+              <option [ngValue]="r.id">{{ r.name }}</option>
+            }
+          </select>
+        </div>
+
+        <div class="filter-group">
+          <label>Status:</label>
+          <select
+            [ngModel]="logStatusFilter()"
+            (ngModelChange)="logStatusFilter.set($event)"
+          >
+            <option value="ALL">All Outcomes</option>
+            <option value="SUCCESS">SUCCESS (Executed)</option>
+            <option value="NO_ACTIONS">NO_ACTIONS (Condition check halted)</option>
+            <option value="FAILED">FAILED (Errors)</option>
+            <option value="ERROR">ERROR</option>
+          </select>
+        </div>
+
+        <button class="btn btn-secondary btn-sm" (click)="refreshLogs()">
+          🔄 Refresh Logs
+        </button>
+      </div>
+
+      @if (filteredLogs().length === 0) {
+        <div class="empty-state">
+          <div class="empty-icon">📜</div>
+          <h3>No execution logs recorded</h3>
+          <p>Execution logs will appear here once rules are triggered by work item events or manual runs.</p>
+        </div>
+      } @else {
+        <div class="table-container">
+          <table class="logs-table">
+            <thead>
+              <tr>
+                <th style="width: 100px;">Status</th>
+                <th>Rule Name</th>
+                <th>Trigger Event</th>
+                <th>Issue</th>
+                <th style="width: 110px;">Execution Time</th>
+                <th style="width: 160px;">Date &amp; Time</th>
+                <th style="width: 80px;">Trace</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (log of filteredLogs(); track log.id) {
+                <tr class="log-row" [class.expanded]="expandedLogId() === log.id">
+                  <td>
+                    <span
+                      class="status-pill"
+                      [class.pill-success]="log.status === 'SUCCESS'"
+                      [class.pill-info]="log.status === 'NO_ACTIONS'"
+                      [class.pill-danger]="log.status === 'FAILED' || log.status === 'ERROR'"
+                    >
+                      {{ log.status }}
+                    </span>
+                  </td>
+                  <td>
+                    <strong>{{ log.rule_name }}</strong>
+                  </td>
+                  <td>
+                    <span class="trigger-name">⚡ {{ log.trigger_type }}</span>
+                  </td>
+                  <td>
+                    @if (log.issue_key) {
+                      <a [routerLink]="['/items', log.issue_key]" class="issue-key-link">
+                        {{ log.issue_key }}
+                      </a>
+                    } @else {
+                      <span class="text-muted">—</span>
+                    }
+                  </td>
+                  <td>
+                    <span
+                      class="duration-badge"
+                      [class.ultra-fast]="log.duration_ms < 50"
+                      title="Total execution time"
+                    >
+                      {{ log.duration_ms | number:'1.2-2' }} ms
+                    </span>
+                  </td>
+                  <td class="text-muted">{{ log.created_at }}</td>
+                  <td>
+                    <button
+                      class="btn btn-xs btn-outline"
+                      (click)="toggleExpandLog(log.id)"
+                    >
+                      {{ expandedLogId() === log.id ? 'Hide' : 'Trace' }}
+                    </button>
+                  </td>
+                </tr>
+
+                @if (expandedLogId() === log.id) {
+                  <tr class="trace-row">
+                    <td colspan="7">
+                      <div class="trace-box">
+                        <div class="trace-header">
+                          <strong>Execution Trace for Log #{{ log.id }}</strong>
+                          <span class="badge badge-light">{{ log.duration_ms | number:'1.2-2' }} ms</span>
+                        </div>
+                        <pre class="trace-content">{{ log.log_trace || 'No detailed trace available.' }}</pre>
+                      </div>
+                    </td>
+                  </tr>
+                }
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+    </div>
+  }
+
+  <!-- MODAL: VISUAL RULE BUILDER -->
+  @if (showBuilderModal()) {
+    <div class="modal-backdrop" (click)="closeBuilderModal()">
+      <div class="modal-card wide-modal" (click)="$event.stopPropagation()">
+        <div class="modal-header">
+          <h2>{{ isEditingRule() ? 'Edit Automation Rule' : 'Visual Automation Rule Builder' }}</h2>
+          <button class="modal-close" (click)="closeBuilderModal()">×</button>
+        </div>
+
+        <div class="modal-body">
+          <!-- Template selector -->
+          @if (!isEditingRule()) {
+            <div class="template-selector">
+              <span class="template-title">💡 Quick Start Templates:</span>
+              <button
+                type="button"
+                class="btn btn-xs btn-secondary"
+                (click)="loadTemplate('auto_close_subtasks')"
+              >
+                ★ Auto-close Subtasks when Story is Done
+              </button>
+              <button
+                type="button"
+                class="btn btn-xs btn-secondary"
+                (click)="loadTemplate('critical_bug')"
+              >
+                ⚠️ Critical Bug Escalation
+              </button>
+              <button
+                type="button"
+                class="btn btn-xs btn-secondary"
+                (click)="loadTemplate('welcome_comment')"
+              >
+                💬 Welcome Comment &amp; Due Date
+              </button>
+            </div>
+          }
+
+          <!-- Rule Details Section -->
+          <div class="form-section">
+            <h4 class="section-title">1. General Rule Information</h4>
+            <div class="form-row">
+              <div class="form-group flex-2">
+                <label>Rule Name *</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Auto-close subtasks when Story is Done"
+                  [ngModel]="builderName()"
+                  (ngModelChange)="builderName.set($event)"
+                />
+              </div>
+              <div class="form-group flex-1">
+                <label>Project Scope</label>
+                <select
+                  [ngModel]="builderProjectId()"
+                  (ngModelChange)="builderProjectId.set($event ? +$event : null)"
+                >
+                  <option [ngValue]="null">Global Rule (All Projects)</option>
+                  @for (p of projects(); track p.id) {
+                    <option [ngValue]="p.id">{{ p.name }} ({{ p.key }})</option>
+                  }
+                </select>
+              </div>
+              <div class="form-group flex-0">
+                <label>Status</label>
+                <div class="checkbox-row">
+                  <input
+                    type="checkbox"
+                    id="builder-enabled"
+                    [checked]="builderIsEnabled()"
+                    (change)="builderIsEnabled.set(!builderIsEnabled())"
+                  />
+                  <label for="builder-enabled">Enabled</label>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label>Description</label>
+              <textarea
+                rows="2"
+                placeholder="What does this rule automate?"
+                [ngModel]="builderDescription()"
+                (ngModelChange)="builderDescription.set($event)"
+              ></textarea>
+            </div>
+          </div>
+
+          <!-- Trigger Block -->
+          <div class="builder-block trigger-block">
+            <div class="block-header">
+              <span class="block-icon">⚡</span>
+              <h3>WHEN: Select Trigger</h3>
+            </div>
+            <div class="block-body">
+              <div class="form-group">
+                <label>Trigger Event *</label>
+                <select
+                  [ngModel]="builderTriggerType()"
+                  (ngModelChange)="builderTriggerType.set($event)"
+                >
+                  @for (opt of triggerOptions; track opt.type) {
+                    <option [value]="opt.type">{{ opt.icon }} {{ opt.label }}</option>
+                  }
+                </select>
+              </div>
+
+              @if (builderTriggerType() === 'status_changed') {
+                <div class="form-row">
+                  <div class="form-group flex-1">
+                    <label>To Status</label>
+                    <select
+                      [ngModel]="builderToStatus()"
+                      (ngModelChange)="builderToStatus.set($event)"
+                    >
+                      <option value="Done">Done</option>
+                      <option value="In Progress">In Progress</option>
+                      <option value="In Review">In Review</option>
+                      <option value="To Do">To Do</option>
+                      <option value="*">Any Status (*)</option>
+                    </select>
+                  </div>
+                  <div class="form-group flex-1">
+                    <label>From Status</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. * or To Do"
+                      [ngModel]="builderFromStatus()"
+                      (ngModelChange)="builderFromStatus.set($event)"
+                    />
+                  </div>
+                </div>
+              }
+
+              @if (builderTriggerType() === 'field_value_changed') {
+                <div class="form-group">
+                  <label>Monitored Field Name</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. priority, labels, assignee"
+                    [ngModel]="builderFieldName()"
+                    (ngModelChange)="builderFieldName.set($event)"
+                  />
+                </div>
+              }
+            </div>
+          </div>
+
+          <!-- Conditions Block -->
+          <div class="builder-block condition-block">
+            <div class="block-header">
+              <div class="header-left-block">
+                <span class="block-icon">❓</span>
+                <h3>IF: Conditions (Optional)</h3>
+              </div>
+              <div class="block-actions">
+                <button type="button" class="btn btn-xs btn-outline" (click)="addCondition('jql')">
+                  + JQL Condition
+                </button>
+                <button type="button" class="btn btn-xs btn-outline" (click)="addCondition('issue_field')">
+                  + Field Value Condition
+                </button>
+                <button type="button" class="btn btn-xs btn-outline" (click)="addCondition('has_subtasks')">
+                  + Has Subtasks Condition
+                </button>
+                <button type="button" class="btn btn-xs btn-outline" (click)="addCondition('user_condition')">
+                  + User Condition
+                </button>
+              </div>
+            </div>
+
+            <div class="block-body">
+              @if (builderConditions().length === 0) {
+                <p class="empty-block-note">
+                  No conditions configured. The rule will run unconditionally for every trigger event.
+                </p>
+              }
+
+              @for (cond of builderConditions(); track $index) {
+                <div class="condition-item">
+                  <div class="item-title">
+                    <span class="cond-type-pill">{{ cond.type }}</span>
+                    <button class="remove-btn" (click)="removeCondition($index)">×</button>
+                  </div>
+
+                  @if (cond.type === 'jql') {
+                    <div class="form-group">
+                      <label>JQL Query Expression</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. type = 'Bug' AND priority IN ('High', 'Highest')"
+                        [(ngModel)]="cond.jql"
+                      />
+                    </div>
+                  }
+
+                  @if (cond.type === 'issue_field') {
+                    <div class="form-row">
+                      <div class="form-group flex-1">
+                        <label>Field</label>
+                        <select [(ngModel)]="cond.field">
+                          <option value="priority">Priority</option>
+                          <option value="status">Status</option>
+                          <option value="type">Type</option>
+                          <option value="labels">Labels</option>
+                          <option value="title">Summary / Title</option>
+                        </select>
+                      </div>
+                      <div class="form-group flex-1">
+                        <label>Operator</label>
+                        <select [(ngModel)]="cond.operator">
+                          <option value="equals">equals (=)</option>
+                          <option value="not_equals">does not equal (!=)</option>
+                          <option value="contains">contains</option>
+                          <option value="in">is in (comma-separated)</option>
+                          <option value="is_empty">is empty</option>
+                          <option value="is_not_empty">is not empty</option>
+                        </select>
+                      </div>
+                      <div class="form-group flex-1">
+                        <label>Value</label>
+                        <input type="text" placeholder="Value to match" [(ngModel)]="cond.value" />
+                      </div>
+                    </div>
+                  }
+
+                  @if (cond.type === 'has_subtasks') {
+                    <p class="cond-note">Checks whether the triggering work item has one or more child subtasks.</p>
+                  }
+
+                  @if (cond.type === 'user_condition') {
+                    <div class="form-row">
+                      <div class="form-group flex-1">
+                        <label>Check</label>
+                        <select [(ngModel)]="cond.check">
+                          <option value="is_admin">Initiator is Administrator</option>
+                          <option value="in_group">Initiator is in Group</option>
+                        </select>
+                      </div>
+                      @if (cond.check === 'in_group') {
+                        <div class="form-group flex-1">
+                          <label>Group Name</label>
+                          <input type="text" placeholder="e.g. jira-administrators" [(ngModel)]="cond.group" />
+                        </div>
+                      }
+                    </div>
+                  }
+                </div>
+              }
+            </div>
+          </div>
+
+          <!-- Actions Block -->
+          <div class="builder-block action-block">
+            <div class="block-header">
+              <div class="header-left-block">
+                <span class="block-icon">🚀</span>
+                <h3>THEN: Actions &amp; Branching</h3>
+              </div>
+              <div class="block-actions">
+                <button type="button" class="btn btn-xs btn-outline" (click)="addAction('transition_issue')">
+                  + Transition Issue
+                </button>
+                <button type="button" class="btn btn-xs btn-outline" (click)="addAction('add_comment')">
+                  + Add Comment
+                </button>
+                <button type="button" class="btn btn-xs btn-outline" (click)="addAction('edit_field')">
+                  + Edit Field
+                </button>
+                <button type="button" class="btn btn-xs btn-outline" (click)="addAction('create_subtask')">
+                  + Create Subtask
+                </button>
+                <button type="button" class="btn btn-xs btn-primary-outline" (click)="addAction('branch')">
+                  + Branch across Subtasks/Parent
+                </button>
+              </div>
+            </div>
+
+            <div class="block-body">
+              @if (builderActions().length === 0) {
+                <p class="empty-block-note">
+                  No actions configured. Please add at least one action to execute.
+                </p>
+              }
+
+              @for (act of builderActions(); track $index) {
+                <div class="action-item" [class.is-branch]="act.type === 'branch'">
+                  <div class="item-title">
+                    <span class="act-type-pill">{{ act.type }}</span>
+                    <button class="remove-btn" (click)="removeAction($index)">×</button>
+                  </div>
+
+                  @if (act.type === 'transition_issue') {
+                    <div class="form-group">
+                      <label>Target Workflow Status</label>
+                      <select [(ngModel)]="act.status">
+                        <option value="Done">Done (with default resolution Fixed)</option>
+                        <option value="In Progress">In Progress</option>
+                        <option value="In Review">In Review</option>
+                        <option value="QA / Testing">QA / Testing</option>
+                        <option value="To Do">To Do</option>
+                      </select>
+                    </div>
+                  }
+
+                  @if (act.type === 'add_comment') {
+                    <div class="form-group">
+                      <div class="label-with-helpers">
+                        <label>Comment Body</label>
+                        <div class="smart-tags">
+                          <span>Smart Values:</span>
+                          <button type="button" class="tag-btn" (click)="insertSmartToken(act, 'issue.key')" [innerText]="'{{issue.key}}'"></button>
+                          <button type="button" class="tag-btn" (click)="insertSmartToken(act, 'issue.summary')" [innerText]="'{{issue.summary}}'"></button>
+                          <button type="button" class="tag-btn" (click)="insertSmartToken(act, 'issue.reporter')" [innerText]="'{{issue.reporter}}'"></button>
+                          <button type="button" class="tag-btn" (click)="insertSmartToken(act, 'issue.priority')" [innerText]="'{{issue.priority}}'"></button>
+                          <button type="button" class="tag-btn" (click)="insertSmartToken(act, 'now.plusDays(7)')" [innerText]="'{{now.plusDays(7)}}'"></button>
+                        </div>
+                      </div>
+                      <textarea rows="3" placeholder="Automated comment text..." [(ngModel)]="act.body"></textarea>
+                    </div>
+                  }
+
+                  @if (act.type === 'edit_field') {
+                    <div class="form-row">
+                      <div class="form-group flex-1">
+                        <label>Field to Update</label>
+                        <select [(ngModel)]="act.field">
+                          <option value="priority">Priority</option>
+                          <option value="labels">Labels</option>
+                          <option value="description">Description</option>
+                          <option value="severity">Severity</option>
+                        </select>
+                      </div>
+                      <div class="form-group flex-2">
+                        <label>New Value</label>
+                        <input type="text" placeholder="Value or smart value token" [(ngModel)]="act.value" />
+                      </div>
+                    </div>
+                  }
+
+                  @if (act.type === 'create_subtask') {
+                    <div class="form-row">
+                      <div class="form-group flex-2">
+                        <label>Subtask Title</label>
+                        <input type="text" placeholder="e.g. Verify checklist" [(ngModel)]="act.title" />
+                      </div>
+                      <div class="form-group flex-1">
+                        <label>Priority</label>
+                        <select [(ngModel)]="act.priority">
+                          <option value="Highest">Highest</option>
+                          <option value="High">High</option>
+                          <option value="Medium">Medium</option>
+                          <option value="Low">Low</option>
+                        </select>
+                      </div>
+                    </div>
+                  }
+
+                  @if (act.type === 'branch') {
+                    <div class="branch-config">
+                      <div class="form-group">
+                        <label>Branch Target Entity</label>
+                        <select [(ngModel)]="act.target">
+                          <option value="subtasks">All Child Subtasks</option>
+                          <option value="parent">Parent Issue</option>
+                          <option value="linked_issues">All Linked Issues</option>
+                        </select>
+                      </div>
+
+                      <div class="nested-action">
+                        <label>Nested Action on each branched entity:</label>
+                        <div class="form-row">
+                          <div class="form-group flex-1">
+                            <label>Action</label>
+                            <select
+                              [ngModel]="act.actions && act.actions[0] ? act.actions[0].type : 'transition_issue'"
+                              (ngModelChange)="act.actions = [{ type: $event, status: 'Done' }]"
+                            >
+                              <option value="transition_issue">Transition Issue</option>
+                              <option value="add_comment">Add Comment</option>
+                            </select>
+                          </div>
+                          @if (!act.actions || !act.actions[0] || act.actions[0].type === 'transition_issue') {
+                            <div class="form-group flex-1">
+                              <label>Target Status</label>
+                              <select
+                                [ngModel]="act.actions && act.actions[0] ? act.actions[0].status : 'Done'"
+                                (ngModelChange)="act.actions = [{ type: 'transition_issue', status: $event }]"
+                              >
+                                <option value="Done">Done</option>
+                                <option value="In Progress">In Progress</option>
+                                <option value="To Do">To Do</option>
+                              </select>
+                            </div>
+                          }
+                        </div>
+                      </div>
+                    </div>
+                  }
+                </div>
+              }
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button class="btn btn-secondary" (click)="closeBuilderModal()">Cancel</button>
+          <button class="btn btn-primary" (click)="saveRule()" [disabled]="isLoading()">
+            {{ isEditingRule() ? 'Save Changes' : 'Create Rule' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- MODAL: RUN RULE TEST -->
+  @if (showRunModal()) {
+    <div class="modal-backdrop" (click)="closeRunModal()">
+      <div class="modal-card" (click)="$event.stopPropagation()">
+        <div class="modal-header">
+          <h2>Test Automation Rule</h2>
+          <button class="modal-close" (click)="closeRunModal()">×</button>
+        </div>
+
+        <div class="modal-body">
+          <p>
+            Manually trigger rule <strong>{{ runningRule()?.name }}</strong> against an issue to verify trigger conditions and action execution.
+          </p>
+
+          <div class="form-group">
+            <label>Select Work Item Key</label>
+            <div class="input-with-select">
+              <input
+                type="text"
+                placeholder="e.g. JIRA-1"
+                [ngModel]="runIssueKey()"
+                (ngModelChange)="runIssueKey.set($event)"
+              />
+              <select
+                [ngModel]="runIssueKey()"
+                (ngModelChange)="runIssueKey.set($event)"
+              >
+                <option value="">-- Recent Items --</option>
+                @for (item of recentItems(); track item.id) {
+                  <option [value]="item.key">{{ item.key }} - {{ item.title }}</option>
+                }
+              </select>
+            </div>
+          </div>
+
+          @if (runResult(); as res) {
+            <div class="run-result-box" [class.success]="res.status === 'SUCCESS'" [class.error]="res.status === 'ERROR' || res.status === 'FAILED'">
+              <div class="res-title-row">
+                <span class="res-badge">{{ res.status }}</span>
+                <span class="duration-badge ultra-fast">{{ res.duration_ms | number:'1.2-2' }} ms</span>
+              </div>
+              <pre class="trace-content">{{ res.trace }}</pre>
+            </div>
+          }
+        </div>
+
+        <div class="modal-footer">
+          <button class="btn btn-secondary" (click)="closeRunModal()">Close</button>
+          <button class="btn btn-primary" (click)="executeRule()" [disabled]="isExecuting()">
+            {{ isExecuting() ? 'Running...' : 'Execute Rule Now' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  }
+</div>

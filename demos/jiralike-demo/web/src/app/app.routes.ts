@@ -14,6 +14,7 @@ import { SearchComponent } from './pages/search/search.component';
 import { ReportsComponent } from './pages/reports/reports.component';
 import { DashboardsComponent } from './pages/dashboards/dashboards.component';
 import { PermissionsAdminComponent } from './pages/permissions-admin/permissions-admin.component';
+import { AutomationAdminComponent } from './pages/automation-admin/automation-admin.component';
 
 export const routes: Routes = [
   { path: '', pathMatch: 'full', redirectTo: 'dashboards' },
@@ -33,6 +34,8 @@ export const routes: Routes = [
   { path: 'workflows', component: WorkflowsComponent },
   { path: 'permissions', component: PermissionsAdminComponent },
   { path: 'settings/permissions', component: PermissionsAdminComponent },
+  { path: 'automation', component: AutomationAdminComponent },
+  { path: 'settings/automation', component: AutomationAdminComponent },
   { path: 'items/:id', component: ItemDetailComponent },
   { path: ':id', component: ItemDetailComponent },
   { path: '**', redirectTo: 'board' },
