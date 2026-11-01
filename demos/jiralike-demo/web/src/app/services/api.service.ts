@@ -7,6 +7,7 @@ import {
   FieldConfiguration,
   IssueTypeDef,
   IssueTypeScheme,
+  ItemTransitionsPayload,
   Project,
   ProjectComponent,
   ProjectVersion,
@@ -21,7 +22,12 @@ import {
   WorkItem,
   WorkItemDetail,
   WorkItemLink,
+  WorkflowDef,
+  WorkflowSchemeBinding,
   WorkflowState,
+  WorkflowStatusNode,
+  WorkflowTransitionDef,
+  WorkflowTransitionRule,
 } from '../models/jira.models';
 
 @Injectable({
@@ -47,6 +53,8 @@ export class ApiService {
   readonly fieldConfigurations = signal<FieldConfiguration[]>([]);
   readonly screens = signal<ScreenDef[]>([]);
   readonly screenSchemes = signal<ScreenScheme[]>([]);
+  readonly workflows = signal<WorkflowDef[]>([]);
+  readonly workflowSchemes = signal<WorkflowSchemeBinding[]>([]);
   readonly currentSprint = computed<Sprint | null>(() => {
     const list = this.sprints();
     return (
@@ -182,6 +190,8 @@ export class ApiService {
       fcList,
       scrList,
       ssList,
+      wfList,
+      wfsList,
     ] = await Promise.all([
       this.getProjects(),
       this.getUsers(),
@@ -195,6 +205,8 @@ export class ApiService {
       this.getFieldConfigurations().catch(() => [] as FieldConfiguration[]),
       this.getScreens().catch(() => [] as ScreenDef[]),
       this.getScreenSchemes().catch(() => [] as ScreenScheme[]),
+      this.getWorkflows().catch(() => [] as WorkflowDef[]),
+      this.getWorkflowSchemes().catch(() => [] as WorkflowSchemeBinding[]),
     ]);
     this.projects.set(projs);
     if (projs.length > 0 && !this.activeProject()) {
@@ -211,6 +223,8 @@ export class ApiService {
     this.fieldConfigurations.set(fcList);
     this.screens.set(scrList);
     this.screenSchemes.set(ssList);
+    this.workflows.set(wfList);
+    this.workflowSchemes.set(wfsList);
   }
 
   async getResolutions(): Promise<Resolution[]> {
@@ -681,20 +695,189 @@ export class ApiService {
 
   async transitionItemState(
     idOrKey: string | number,
-    status: WorkflowState,
+    status: WorkflowState | string,
     extra: {
+      transition_id?: number;
       progress?: number;
       start_date?: string;
       due_date?: string;
       board_order?: number;
       resolution_id?: number;
+      assignee_id?: number;
+      steps_to_reproduce?: string;
       comment?: string;
+      post_comment?: boolean;
+      custom_fields?: Record<string, any>;
     } = {}
   ): Promise<WorkItem> {
     return this.request<WorkItem>(`/api/items/${encodeURIComponent(String(idOrKey))}/state`, {
       method: 'PATCH',
       body: JSON.stringify({ status, ...extra }),
     });
+  }
+
+  async getItemTransitions(idOrKey: string | number): Promise<ItemTransitionsPayload> {
+    return this.request<ItemTransitionsPayload>(
+      `/api/items/${encodeURIComponent(String(idOrKey))}/transitions`
+    );
+  }
+
+  async getWorkflows(): Promise<WorkflowDef[]> {
+    return this.request<WorkflowDef[]>('/api/workflows');
+  }
+
+  async createWorkflow(payload: {
+    name: string;
+    description: string;
+    is_default?: boolean;
+    clone_from_id?: number;
+  }): Promise<WorkflowDef> {
+    const wf = await this.request<WorkflowDef>('/api/workflows', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    this.workflows.set(await this.getWorkflows());
+    return wf;
+  }
+
+  async updateWorkflow(
+    workflowId: number,
+    payload: {
+      name?: string;
+      description?: string;
+      statuses?: Partial<WorkflowStatusNode>[];
+    }
+  ): Promise<WorkflowDef> {
+    const wf = await this.request<WorkflowDef>(`/api/workflows/${workflowId}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    this.workflows.set(await this.getWorkflows());
+    return wf;
+  }
+
+  async deleteWorkflow(workflowId: number): Promise<void> {
+    await this.request(`/api/workflows/${workflowId}`, { method: 'DELETE' });
+    this.workflows.set(await this.getWorkflows());
+  }
+
+  async addWorkflowStatus(
+    workflowId: number,
+    payload: {
+      name: string;
+      category: string;
+      color?: string;
+      pos_x?: number;
+      pos_y?: number;
+      sort_order?: number;
+      is_initial?: boolean;
+    }
+  ): Promise<WorkflowDef> {
+    const wf = await this.request<WorkflowDef>(`/api/workflows/${workflowId}/statuses`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    this.workflows.set(await this.getWorkflows());
+    return wf;
+  }
+
+  async deleteWorkflowStatus(statusId: number): Promise<void> {
+    await this.request(`/api/workflow-statuses/${statusId}`, { method: 'DELETE' });
+    this.workflows.set(await this.getWorkflows());
+  }
+
+  async addWorkflowTransition(
+    workflowId: number,
+    payload: {
+      name: string;
+      from_status: string;
+      to_status: string;
+      screen_id?: number | null;
+      sort_order?: number;
+    }
+  ): Promise<WorkflowTransitionDef> {
+    const tr = await this.request<WorkflowTransitionDef>(
+      `/api/workflows/${workflowId}/transitions`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    );
+    this.workflows.set(await this.getWorkflows());
+    return tr;
+  }
+
+  async updateWorkflowTransition(
+    transitionId: number,
+    payload: {
+      name?: string;
+      from_status?: string;
+      to_status?: string;
+      screen_id?: number | null;
+    }
+  ): Promise<void> {
+    await this.request(`/api/workflow-transitions/${transitionId}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    this.workflows.set(await this.getWorkflows());
+  }
+
+  async deleteWorkflowTransition(transitionId: number): Promise<void> {
+    await this.request(`/api/workflow-transitions/${transitionId}`, { method: 'DELETE' });
+    this.workflows.set(await this.getWorkflows());
+  }
+
+  async addWorkflowTransitionRule(
+    transitionId: number,
+    payload: {
+      rule_category: 'condition' | 'validator' | 'post_function' | string;
+      rule_type: string;
+      field_name?: string;
+      config_value?: string;
+      description?: string;
+      sort_order?: number;
+    }
+  ): Promise<WorkflowTransitionRule> {
+    const r = await this.request<WorkflowTransitionRule>(
+      `/api/workflow-transitions/${transitionId}/rules`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }
+    );
+    this.workflows.set(await this.getWorkflows());
+    return r;
+  }
+
+  async deleteWorkflowTransitionRule(ruleId: number): Promise<void> {
+    await this.request(`/api/workflow-transition-rules/${ruleId}`, { method: 'DELETE' });
+    this.workflows.set(await this.getWorkflows());
+  }
+
+  async getWorkflowSchemes(): Promise<WorkflowSchemeBinding[]> {
+    return this.request<WorkflowSchemeBinding[]>('/api/workflow-schemes');
+  }
+
+  async saveWorkflowScheme(payload: {
+    name: string;
+    description: string;
+    project_id: number;
+    issue_type: string;
+    workflow_id: number;
+    is_default?: boolean;
+  }): Promise<WorkflowSchemeBinding> {
+    const s = await this.request<WorkflowSchemeBinding>('/api/workflow-schemes', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    this.workflowSchemes.set(await this.getWorkflowSchemes());
+    return s;
+  }
+
+  async deleteWorkflowScheme(schemeId: number): Promise<void> {
+    await this.request(`/api/workflow-schemes/${schemeId}`, { method: 'DELETE' });
+    this.workflowSchemes.set(await this.getWorkflowSchemes());
   }
 
   async deleteItem(idOrKey: string | number): Promise<void> {

@@ -164,29 +164,29 @@ This document provides a comprehensive gap analysis and exhaustive development r
 ## 3. Epic 2: Workflow Engine, State Transitions & Process Automation
 
 ### 3.1 Directed Graph Workflow Engine
-- [ ] **Workflow Definition Schema (`workflows`, `workflow_statuses`, `workflow_transitions`)**:
+- [x] **Workflow Definition Schema (`workflows`, `workflow_statuses`, `workflow_transitions`)**:
   - Graph model where nodes are statuses and directed edges are transitions.
   - Status Categories:
     - `To Do` (Initial states, blue).
     - `In Progress` (Active execution, yellow).
     - `Done` (Terminal states, green).
   - Transition properties: `id`, `workflow_id`, `name`, `from_status_id` (or `*` for all), `to_status_id`, `screen_id`.
-- [ ] **Workflow Schemes (`workflow_schemes`)**:
+- [x] **Workflow Schemes (`workflow_schemes`)**:
   - Bind different workflows to different issue types within a project (e.g., Bug workflow vs Story workflow).
-- [ ] **Visual Workflow Designer**:
+- [x] **Visual Workflow Designer**:
   - Interactive Angular canvas (SVG / HTML5 Canvas / jsPlumb) to design directed graphs, add transitions, and configure properties.
 
 ### 3.2 Transition Controls: Conditions, Validators & Post-Functions
-- [ ] **Workflow Conditions** (Determine whether a transition button is visible/executable):
+- [x] **Workflow Conditions** (Determine whether a transition button is visible/executable):
   - *Only Assignee Condition*: Only the currently assigned user can trigger the transition.
   - *User in Role / Group Condition*: Require specific project role (e.g., QA Engineer for "Verify").
   - *Sub-Tasks Completed Condition*: Prevent transitioning to "Done" until all child subtasks are resolved.
   - *Permission Condition*: Require specific project permission (e.g. "Close Issues").
-- [ ] **Workflow Validators** (Validate input data before allowing state change):
+- [x] **Workflow Validators** (Validate input data before allowing state change):
   - *Field Required Validator*: Require fields (e.g. `resolution`, `due_date`, `steps_to_reproduce`) to be non-empty.
   - *Comment Required Validator*: Demand transition comment explaining the status change.
   - *Regex / Format Validator*: Validate text field formats.
-- [ ] **Workflow Post-Functions** (Automated actions executed immediately after state transition):
+- [x] **Workflow Post-Functions** (Automated actions executed immediately after state transition):
   - *Set Field Value*: Auto-set `resolution` to `Fixed`, update `resolution_date` to `now()`.
   - *Assign to User*: Reassign to Reporter (on "Need Info") or QA Lead (on "Ready for QA").
   - *Clear Field Value*: Clear `resolution` when reopening an issue.
@@ -740,17 +740,17 @@ flowchart TD
   - [x] Dynamic Form Renderer: Render custom fields dynamically in Create and Edit modals based on active screen configurations.
 - **Verification**: Custom field values persist correctly across types and display seamlessly in the work item view.
 
-#### Step 4: Directed Graph Workflow Engine & Transition Screens
+#### Step 4: Directed Graph Workflow Engine & Transition Screens *(Completed)*
 - **Why Next**: Replaces hardcoded linear state changes with directed state graphs. Transition screens (built in Step 3) and resolutions (Step 2) are utilized here.
 - **Backend Deliverables**:
-  - Database Migration: Create `workflows`, `workflow_statuses`, `workflow_transitions`, `workflow_schemes`.
-  - Transition Guard: Evaluate Conditions (user role, assignee check, subtask completion) before presenting available transitions.
-  - Transition Execution Engine: Run Validators $\rightarrow$ execute state change $\rightarrow$ run Post-Functions (auto-assign, set resolution).
-  - Audit logging: Expand `workflow_history` into comprehensive transition logging.
+  - [x] Database Migration: Create `workflows`, `workflow_statuses`, `workflow_transitions`, `workflow_schemes`.
+  - [x] Transition Guard: Evaluate Conditions (user role, assignee check, subtask completion) before presenting available transitions.
+  - [x] Transition Execution Engine: Run Validators $\rightarrow$ execute state change $\rightarrow$ run Post-Functions (auto-assign, set resolution).
+  - [x] Audit logging: Expand `workflow_history` into comprehensive transition logging.
 - **Frontend Deliverables**:
-  - Visual Workflow Designer: Directed graph editor displaying statuses and transitions.
-  - Interactive State Pipeline on Issue Details: Display valid next transitions dynamically based on user permissions.
-  - Transition Screen Modal: Prompt for mandatory fields (e.g., Resolution, Comment, Remaining Estimate) upon transitioning.
+  - [x] Visual Workflow Designer: Directed graph editor displaying statuses and transitions.
+  - [x] Interactive State Pipeline on Issue Details: Display valid next transitions dynamically based on user permissions.
+  - [x] Transition Screen Modal: Prompt for mandatory fields (e.g., Resolution, Comment, Remaining Estimate) upon transitioning.
 - **Verification**: Moving an item respects transition rules (e.g., cannot close without resolution; cannot advance if subtasks open).
 
 #### Step 5: JQL (Jira Query Language) Lexer, Parser & SQLite FTS5 Full-Text Search

@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { ApiService } from '../../services/api.service';
 import {
+  AvailableTransition,
   WORKFLOW_STATES,
   WORK_ITEM_CATEGORIES,
   WORK_ITEM_TYPES,
@@ -235,6 +236,80 @@ import {
           </div>
         }
       </div>
+
+      <!-- Kanban Board Transition Screen Modal -->
+      @if (boardTransitionModal(); as modal) {
+        <div
+          style="position: fixed; inset: 0; background: rgba(15, 23, 42, 0.55); z-index: 1200; display: flex; align-items: center; justify-content: center; padding: 16px;"
+        >
+          <div
+            class="card-panel"
+            style="width: 100%; max-width: 540px; max-height: 90vh; overflow-y: auto; box-shadow: 0 20px 45px rgba(0,0,0,0.25);"
+          >
+            <div class="section-header">
+              <div>
+                <h3>🗔 {{ modal.transition.name }} ({{ modal.item.key }})</h3>
+                <small class="text-muted">
+                  <span class="state-pill" [attr.data-state]="modal.item.status">{{ modal.item.status }}</span>
+                  →
+                  <span class="state-pill" [attr.data-state]="modal.transition.to_status">{{ modal.transition.to_status }}</span>
+                  @if (modal.transition.screen_name) {
+                    · Screen: <strong>{{ modal.transition.screen_name }}</strong>
+                  }
+                </small>
+              </div>
+              <button type="button" class="btn btn-ghost btn-sm" (click)="closeBoardTransitionModal()">✕</button>
+            </div>
+
+            @if (boardModalError()) {
+              <div
+                style="margin: 10px 0; padding: 10px 12px; background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c; border-radius: 6px; font-size: 13px;"
+              >
+                ⚠ {{ boardModalError() }}
+              </div>
+            }
+
+            @if (modal.transition.to_status === 'Done' || hasBoardValidator(modal.transition, 'resolution_id')) {
+              <div class="form-group" style="margin-top: 10px;">
+                <label>
+                  Resolution
+                  <span style="color: #de350b; font-weight: bold;">*</span>
+                </label>
+                <select name="board_tr_res" [(ngModel)]="boardTransitionDraft.resolution_id">
+                  <option [ngValue]="0">— Select Resolution —</option>
+                  @for (r of api.resolutions(); track r.id) {
+                    <option [ngValue]="r.id">✔ {{ r.name }} — {{ r.description }}</option>
+                  }
+                </select>
+              </div>
+            }
+
+            <div class="form-group" style="margin-top: 10px;">
+              <label>
+                Transition Comment
+                @if (hasBoardCommentValidator(modal.transition)) {
+                  <span style="color: #de350b; font-weight: bold;">* (Required)</span>
+                }
+              </label>
+              <textarea
+                rows="3"
+                name="board_tr_comment"
+                [(ngModel)]="boardTransitionDraft.comment"
+                placeholder="Enter transition notes..."
+              ></textarea>
+            </div>
+
+            <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px;">
+              <button type="button" class="btn btn-secondary" (click)="closeBoardTransitionModal()">
+                Cancel
+              </button>
+              <button type="button" class="btn btn-primary" (click)="submitBoardTransitionModal()">
+                Confirm '{{ modal.transition.name }}'
+              </button>
+            </div>
+          </div>
+        </div>
+      }
     </div>
   `,
 })
@@ -256,6 +331,13 @@ export class BoardComponent implements OnInit {
   readonly draggedItem = signal<WorkItem | null>(null);
   readonly dragOverState = signal<WorkflowState | null>(null);
   readonly toastMsg = signal('');
+  readonly boardTransitionModal = signal<{ item: WorkItem; transition: AvailableTransition } | null>(null);
+  readonly boardModalError = signal('');
+
+  boardTransitionDraft = {
+    resolution_id: 1,
+    comment: '',
+  };
 
   readonly itemsMatchingOtherFilters = computed(() => {
     const q = this.searchQuery().trim().toLowerCase();
@@ -359,6 +441,36 @@ export class BoardComponent implements OnInit {
     this.dragOverState.set(null);
   }
 
+  hasBoardValidator(tr: AvailableTransition, fieldName: string): boolean {
+    return tr.validators.some((v) => v.rule_type === 'field_required' && v.field_name === fieldName);
+  }
+
+  hasBoardCommentValidator(tr: AvailableTransition): boolean {
+    return tr.validators.some((v) => v.rule_type === 'comment_required');
+  }
+
+  closeBoardTransitionModal(): void {
+    this.boardTransitionModal.set(null);
+    this.boardModalError.set('');
+  }
+
+  async submitBoardTransitionModal(): Promise<void> {
+    const modal = this.boardTransitionModal();
+    if (!modal) return;
+    try {
+      const updated = await this.api.transitionItemState(modal.item.key, modal.transition.to_status, {
+        transition_id: modal.transition.id,
+        resolution_id: this.boardTransitionDraft.resolution_id || undefined,
+        comment: this.boardTransitionDraft.comment.trim() || undefined,
+      });
+      this.items.update((list) => list.map((i) => (i.id === modal.item.id ? updated : i)));
+      this.closeBoardTransitionModal();
+      this.showToast(`${modal.item.key} transitioned via "${modal.transition.name}" → "${modal.transition.to_status}"`);
+    } catch (err: any) {
+      this.boardModalError.set(err?.message || 'Transition validation failed');
+    }
+  }
+
   async onDrop(event: DragEvent, targetState: WorkflowState): Promise<void> {
     event.preventDefault();
     this.dragOverState.set(null);
@@ -369,22 +481,38 @@ export class BoardComponent implements OnInit {
       return;
     }
 
-    const prevStatus = item.status;
-    // Optimistic UI update
-    this.items.update((list) =>
-      list.map((i) => (i.id === item.id ? { ...i, status: targetState } : i))
-    );
-
     try {
+      const wfPayload = await this.api.getItemTransitions(item.key);
+      const tr = wfPayload.transitions.find((t) => t.to_status === targetState);
+      if (!tr) {
+        this.showToast(
+          `No directed transition from "${item.status}" to "${targetState}" in '${wfPayload.workflow_name}'`
+        );
+        return;
+      }
+      if (!tr.allowed) {
+        this.showToast(tr.blocked_reasons[0] || `Transition to "${targetState}" blocked by workflow condition`);
+        return;
+      }
+      if (tr.requires_screen) {
+        const defRes = item.resolution_id || this.api.resolutions().find((r) => r.is_default)?.id || 1;
+        this.boardTransitionDraft = {
+          resolution_id: targetState === 'Done' ? defRes : item.resolution_id || 0,
+          comment: '',
+        };
+        this.boardModalError.set('');
+        this.boardTransitionModal.set({ item, transition: tr });
+        return;
+      }
+
+      const prevStatus = item.status;
       const updated = await this.api.transitionItemState(item.key, targetState, {
+        transition_id: tr.id,
         comment: `Moved from '${prevStatus}' to '${targetState}' on Kanban Board`,
       });
       this.items.update((list) => list.map((i) => (i.id === item.id ? updated : i)));
       this.showToast(`${item.key} moved from "${prevStatus}" → "${targetState}"`);
     } catch (err) {
-      this.items.update((list) =>
-        list.map((i) => (i.id === item.id ? { ...i, status: prevStatus } : i))
-      );
       this.showToast(`Error moving ${item.key}: ${(err as Error).message}`);
     }
   }

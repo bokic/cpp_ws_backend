@@ -3077,6 +3077,1085 @@ static void handle_resolve_screen(backend::wsworker *worker,
     send_json(worker, header, "200 OK", resolved);
 }
 
+// ============================================================================
+// Step 4: Directed Graph Workflow Engine, Statuses, Transitions, Rules & Schemes
+// ============================================================================
+
+static json::json_value load_transition_rules_json(db::sqlite_db &conn,
+                                                   int transition_id,
+                                                   const std::string &category_filter = "") {
+    std::string sql = R"SQL(
+        SELECT id, transition_id, rule_category, rule_type, field_name, config_value, description, sort_order
+        FROM workflow_transition_rules
+        WHERE transition_id = ?
+    )SQL";
+    if (!category_filter.empty()) {
+        sql += " AND rule_category = ? ";
+    }
+    sql += " ORDER BY sort_order ASC, id ASC;";
+
+    auto stmt = conn.prepare(sql);
+    stmt.bind_int(1, transition_id);
+    if (!category_filter.empty()) {
+        stmt.bind_text(2, category_filter);
+    }
+
+    auto arr = json::json_value::make_array();
+    while (stmt.step() == SQLITE_ROW) {
+        auto r = json::json_value::make_object();
+        r.add_int("id", stmt.column_int(0));
+        r.add_int("transition_id", stmt.column_int(1));
+        r.add_str("rule_category", stmt.column_str(2));
+        r.add_str("rule_type", stmt.column_str(3));
+        r.add_str("field_name", stmt.column_str(4));
+        r.add_str("config_value", stmt.column_str(5));
+        r.add_str("description", stmt.column_str(6));
+        r.add_int("sort_order", stmt.column_int(7));
+        arr.add(std::move(r));
+    }
+    return arr;
+}
+
+static json::json_value build_workflow_json(db::sqlite_db &conn, int workflow_id) {
+    auto wstmt = conn.prepare("SELECT id, name, description, is_default, is_system, created_at FROM workflows WHERE id = ?;");
+    wstmt.bind_int(1, workflow_id);
+    if (wstmt.step() != SQLITE_ROW) {
+        return json::json_value::make_null();
+    }
+
+    auto wf = json::json_value::make_object();
+    wf.add_int("id", wstmt.column_int(0));
+    wf.add_str("name", wstmt.column_str(1));
+    wf.add_str("description", wstmt.column_str(2));
+    wf.add_bool("is_default", wstmt.column_int(3) != 0);
+    wf.add_bool("is_system", wstmt.column_int(4) != 0);
+    wf.add_str("created_at", wstmt.column_str(5));
+
+    // Statuses
+    auto sstmt = conn.prepare(R"SQL(
+        SELECT ws.id, ws.workflow_id, ws.name, ws.category, ws.color, ws.pos_x, ws.pos_y, ws.sort_order, ws.is_initial,
+               (SELECT COUNT(*) FROM work_items w WHERE w.status = ws.name) AS item_count
+        FROM workflow_statuses ws
+        WHERE ws.workflow_id = ?
+        ORDER BY ws.sort_order ASC, ws.id ASC;
+    )SQL");
+    sstmt.bind_int(1, workflow_id);
+    auto statuses_arr = json::json_value::make_array();
+    while (sstmt.step() == SQLITE_ROW) {
+        auto st = json::json_value::make_object();
+        st.add_int("id", sstmt.column_int(0));
+        st.add_int("workflow_id", sstmt.column_int(1));
+        st.add_str("name", sstmt.column_str(2));
+        st.add_str("category", sstmt.column_str(3));
+        st.add_str("color", sstmt.column_str(4));
+        st.add_int("pos_x", sstmt.column_int(5));
+        st.add_int("pos_y", sstmt.column_int(6));
+        st.add_int("sort_order", sstmt.column_int(7));
+        st.add_bool("is_initial", sstmt.column_int(8) != 0);
+        st.add_int("item_count", sstmt.column_int(9));
+        statuses_arr.add(std::move(st));
+    }
+    wf.add("statuses", std::move(statuses_arr));
+
+    // Transitions
+    auto tstmt = conn.prepare(R"SQL(
+        SELECT wt.id, wt.workflow_id, wt.name, wt.from_status, wt.to_status,
+               COALESCE(wt.screen_id, 0), COALESCE(s.name, ''), wt.sort_order, wt.created_at
+        FROM workflow_transitions wt
+        LEFT JOIN screens s ON s.id = wt.screen_id
+        WHERE wt.workflow_id = ?
+        ORDER BY wt.sort_order ASC, wt.id ASC;
+    )SQL");
+    tstmt.bind_int(1, workflow_id);
+    auto trans_arr = json::json_value::make_array();
+    while (tstmt.step() == SQLITE_ROW) {
+        int tid = tstmt.column_int(0);
+        auto tr = json::json_value::make_object();
+        tr.add_int("id", tid);
+        tr.add_int("workflow_id", tstmt.column_int(1));
+        tr.add_str("name", tstmt.column_str(2));
+        tr.add_str("from_status", tstmt.column_str(3));
+        tr.add_str("to_status", tstmt.column_str(4));
+        tr.add_nullable_int("screen_id", tstmt.column_int(5));
+        tr.add_str("screen_name", tstmt.column_str(6));
+        tr.add_int("sort_order", tstmt.column_int(7));
+        tr.add_str("created_at", tstmt.column_str(8));
+        tr.add("rules", load_transition_rules_json(conn, tid));
+        tr.add("conditions", load_transition_rules_json(conn, tid, "condition"));
+        tr.add("validators", load_transition_rules_json(conn, tid, "validator"));
+        tr.add("post_functions", load_transition_rules_json(conn, tid, "post_function"));
+        trans_arr.add(std::move(tr));
+    }
+    wf.add("transitions", std::move(trans_arr));
+    return wf;
+}
+
+static int resolve_workflow_id_for_item(db::sqlite_db &conn,
+                                        int project_id,
+                                        const std::string &type,
+                                        const std::string &category) {
+    auto stmt = conn.prepare(R"SQL(
+        SELECT workflow_id
+        FROM workflow_schemes
+        WHERE (project_id = ? OR project_id IS NULL OR is_default = 1)
+          AND issue_type IN (?, ?, '*')
+        ORDER BY
+          CASE WHEN project_id = ? THEN 0 ELSE 1 END,
+          CASE WHEN issue_type = ? THEN 0 WHEN issue_type = ? THEN 1 ELSE 2 END,
+          is_default DESC,
+          id ASC
+        LIMIT 1;
+    )SQL");
+    stmt.bind_int(1, project_id);
+    stmt.bind_text(2, category);
+    stmt.bind_text(3, type);
+    stmt.bind_int(4, project_id);
+    stmt.bind_text(5, category);
+    stmt.bind_text(6, type);
+    if (stmt.step() == SQLITE_ROW) {
+        return stmt.column_int(0);
+    }
+
+    auto def = conn.prepare("SELECT id FROM workflows WHERE is_default = 1 ORDER BY id ASC LIMIT 1;");
+    if (def.step() == SQLITE_ROW) {
+        return def.column_int(0);
+    }
+    return 1;
+}
+
+// GET | POST /api/workflows
+static void handle_workflows(backend::wsworker *worker,
+                             const std::map<std::string, std::string> &header,
+                             const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto stmt = conn.prepare("SELECT id FROM workflows ORDER BY is_default DESC, id ASC;");
+        auto arr = json::json_value::make_array();
+        while (stmt.step() == SQLITE_ROW) {
+            arr.add(build_workflow_json(conn, stmt.column_int(0)));
+        }
+        send_json(worker, header, "200 OK", arr);
+        return;
+    }
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string name = body.get_string("name");
+    std::string description = body.get_string("description");
+    bool is_default = body.get_bool("is_default", false);
+    int clone_from_id = body.get_int("clone_from_id", 1);
+
+    if (name.empty()) {
+        send_error(worker, header, "400 Bad Request", "Workflow name is required");
+        return;
+    }
+
+    int wf_id = 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        if (is_default) {
+            auto clr = conn.prepare("UPDATE workflows SET is_default = 0;");
+            clr.step_done();
+        }
+        auto ins = conn.prepare("INSERT INTO workflows (name, description, is_default, is_system) VALUES (?, ?, ?, 0);");
+        ins.bind_text(1, name);
+        ins.bind_text(2, description);
+        ins.bind_int(3, is_default ? 1 : 0);
+        ins.step_done();
+        wf_id = static_cast<int>(conn.last_insert_rowid());
+
+        if (clone_from_id > 0) {
+            auto cstat = conn.prepare(R"SQL(
+                INSERT INTO workflow_statuses (workflow_id, name, category, color, pos_x, pos_y, sort_order, is_initial)
+                SELECT ?, name, category, color, pos_x, pos_y, sort_order, is_initial
+                FROM workflow_statuses WHERE workflow_id = ?;
+            )SQL");
+            cstat.bind_int(1, wf_id);
+            cstat.bind_int(2, clone_from_id);
+            cstat.step_done();
+
+            auto tsel = conn.prepare("SELECT id, name, from_status, to_status, screen_id, sort_order FROM workflow_transitions WHERE workflow_id = ? ORDER BY sort_order ASC, id ASC;");
+            tsel.bind_int(1, clone_from_id);
+            while (tsel.step() == SQLITE_ROW) {
+                int old_tid = tsel.column_int(0);
+                auto tins = conn.prepare("INSERT INTO workflow_transitions (workflow_id, name, from_status, to_status, screen_id, sort_order) VALUES (?, ?, ?, ?, ?, ?);");
+                tins.bind_int(1, wf_id);
+                tins.bind_text(2, tsel.column_str(1));
+                tins.bind_text(3, tsel.column_str(2));
+                tins.bind_text(4, tsel.column_str(3));
+                tins.bind_optional_int(5, tsel.column_int(4));
+                tins.bind_int(6, tsel.column_int(5));
+                tins.step_done();
+                int new_tid = static_cast<int>(conn.last_insert_rowid());
+
+                auto rins = conn.prepare(R"SQL(
+                    INSERT INTO workflow_transition_rules (transition_id, rule_category, rule_type, field_name, config_value, description, sort_order)
+                    SELECT ?, rule_category, rule_type, field_name, config_value, description, sort_order
+                    FROM workflow_transition_rules WHERE transition_id = ?;
+                )SQL");
+                rins.bind_int(1, new_tid);
+                rins.bind_int(2, old_tid);
+                rins.step_done();
+            }
+        } else {
+            auto sins = conn.prepare(R"SQL(
+                INSERT INTO workflow_statuses (workflow_id, name, category, color, pos_x, pos_y, sort_order, is_initial) VALUES
+                (?, 'To Do',       'To Do',       '#0052CC', 140, 140, 10, 1),
+                (?, 'In Progress', 'In Progress', '#FF991F', 420, 140, 20, 0),
+                (?, 'Done',        'Done',        '#00875A', 700, 140, 30, 0);
+            )SQL");
+            sins.bind_int(1, wf_id);
+            sins.bind_int(2, wf_id);
+            sins.bind_int(3, wf_id);
+            sins.step_done();
+        }
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    send_json(worker, header, "201 Created", build_workflow_json(conn, wf_id));
+}
+
+// GET | PUT | DELETE /api/workflows/([0-9]+)
+static void handle_workflow_detail(backend::wsworker *worker,
+                                   const std::map<std::string, std::string> &header,
+                                   const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing workflow ID");
+        return;
+    }
+    int wf_id = std::atoi(uri_params.front().c_str());
+
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto wf = build_workflow_json(conn, wf_id);
+        if (!wf) {
+            send_error(worker, header, "404 Not Found", "Workflow not found");
+            return;
+        }
+        send_json(worker, header, "200 OK", wf);
+        return;
+    }
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    if (method == "DELETE") {
+        auto chk = conn.prepare("SELECT is_system FROM workflows WHERE id = ?;");
+        chk.bind_int(1, wf_id);
+        if (chk.step() == SQLITE_ROW && chk.column_int(0) != 0) {
+            send_error(worker, header, "400 Bad Request", "Cannot delete a system workflow");
+            return;
+        }
+        db::sqlite_transaction tx(conn);
+        auto del = conn.prepare("DELETE FROM workflows WHERE id = ?;");
+        del.bind_int(1, wf_id);
+        del.step_done();
+        tx.commit();
+        auto res = json::json_value::make_object();
+        res.add_bool("deleted", true);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    try {
+        db::sqlite_transaction tx(conn);
+        if (body.has_key("name")) {
+            std::string name = body.get_string("name");
+            std::string description = body.get_string("description");
+            auto upd = conn.prepare("UPDATE workflows SET name = COALESCE(NULLIF(?, ''), name), description = ? WHERE id = ?;");
+            upd.bind_text(1, name);
+            upd.bind_text(2, description);
+            upd.bind_int(3, wf_id);
+            upd.step_done();
+        }
+        if (body.has_key("statuses")) {
+            json_object *st_arr = nullptr;
+            if (json_object_object_get_ex(body.get(), "statuses", &st_arr) && st_arr &&
+                json_object_is_type(st_arr, json_type_array)) {
+                auto supd = conn.prepare("UPDATE workflow_statuses SET pos_x = ?, pos_y = ?, category = COALESCE(NULLIF(?, ''), category), color = COALESCE(NULLIF(?, ''), color) WHERE id = ? AND workflow_id = ?;");
+                size_t len = json_object_array_length(st_arr);
+                for (size_t i = 0; i < len; ++i) {
+                    json_object *el = json_object_array_get_idx(st_arr, i);
+                    if (!el || !json_object_is_type(el, json_type_object)) continue;
+                    json_object *jid = nullptr, *jx = nullptr, *jy = nullptr, *jcat = nullptr, *jcol = nullptr;
+                    int sid = (json_object_object_get_ex(el, "id", &jid) && jid) ? json_object_get_int(jid) : 0;
+                    int px = (json_object_object_get_ex(el, "pos_x", &jx) && jx) ? json_object_get_int(jx) : 100;
+                    int py = (json_object_object_get_ex(el, "pos_y", &jy) && jy) ? json_object_get_int(jy) : 140;
+                    std::string cat = (json_object_object_get_ex(el, "category", &jcat) && jcat && json_object_get_string(jcat)) ? json_object_get_string(jcat) : "";
+                    std::string col = (json_object_object_get_ex(el, "color", &jcol) && jcol && json_object_get_string(jcol)) ? json_object_get_string(jcol) : "";
+                    if (sid > 0) {
+                        supd.clear_and_reset();
+                        supd.bind_int(1, px);
+                        supd.bind_int(2, py);
+                        supd.bind_text(3, cat);
+                        supd.bind_text(4, col);
+                        supd.bind_int(5, sid);
+                        supd.bind_int(6, wf_id);
+                        supd.step_done();
+                    }
+                }
+            }
+        }
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    send_json(worker, header, "200 OK", build_workflow_json(conn, wf_id));
+}
+
+// POST /api/workflows/([0-9]+)/statuses
+static void handle_workflow_statuses(backend::wsworker *worker,
+                                     const std::map<std::string, std::string> &header,
+                                     const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing workflow ID");
+        return;
+    }
+    int wf_id = std::atoi(uri_params.front().c_str());
+
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string name = body.get_string("name");
+    std::string category = body.get_string("category", "In Progress");
+    std::string color = body.get_string("color", "");
+    if (color.empty()) {
+        if (category == "To Do") color = "#0052CC";
+        else if (category == "Done") color = "#00875A";
+        else color = "#FF991F";
+    }
+    int pos_x = body.get_int("pos_x", 300);
+    int pos_y = body.get_int("pos_y", 220);
+    int sort_order = body.get_int("sort_order", 100);
+    bool is_initial = body.get_bool("is_initial", false);
+
+    if (name.empty()) {
+        send_error(worker, header, "400 Bad Request", "Status name is required");
+        return;
+    }
+
+    try {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare(R"SQL(
+            INSERT INTO workflow_statuses (workflow_id, name, category, color, pos_x, pos_y, sort_order, is_initial)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(workflow_id, name) DO UPDATE SET
+                category = excluded.category,
+                color = excluded.color,
+                pos_x = excluded.pos_x,
+                pos_y = excluded.pos_y;
+        )SQL");
+        ins.bind_int(1, wf_id);
+        ins.bind_text(2, name);
+        ins.bind_text(3, category);
+        ins.bind_text(4, color);
+        ins.bind_int(5, pos_x);
+        ins.bind_int(6, pos_y);
+        ins.bind_int(7, sort_order);
+        ins.bind_int(8, is_initial ? 1 : 0);
+        ins.step_done();
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    send_json(worker, header, "201 Created", build_workflow_json(conn, wf_id));
+}
+
+// PUT | DELETE /api/workflow-statuses/([0-9]+)
+static void handle_workflow_status_detail(backend::wsworker *worker,
+                                          const std::map<std::string, std::string> &header,
+                                          const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing status ID");
+        return;
+    }
+    int status_id = std::atoi(uri_params.front().c_str());
+
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    std::string method = get_header(header, "REQUEST_METHOD");
+    if (method == "DELETE") {
+        db::sqlite_transaction tx(conn);
+        auto del = conn.prepare("DELETE FROM workflow_statuses WHERE id = ?;");
+        del.bind_int(1, status_id);
+        del.step_done();
+        tx.commit();
+        auto res = json::json_value::make_object();
+        res.add_bool("deleted", true);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    int pos_x = body.get_int("pos_x", 150);
+    int pos_y = body.get_int("pos_y", 150);
+    std::string category = body.get_string("category");
+    std::string color = body.get_string("color");
+
+    try {
+        db::sqlite_transaction tx(conn);
+        auto upd = conn.prepare(R"SQL(
+            UPDATE workflow_statuses
+            SET pos_x = ?, pos_y = ?,
+                category = COALESCE(NULLIF(?, ''), category),
+                color = COALESCE(NULLIF(?, ''), color)
+            WHERE id = ?;
+        )SQL");
+        upd.bind_int(1, pos_x);
+        upd.bind_int(2, pos_y);
+        upd.bind_text(3, category);
+        upd.bind_text(4, color);
+        upd.bind_int(5, status_id);
+        upd.step_done();
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_bool("ok", true);
+    res.add_int("id", status_id);
+    res.add_int("pos_x", pos_x);
+    res.add_int("pos_y", pos_y);
+    send_json(worker, header, "200 OK", res);
+}
+
+// POST /api/workflows/([0-9]+)/transitions
+static void handle_workflow_transitions(backend::wsworker *worker,
+                                        const std::map<std::string, std::string> &header,
+                                        const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing workflow ID");
+        return;
+    }
+    int wf_id = std::atoi(uri_params.front().c_str());
+
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string name = body.get_string("name");
+    std::string from_status = body.get_string("from_status", "*");
+    if (from_status.empty()) from_status = "*";
+    std::string to_status = body.get_string("to_status");
+    int screen_id = body.get_int("screen_id", 0);
+    int sort_order = body.get_int("sort_order", 100);
+
+    if (name.empty() || to_status.empty()) {
+        send_error(worker, header, "400 Bad Request", "Transition name and to_status are required");
+        return;
+    }
+
+    int tid = 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare(R"SQL(
+            INSERT INTO workflow_transitions (workflow_id, name, from_status, to_status, screen_id, sort_order)
+            VALUES (?, ?, ?, ?, ?, ?);
+        )SQL");
+        ins.bind_int(1, wf_id);
+        ins.bind_text(2, name);
+        ins.bind_text(3, from_status);
+        ins.bind_text(4, to_status);
+        ins.bind_optional_int(5, screen_id);
+        ins.bind_int(6, sort_order);
+        ins.step_done();
+        tid = static_cast<int>(conn.last_insert_rowid());
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", tid);
+    res.add_int("workflow_id", wf_id);
+    res.add_str("name", name);
+    res.add_str("from_status", from_status);
+    res.add_str("to_status", to_status);
+    res.add_nullable_int("screen_id", screen_id);
+    res.add_int("sort_order", sort_order);
+    res.add("rules", json::json_value::make_array());
+    res.add("conditions", json::json_value::make_array());
+    res.add("validators", json::json_value::make_array());
+    res.add("post_functions", json::json_value::make_array());
+    send_json(worker, header, "201 Created", res);
+}
+
+// PUT | DELETE /api/workflow-transitions/([0-9]+)
+static void handle_workflow_transition_detail(backend::wsworker *worker,
+                                              const std::map<std::string, std::string> &header,
+                                              const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing transition ID");
+        return;
+    }
+    int tid = std::atoi(uri_params.front().c_str());
+
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    std::string method = get_header(header, "REQUEST_METHOD");
+    if (method == "DELETE") {
+        db::sqlite_transaction tx(conn);
+        auto del = conn.prepare("DELETE FROM workflow_transitions WHERE id = ?;");
+        del.bind_int(1, tid);
+        del.step_done();
+        tx.commit();
+        auto res = json::json_value::make_object();
+        res.add_bool("deleted", true);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string name = body.get_string("name");
+    std::string from_status = body.get_string("from_status", "*");
+    std::string to_status = body.get_string("to_status");
+    int screen_id = body.get_int("screen_id", 0);
+
+    try {
+        db::sqlite_transaction tx(conn);
+        auto upd = conn.prepare(R"SQL(
+            UPDATE workflow_transitions
+            SET name = COALESCE(NULLIF(?, ''), name),
+                from_status = COALESCE(NULLIF(?, ''), from_status),
+                to_status = COALESCE(NULLIF(?, ''), to_status),
+                screen_id = ?
+            WHERE id = ?;
+        )SQL");
+        upd.bind_text(1, name);
+        upd.bind_text(2, from_status);
+        upd.bind_text(3, to_status);
+        upd.bind_optional_int(4, screen_id);
+        upd.bind_int(5, tid);
+        upd.step_done();
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_bool("ok", true);
+    res.add_int("id", tid);
+    res.add_nullable_int("screen_id", screen_id);
+    send_json(worker, header, "200 OK", res);
+}
+
+// POST /api/workflow-transitions/([0-9]+)/rules
+static void handle_workflow_transition_rules(backend::wsworker *worker,
+                                             const std::map<std::string, std::string> &header,
+                                             const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing transition ID");
+        return;
+    }
+    int tid = std::atoi(uri_params.front().c_str());
+
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string rule_category = body.get_string("rule_category");
+    std::string rule_type = body.get_string("rule_type");
+    std::string field_name = body.get_string("field_name");
+    std::string config_value = body.get_string("config_value");
+    std::string description = body.get_string("description");
+    int sort_order = body.get_int("sort_order", 50);
+
+    if (rule_category.empty() || rule_type.empty()) {
+        send_error(worker, header, "400 Bad Request", "rule_category and rule_type are required");
+        return;
+    }
+
+    int rid = 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare(R"SQL(
+            INSERT INTO workflow_transition_rules (transition_id, rule_category, rule_type, field_name, config_value, description, sort_order)
+            VALUES (?, ?, ?, ?, ?, ?, ?);
+        )SQL");
+        ins.bind_int(1, tid);
+        ins.bind_text(2, rule_category);
+        ins.bind_text(3, rule_type);
+        ins.bind_text(4, field_name);
+        ins.bind_text(5, config_value);
+        ins.bind_text(6, description);
+        ins.bind_int(7, sort_order);
+        ins.step_done();
+        rid = static_cast<int>(conn.last_insert_rowid());
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", rid);
+    res.add_int("transition_id", tid);
+    res.add_str("rule_category", rule_category);
+    res.add_str("rule_type", rule_type);
+    res.add_str("field_name", field_name);
+    res.add_str("config_value", config_value);
+    res.add_str("description", description);
+    res.add_int("sort_order", sort_order);
+    send_json(worker, header, "201 Created", res);
+}
+
+// DELETE /api/workflow-transition-rules/([0-9]+)
+static void handle_delete_workflow_transition_rule(backend::wsworker *worker,
+                                                   const std::map<std::string, std::string> &header,
+                                                   const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing rule ID");
+        return;
+    }
+    int rid = std::atoi(uri_params.front().c_str());
+
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    {
+        db::sqlite_transaction tx(conn);
+        auto del = conn.prepare("DELETE FROM workflow_transition_rules WHERE id = ?;");
+        del.bind_int(1, rid);
+        del.step_done();
+        tx.commit();
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_bool("deleted", true);
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET | POST /api/workflow-schemes
+static void handle_workflow_schemes(backend::wsworker *worker,
+                                    const std::map<std::string, std::string> &header,
+                                    const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto stmt = conn.prepare(R"SQL(
+            SELECT ws.id, ws.name, ws.description, COALESCE(ws.project_id, 0), COALESCE(p.name, 'All Projects'),
+                   ws.issue_type, ws.workflow_id, COALESCE(w.name, ''), ws.is_default, ws.created_at
+            FROM workflow_schemes ws
+            LEFT JOIN projects p ON p.id = ws.project_id
+            LEFT JOIN workflows w ON w.id = ws.workflow_id
+            ORDER BY ws.is_default DESC, ws.id ASC;
+        )SQL");
+        auto arr = json::json_value::make_array();
+        while (stmt.step() == SQLITE_ROW) {
+            auto s = json::json_value::make_object();
+            s.add_int("id", stmt.column_int(0));
+            s.add_str("name", stmt.column_str(1));
+            s.add_str("description", stmt.column_str(2));
+            s.add_nullable_int("project_id", stmt.column_int(3));
+            s.add_str("project_name", stmt.column_str(4));
+            s.add_str("issue_type", stmt.column_str(5));
+            s.add_int("workflow_id", stmt.column_int(6));
+            s.add_str("workflow_name", stmt.column_str(7));
+            s.add_bool("is_default", stmt.column_int(8) != 0);
+            s.add_str("created_at", stmt.column_str(9));
+            arr.add(std::move(s));
+        }
+        send_json(worker, header, "200 OK", arr);
+        return;
+    }
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string name = body.get_string("name", "Project Workflow Scheme Binding");
+    std::string description = body.get_string("description");
+    int project_id = body.get_int("project_id", 1);
+    std::string issue_type = body.get_string("issue_type", "*");
+    if (issue_type.empty()) issue_type = "*";
+    int workflow_id = body.get_int("workflow_id", 1);
+    bool is_default = body.get_bool("is_default", issue_type == "*");
+
+    int scheme_id = 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        auto ups = conn.prepare(R"SQL(
+            INSERT INTO workflow_schemes (name, description, project_id, issue_type, workflow_id, is_default)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(project_id, issue_type) DO UPDATE SET
+                name = excluded.name,
+                description = excluded.description,
+                workflow_id = excluded.workflow_id,
+                is_default = excluded.is_default;
+        )SQL");
+        ups.bind_text(1, name);
+        ups.bind_text(2, description);
+        ups.bind_int(3, project_id);
+        ups.bind_text(4, issue_type);
+        ups.bind_int(5, workflow_id);
+        ups.bind_int(6, is_default ? 1 : 0);
+        ups.step_done();
+        scheme_id = static_cast<int>(conn.last_insert_rowid());
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", scheme_id);
+    res.add_str("name", name);
+    res.add_str("description", description);
+    res.add_int("project_id", project_id);
+    res.add_str("issue_type", issue_type);
+    res.add_int("workflow_id", workflow_id);
+    res.add_bool("is_default", is_default);
+    send_json(worker, header, "200 OK", res);
+}
+
+// DELETE /api/workflow-schemes/([0-9]+)
+static void handle_delete_workflow_scheme(backend::wsworker *worker,
+                                           const std::map<std::string, std::string> &header,
+                                           const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing workflow scheme ID");
+        return;
+    }
+    int sid = std::atoi(uri_params.front().c_str());
+
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    {
+        db::sqlite_transaction tx(conn);
+        auto del = conn.prepare("DELETE FROM workflow_schemes WHERE id = ?;");
+        del.bind_int(1, sid);
+        del.step_done();
+        tx.commit();
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_bool("deleted", true);
+    send_json(worker, header, "200 OK", res);
+}
+
+static bool role_in_csv(const std::string &role, const std::string &csv) {
+    if (role.empty()) return false;
+    std::stringstream ss(csv);
+    std::string tok;
+    while (std::getline(ss, tok, ',')) {
+        size_t s = tok.find_first_not_of(" \t");
+        size_t e = tok.find_last_not_of(" \t");
+        if (s != std::string::npos && tok.substr(s, e - s + 1) == role) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool evaluate_transition_conditions(db::sqlite_db &conn,
+                                           int transition_id,
+                                           int item_id,
+                                           int item_assignee_id,
+                                           const auth_user &u_auth,
+                                           std::vector<std::string> &blocked_reasons) {
+    auto cstmt = conn.prepare(R"SQL(
+        SELECT rule_type, field_name, config_value, description
+        FROM workflow_transition_rules
+        WHERE transition_id = ? AND rule_category = 'condition'
+        ORDER BY sort_order ASC, id ASC;
+    )SQL");
+    cstmt.bind_int(1, transition_id);
+
+    while (cstmt.step() == SQLITE_ROW) {
+        std::string rtype = cstmt.column_str(0);
+        std::string cfg = cstmt.column_str(2);
+
+        if (rtype == "only_assignee") {
+            bool ok = (u_auth.role == "Admin") ||
+                      (u_auth.authenticated && item_assignee_id > 0 && u_auth.id == item_assignee_id);
+            if (!ok) {
+                blocked_reasons.push_back("Condition failed (only_assignee): Only the currently assigned user (or Admin) can trigger this transition");
+            }
+        } else if (rtype == "user_in_role") {
+            bool ok = (u_auth.role == "Admin") || role_in_csv(u_auth.role, cfg);
+            if (!ok) {
+                blocked_reasons.push_back("Condition failed (user_in_role): Requires user role in [" + cfg + "] (your role: " + (u_auth.role.empty() ? "Unauthenticated" : u_auth.role) + ")");
+            }
+        } else if (rtype == "subtasks_completed") {
+            std::string req_status = cfg.empty() ? "Done" : cfg;
+            auto subq = conn.prepare("SELECT COUNT(*) FROM work_items WHERE parent_id = ? AND status != ?;");
+            subq.bind_int(1, item_id);
+            subq.bind_text(2, req_status);
+            int open_subs = 0;
+            if (subq.step() == SQLITE_ROW) {
+                open_subs = subq.column_int(0);
+            }
+            if (open_subs > 0) {
+                blocked_reasons.push_back("Condition failed (subtasks_completed): Cannot transition because " + std::to_string(open_subs) + " child subtask(s) are not yet '" + req_status + "'");
+            }
+        } else if (rtype == "permission") {
+            if (!u_auth.authenticated) {
+                blocked_reasons.push_back("Condition failed (permission): User must have project permission '" + cfg + "'");
+            } else if (cfg == "Close Issues" && u_auth.role == "Reporter") {
+                blocked_reasons.push_back("Condition failed (permission): Role 'Reporter' does not have 'Close Issues' permission");
+            }
+        }
+    }
+    return blocked_reasons.empty();
+}
+
+static json::json_value build_item_transitions_payload(db::sqlite_db &conn,
+                                                       int item_id,
+                                                       const auth_user &u_auth) {
+    auto istmt = conn.prepare("SELECT project_id, type, category, status, COALESCE(assignee_id, 0) FROM work_items WHERE id = ?;");
+    istmt.bind_int(1, item_id);
+    if (istmt.step() != SQLITE_ROW) {
+        return json::json_value::make_null();
+    }
+    int project_id = istmt.column_int(0);
+    std::string type = istmt.column_str(1);
+    std::string category = istmt.column_str(2);
+    std::string cur_status = istmt.column_str(3);
+    int assignee_id = istmt.column_int(4);
+
+    int wf_id = resolve_workflow_id_for_item(conn, project_id, type, category);
+    std::string wf_name = "Default Agile 7-State Workflow";
+    {
+        auto wq = conn.prepare("SELECT name FROM workflows WHERE id = ?;");
+        wq.bind_int(1, wf_id);
+        if (wq.step() == SQLITE_ROW) {
+            wf_name = wq.column_str(0);
+        }
+    }
+
+    auto out = json::json_value::make_object();
+    out.add_int("item_id", item_id);
+    out.add_int("workflow_id", wf_id);
+    out.add_str("workflow_name", wf_name);
+    out.add_str("current_status", cur_status);
+
+    // Statuses in active workflow
+    auto sstmt = conn.prepare("SELECT id, name, category, color, pos_x, pos_y, sort_order, is_initial FROM workflow_statuses WHERE workflow_id = ? ORDER BY sort_order ASC, id ASC;");
+    sstmt.bind_int(1, wf_id);
+    auto st_arr = json::json_value::make_array();
+    std::string cur_cat = "To Do";
+    std::map<std::string, std::pair<std::string, std::string>> status_meta;
+    while (sstmt.step() == SQLITE_ROW) {
+        std::string sname = sstmt.column_str(1);
+        std::string scat = sstmt.column_str(2);
+        std::string scol = sstmt.column_str(3);
+        status_meta[sname] = {scat, scol};
+        if (sname == cur_status) cur_cat = scat;
+
+        auto so = json::json_value::make_object();
+        so.add_int("id", sstmt.column_int(0));
+        so.add_str("name", sname);
+        so.add_str("category", scat);
+        so.add_str("color", scol);
+        so.add_int("pos_x", sstmt.column_int(4));
+        so.add_int("pos_y", sstmt.column_int(5));
+        so.add_int("sort_order", sstmt.column_int(6));
+        so.add_bool("is_initial", sstmt.column_int(7) != 0);
+        st_arr.add(std::move(so));
+    }
+    out.add_str("current_category", cur_cat);
+    out.add("statuses", std::move(st_arr));
+
+    // Transitions from cur_status or '*', preferring specific from_status over '*' per target to_status
+    auto tstmt = conn.prepare(R"SQL(
+        SELECT wt.id, wt.name, wt.from_status, wt.to_status, COALESCE(wt.screen_id, 0), COALESCE(s.name, ''), wt.sort_order
+        FROM workflow_transitions wt
+        LEFT JOIN screens s ON s.id = wt.screen_id
+        WHERE wt.workflow_id = ?
+          AND (wt.from_status = ? OR wt.from_status = '*')
+          AND wt.to_status != ?
+        ORDER BY CASE WHEN wt.from_status = ? THEN 0 ELSE 1 END, wt.sort_order ASC, wt.id ASC;
+    )SQL");
+    tstmt.bind_int(1, wf_id);
+    tstmt.bind_text(2, cur_status);
+    tstmt.bind_text(3, cur_status);
+    tstmt.bind_text(4, cur_status);
+
+    std::vector<std::string> seen_targets;
+    auto tr_arr = json::json_value::make_array();
+    while (tstmt.step() == SQLITE_ROW) {
+        int tid = tstmt.column_int(0);
+        std::string tname = tstmt.column_str(1);
+        std::string from_st = tstmt.column_str(2);
+        std::string to_st = tstmt.column_str(3);
+        int scr_id = tstmt.column_int(4);
+        std::string scr_name = tstmt.column_str(5);
+
+        if (std::find(seen_targets.begin(), seen_targets.end(), to_st) != seen_targets.end()) {
+            continue;
+        }
+        seen_targets.push_back(to_st);
+
+        std::vector<std::string> blocked_reasons;
+        bool allowed = evaluate_transition_conditions(conn, tid, item_id, assignee_id, u_auth, blocked_reasons);
+
+        auto validators = load_transition_rules_json(conn, tid, "validator");
+        bool has_validators = json_object_array_length(validators.get()) > 0;
+
+        auto to = json::json_value::make_object();
+        to.add_int("id", tid);
+        to.add_int("workflow_id", wf_id);
+        to.add_str("name", tname);
+        to.add_str("from_status", from_st);
+        to.add_str("to_status", to_st);
+        to.add_str("to_category", status_meta.count(to_st) ? status_meta[to_st].first : "In Progress");
+        to.add_str("to_color", status_meta.count(to_st) ? status_meta[to_st].second : "#0052CC");
+        to.add_nullable_int("screen_id", scr_id);
+        to.add_str("screen_name", scr_name);
+        to.add_bool("allowed", allowed);
+        to.add_bool("requires_screen", scr_id > 0 || has_validators);
+
+        auto br_arr = json::json_value::make_array();
+        for (const auto &br : blocked_reasons) {
+            br_arr.add(json::json_value::make_string(br));
+        }
+        to.add("blocked_reasons", std::move(br_arr));
+        to.add("conditions", load_transition_rules_json(conn, tid, "condition"));
+        to.add("validators", std::move(validators));
+        to.add("post_functions", load_transition_rules_json(conn, tid, "post_function"));
+        if (scr_id > 0) {
+            to.add("screen", build_screen_json(conn, scr_id, 1, type, true));
+        } else {
+            to.add("screen", json::json_value::make_null());
+        }
+        tr_arr.add(std::move(to));
+    }
+    out.add("transitions", std::move(tr_arr));
+    return out;
+}
+
+static int resolve_work_item_id(db::sqlite_db &conn, const std::string &id_or_key);
+static void handle_item_state_transition(backend::wsworker *worker,
+                                         const std::map<std::string, std::string> &header,
+                                         const std::list<std::string> &uri_params);
+
+// GET | POST /api/items/([A-Za-z0-9_-]+)/transitions
+static void handle_item_available_transitions(backend::wsworker *worker,
+                                              const std::map<std::string, std::string> &header,
+                                              const std::list<std::string> &uri_params) {
+    if (get_header(header, "REQUEST_METHOD") == "POST") {
+        handle_item_state_transition(worker, header, uri_params);
+        return;
+    }
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing item ID or key");
+        return;
+    }
+    auto conn = acquire_db_connection();
+    int item_id = resolve_work_item_id(conn, uri_params.front());
+    if (item_id <= 0) {
+        send_error(worker, header, "404 Not Found", "Work item not found");
+        return;
+    }
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    auto payload = build_item_transitions_payload(conn, item_id, u_auth);
+    if (!payload) {
+        send_error(worker, header, "404 Not Found", "Work item not found");
+        return;
+    }
+    send_json(worker, header, "200 OK", payload);
+}
+
 // GET /api/sprints & POST /api/sprints
 static void handle_sprints(backend::wsworker *worker,
                            const std::map<std::string, std::string> &header,
@@ -4336,7 +5415,8 @@ static void handle_item_detail(backend::wsworker *worker,
         // Workflow history
         auto h_stmt = conn.prepare(R"SQL(
             SELECT h.id, h.from_status, h.to_status, COALESCE(u.display_name, 'System'),
-                   h.comment, h.created_at
+                   h.comment, h.created_at,
+                   COALESCE(h.transition_id, 0), COALESCE(h.transition_name, ''), COALESCE(h.executed_post_functions, '')
             FROM workflow_history h
             LEFT JOIN users u ON u.id = h.changed_by
             WHERE h.work_item_id = ?
@@ -4352,9 +5432,16 @@ static void handle_item_detail(backend::wsworker *worker,
             hi.add_str("changed_by_name", h_stmt.column_str(3));
             hi.add_str("comment", h_stmt.column_str(4));
             hi.add_str("created_at", h_stmt.column_str(5));
+            hi.add_nullable_int("transition_id", h_stmt.column_int(6));
+            hi.add_str("transition_name", h_stmt.column_str(7));
+            hi.add_str("executed_post_functions", h_stmt.column_str(8));
             history.add(std::move(hi));
         }
         item.add("history", std::move(history));
+
+        // Active workflow & available transitions for this item
+        auto u_viewer = get_authenticated_user(conn, worker, header);
+        item.add("workflow", build_item_transitions_payload(conn, item_id, u_viewer));
 
         send_json(worker, header, "200 OK", item);
         return;
@@ -4519,7 +5606,7 @@ static void handle_item_detail(backend::wsworker *worker,
     }
 }
 
-// PATCH /api/items/([A-Za-z0-9_-]+)/state
+// PATCH | POST /api/items/([A-Za-z0-9_-]+)/state & POST /api/items/([A-Za-z0-9_-]+)/transitions
 static void handle_item_state_transition(backend::wsworker *worker,
                                          const std::map<std::string, std::string> &header,
                                          const std::list<std::string> &uri_params) {
@@ -4545,6 +5632,9 @@ static void handle_item_state_transition(backend::wsworker *worker,
         return;
     }
 
+    int project_id = 1;
+    std::string item_type;
+    std::string item_category;
     std::string old_status;
     int old_progress = 0;
     std::string old_start;
@@ -4552,10 +5642,16 @@ static void handle_item_state_transition(backend::wsworker *worker,
     int old_order = 0;
     int old_res_id = 0;
     std::string old_res_date;
+    int old_assignee_id = 0;
+    int old_reporter_id = 0;
+    int old_parent_id = 0;
+    std::string old_steps;
     {
         auto cur = conn.prepare(R"SQL(
-            SELECT status, progress, start_date, due_date, board_order,
-                   COALESCE(resolution_id, 0), COALESCE(resolution_date, '')
+            SELECT project_id, type, category, status, progress, start_date, due_date, board_order,
+                   COALESCE(resolution_id, 0), COALESCE(resolution_date, ''),
+                   COALESCE(assignee_id, 0), COALESCE(reporter_id, 0), COALESCE(parent_id, 0),
+                   COALESCE(steps_to_reproduce, '')
             FROM work_items WHERE id = ?;
         )SQL");
         cur.bind_int(1, item_id);
@@ -4563,16 +5659,176 @@ static void handle_item_state_transition(backend::wsworker *worker,
             send_error(worker, header, "404 Not Found", "Work item not found");
             return;
         }
-        old_status = cur.column_str(0);
-        old_progress = cur.column_int(1);
-        old_start = cur.column_str(2);
-        old_due = cur.column_str(3);
-        old_order = cur.column_int(4);
-        old_res_id = cur.column_int(5);
-        old_res_date = cur.column_str(6);
+        project_id = cur.column_int(0);
+        item_type = cur.column_str(1);
+        item_category = cur.column_str(2);
+        old_status = cur.column_str(3);
+        old_progress = cur.column_int(4);
+        old_start = cur.column_str(5);
+        old_due = cur.column_str(6);
+        old_order = cur.column_int(7);
+        old_res_id = cur.column_int(8);
+        old_res_date = cur.column_str(9);
+        old_assignee_id = cur.column_int(10);
+        old_reporter_id = cur.column_int(11);
+        old_parent_id = cur.column_int(12);
+        old_steps = cur.column_str(13);
     }
 
+    int wf_id = resolve_workflow_id_for_item(conn, project_id, item_type, item_category);
+    int req_transition_id = body.get_int("transition_id", 0);
     std::string new_status = body.get_string("status", old_status);
+    int matched_transition_id = 0;
+    std::string matched_transition_name;
+
+    if (req_transition_id > 0) {
+        auto tq = conn.prepare("SELECT id, name, from_status, to_status FROM workflow_transitions WHERE id = ? AND workflow_id = ?;");
+        tq.bind_int(1, req_transition_id);
+        tq.bind_int(2, wf_id);
+        if (tq.step() != SQLITE_ROW) {
+            send_error(worker, header, "400 Bad Request", "Specified transition_id does not belong to the item's active workflow");
+            return;
+        }
+        std::string f_st = tq.column_str(2);
+        if (f_st != "*" && f_st != old_status) {
+            send_error(worker, header, "400 Bad Request",
+                       "Invalid transition '" + tq.column_str(1) + "': requires current status '" + f_st + "' (actual: '" + old_status + "')");
+            return;
+        }
+        matched_transition_id = tq.column_int(0);
+        matched_transition_name = tq.column_str(1);
+        new_status = tq.column_str(3);
+    } else if (new_status != old_status) {
+        auto tq = conn.prepare(R"SQL(
+            SELECT id, name
+            FROM workflow_transitions
+            WHERE workflow_id = ?
+              AND to_status = ?
+              AND (from_status = ? OR from_status = '*')
+            ORDER BY CASE WHEN from_status = ? THEN 0 ELSE 1 END, sort_order ASC, id ASC
+            LIMIT 1;
+        )SQL");
+        tq.bind_int(1, wf_id);
+        tq.bind_text(2, new_status);
+        tq.bind_text(3, old_status);
+        tq.bind_text(4, old_status);
+        if (tq.step() != SQLITE_ROW) {
+            send_error(worker, header, "400 Bad Request",
+                       "Invalid workflow transition: no directed transition from '" + old_status + "' to '" + new_status + "' in active workflow");
+            return;
+        }
+        matched_transition_id = tq.column_int(0);
+        matched_transition_name = tq.column_str(1);
+    }
+
+    int new_assignee_id = body.has_key("assignee_id") ? body.get_int("assignee_id", old_assignee_id) : old_assignee_id;
+    std::string new_start = body.has_key("start_date") ? body.get_string("start_date") : old_start;
+    std::string new_due = body.has_key("due_date") ? body.get_string("due_date") : old_due;
+    std::string new_steps = body.has_key("steps_to_reproduce") ? body.get_string("steps_to_reproduce") : old_steps;
+    int new_order = body.has_key("board_order") ? body.get_int("board_order", old_order) : old_order;
+    std::string raw_comment = body.has_key("comment") ? body.get_string("comment") : "";
+    std::string comment = raw_comment.empty()
+                              ? (matched_transition_name.empty() ? "Transitioned state" : ("Executed transition: " + matched_transition_name))
+                              : raw_comment;
+    int new_res_id = body.has_key("resolution_id") ? body.get_int("resolution_id", 0) : old_res_id;
+
+    // Step 1 & Step 2: Evaluate Conditions and Validators when transitioning state
+    if (matched_transition_id > 0) {
+        std::vector<std::string> blocked_reasons;
+        if (!evaluate_transition_conditions(conn, matched_transition_id, item_id, old_assignee_id, u_auth, blocked_reasons)) {
+            send_error(worker, header, "400 Bad Request", blocked_reasons.front());
+            return;
+        }
+
+        // Run Validators
+        auto vstmt = conn.prepare(R"SQL(
+            SELECT rule_type, field_name, config_value, description
+            FROM workflow_transition_rules
+            WHERE transition_id = ? AND rule_category = 'validator'
+            ORDER BY sort_order ASC, id ASC;
+        )SQL");
+        vstmt.bind_int(1, matched_transition_id);
+        auto cf_inputs = extract_custom_fields_from_body(body);
+
+        while (vstmt.step() == SQLITE_ROW) {
+            std::string rtype = vstmt.column_str(0);
+            std::string fname = vstmt.column_str(1);
+            std::string cfg = vstmt.column_str(2);
+
+            if (rtype == "comment_required") {
+                if (raw_comment.empty()) {
+                    send_error(worker, header, "400 Bad Request",
+                               "Validator failed (comment_required): A transition comment is required for '" + matched_transition_name + "'");
+                    return;
+                }
+            } else if (rtype == "field_required") {
+                if (fname == "resolution_id" || fname == "resolution") {
+                    if (new_res_id <= 0) {
+                        send_error(worker, header, "400 Bad Request",
+                                   "Validator failed (field_required): Resolution ('resolution_id') is required when executing '" + matched_transition_name + "'");
+                        return;
+                    }
+                } else if (fname == "due_date") {
+                    if (new_due.empty()) {
+                        send_error(worker, header, "400 Bad Request",
+                                   "Validator failed (field_required): Field 'due_date' is required for '" + matched_transition_name + "'");
+                        return;
+                    }
+                } else if (fname == "steps_to_reproduce") {
+                    if (new_steps.empty()) {
+                        send_error(worker, header, "400 Bad Request",
+                                   "Validator failed (field_required): Field 'steps_to_reproduce' is required for '" + matched_transition_name + "'");
+                        return;
+                    }
+                } else if (fname == "assignee_id") {
+                    if (new_assignee_id <= 0) {
+                        send_error(worker, header, "400 Bad Request",
+                                   "Validator failed (field_required): An Assignee is required for '" + matched_transition_name + "'");
+                        return;
+                    }
+                } else if (!fname.empty()) {
+                    bool has_cf = false;
+                    auto it = cf_inputs.find(fname);
+                    if (it != cf_inputs.end() && it->second.present && !it->second.is_null && !it->second.str_val.empty()) {
+                        has_cf = true;
+                    } else {
+                        auto cfq = conn.prepare(R"SQL(
+                            SELECT COALESCE(cfv.text_value, ''), COALESCE(cfv.date_value, ''), COALESCE(cfv.user_value_id, 0), cfv.numeric_value IS NOT NULL
+                            FROM custom_field_values cfv
+                            INNER JOIN custom_fields cf ON cf.id = cfv.custom_field_id
+                            WHERE cfv.work_item_id = ? AND cf.field_key = ?;
+                        )SQL");
+                        cfq.bind_int(1, item_id);
+                        cfq.bind_text(2, fname);
+                        if (cfq.step() == SQLITE_ROW) {
+                            if (!cfq.column_str(0).empty() || !cfq.column_str(1).empty() || cfq.column_int(2) > 0 || cfq.column_int(3) != 0) {
+                                has_cf = true;
+                            }
+                        }
+                    }
+                    if (!has_cf) {
+                        send_error(worker, header, "400 Bad Request",
+                                   "Validator failed (field_required): Custom field '" + fname + "' is required for '" + matched_transition_name + "'");
+                        return;
+                    }
+                }
+            } else if (rtype == "regex_match" && !cfg.empty()) {
+                std::string val_to_check;
+                if (fname == "comment") val_to_check = raw_comment;
+                else if (fname == "steps_to_reproduce") val_to_check = new_steps;
+                else if (cf_inputs.count(fname)) val_to_check = cf_inputs[fname].str_val;
+                try {
+                    std::regex re(cfg);
+                    if (!std::regex_search(val_to_check, re)) {
+                        send_error(worker, header, "400 Bad Request",
+                                   "Validator failed (regex_match): Field '" + fname + "' does not match format '" + cfg + "'");
+                        return;
+                    }
+                } catch (...) {}
+            }
+        }
+    }
+
     int new_progress = body.has_key("progress") ? body.get_int("progress", old_progress) : old_progress;
     if (!body.has_key("progress")) {
         if (new_status == "Done") new_progress = 100;
@@ -4581,14 +5837,76 @@ static void handle_item_state_transition(backend::wsworker *worker,
         else if (new_status == "In Review" && new_progress < 75) new_progress = 80;
         else if (new_status == "QA / Testing" && new_progress < 85) new_progress = 90;
     }
-    std::string new_start = body.has_key("start_date") ? body.get_string("start_date") : old_start;
-    std::string new_due = body.has_key("due_date") ? body.get_string("due_date") : old_due;
-    int new_order = body.has_key("board_order") ? body.get_int("board_order", old_order) : old_order;
-    std::string comment = body.get_string("comment", "Transitioned via board drag-and-drop");
 
-    int new_res_id = body.has_key("resolution_id") ? body.get_int("resolution_id", 0) : old_res_id;
     bool set_res_now = false;
     std::string new_res_date = old_res_date;
+    std::vector<std::string> executed_pf;
+    bool trigger_update_parent = false;
+    std::string parent_target_status = "Done";
+
+    // Step 3: Execute Post-Functions configured on the transition
+    if (matched_transition_id > 0) {
+        auto pfstmt = conn.prepare(R"SQL(
+            SELECT rule_type, field_name, config_value
+            FROM workflow_transition_rules
+            WHERE transition_id = ? AND rule_category = 'post_function'
+            ORDER BY sort_order ASC, id ASC;
+        )SQL");
+        pfstmt.bind_int(1, matched_transition_id);
+        while (pfstmt.step() == SQLITE_ROW) {
+            std::string ptype = pfstmt.column_str(0);
+            std::string pfield = pfstmt.column_str(1);
+            std::string pval = pfstmt.column_str(2);
+
+            if (ptype == "set_field_value") {
+                if (pfield == "progress" && !body.has_key("progress")) {
+                    new_progress = std::atoi(pval.c_str());
+                } else if (pfield == "resolution" || pfield == "resolution_id") {
+                    if (new_res_id <= 0) {
+                        auto rq = conn.prepare("SELECT id FROM resolutions WHERE name = ? OR CAST(id AS TEXT) = ? LIMIT 1;");
+                        rq.bind_text(1, pval);
+                        rq.bind_text(2, pval);
+                        if (rq.step() == SQLITE_ROW) {
+                            new_res_id = rq.column_int(0);
+                        } else {
+                            new_res_id = resolve_default_resolution_id(conn);
+                        }
+                    }
+                    set_res_now = true;
+                }
+                executed_pf.push_back("set_field_value(" + pfield + "=" + pval + ")");
+            } else if (ptype == "clear_field_value") {
+                if (pfield == "resolution" || pfield == "resolution_id") {
+                    new_res_id = 0;
+                    new_res_date.clear();
+                    set_res_now = false;
+                }
+                executed_pf.push_back("clear_field_value(" + pfield + ")");
+            } else if (ptype == "assign_to_user" && !body.has_key("assignee_id")) {
+                if (pval == "reporter" && old_reporter_id > 0) {
+                    new_assignee_id = old_reporter_id;
+                } else if (pval == "current_user") {
+                    new_assignee_id = u_auth.id;
+                } else if (pval.starts_with("role:")) {
+                    std::string target_role = pval.substr(5);
+                    auto uq = conn.prepare("SELECT id FROM users WHERE role = ? ORDER BY id ASC LIMIT 1;");
+                    uq.bind_text(1, target_role);
+                    if (uq.step() == SQLITE_ROW) {
+                        new_assignee_id = uq.column_int(0);
+                    }
+                } else if (std::atoi(pval.c_str()) > 0) {
+                    new_assignee_id = std::atoi(pval.c_str());
+                }
+                executed_pf.push_back("assign_to_user(" + pval + ")");
+            } else if (ptype == "update_parent_status") {
+                trigger_update_parent = true;
+                if (!pval.empty()) parent_target_status = pval;
+                executed_pf.push_back("update_parent_status(" + parent_target_status + ")");
+            } else if (ptype == "dispatch_event") {
+                executed_pf.push_back("dispatch_event(" + pval + ")");
+            }
+        }
+    }
 
     if (new_status == "Done") {
         if (new_res_id <= 0) {
@@ -4598,11 +5916,17 @@ static void handle_item_state_transition(backend::wsworker *worker,
             set_res_now = true;
         }
     } else if (old_status == "Done" && new_status != "Done" && !body.has_key("resolution_id")) {
-        // Clear resolution when transitioning out of Done (Reopen)
         new_res_id = 0;
         new_res_date.clear();
+        set_res_now = false;
     } else if (new_res_id <= 0) {
         new_res_date.clear();
+    }
+
+    std::string pf_summary;
+    for (size_t i = 0; i < executed_pf.size(); ++i) {
+        if (i > 0) pf_summary += ", ";
+        pf_summary += executed_pf[i];
     }
 
     {
@@ -4610,6 +5934,7 @@ static void handle_item_state_transition(backend::wsworker *worker,
         auto upd = conn.prepare(R"SQL(
             UPDATE work_items
             SET status = ?, progress = ?, start_date = ?, due_date = ?, board_order = ?,
+                assignee_id = ?, steps_to_reproduce = ?,
                 resolution_id = ?,
                 resolution_date = CASE WHEN ? = 1 THEN datetime('now') ELSE ? END,
                 updated_at = datetime('now')
@@ -4620,26 +5945,89 @@ static void handle_item_state_transition(backend::wsworker *worker,
         upd.bind_text(3, new_start);
         upd.bind_text(4, new_due);
         upd.bind_int(5, new_order);
-        upd.bind_optional_int(6, new_res_id);
-        upd.bind_int(7, set_res_now ? 1 : 0);
-        upd.bind_text(8, new_res_date);
-        upd.bind_int(9, item_id);
+        upd.bind_optional_int(6, new_assignee_id);
+        upd.bind_text(7, new_steps);
+        upd.bind_optional_int(8, new_res_id);
+        upd.bind_int(9, set_res_now ? 1 : 0);
+        upd.bind_text(10, new_res_date);
+        upd.bind_int(11, item_id);
         upd.step_done();
 
         sync_item_custom_fields(conn, item_id, body, false);
 
-        if (new_status != old_status) {
+        if (body.get_bool("post_comment", false) && !raw_comment.empty()) {
+            auto cins = conn.prepare("INSERT INTO comments (work_item_id, author_id, body) VALUES (?, ?, ?);");
+            cins.bind_int(1, item_id);
+            cins.bind_int(2, u_auth.id);
+            cins.bind_text(3, raw_comment);
+            cins.step_done();
+        }
+
+        if (new_status != old_status || matched_transition_id > 0) {
             auto hist = conn.prepare(R"SQL(
-                INSERT INTO workflow_history (work_item_id, from_status, to_status, changed_by, comment)
-                VALUES (?, ?, ?, ?, ?);
+                INSERT INTO workflow_history (
+                    work_item_id, from_status, to_status, changed_by, comment,
+                    transition_id, transition_name, executed_post_functions
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
             )SQL");
             hist.bind_int(1, item_id);
             hist.bind_text(2, old_status);
             hist.bind_text(3, new_status);
             hist.bind_int(4, u_auth.id);
             hist.bind_text(5, comment);
+            hist.bind_optional_int(6, matched_transition_id);
+            hist.bind_text(7, matched_transition_name);
+            hist.bind_text(8, pf_summary);
             hist.step_done();
         }
+
+        // Post-function: update_parent_status when all sibling subtasks reach Done
+        if (trigger_update_parent && old_parent_id > 0 && new_status == parent_target_status) {
+            auto sibq = conn.prepare("SELECT COUNT(*) FROM work_items WHERE parent_id = ? AND status != ?;");
+            sibq.bind_int(1, old_parent_id);
+            sibq.bind_text(2, parent_target_status);
+            int remaining_sibs = 0;
+            if (sibq.step() == SQLITE_ROW) {
+                remaining_sibs = sibq.column_int(0);
+            }
+            if (remaining_sibs == 0) {
+                auto pq = conn.prepare("SELECT status, type FROM work_items WHERE id = ?;");
+                pq.bind_int(1, old_parent_id);
+                if (pq.step() == SQLITE_ROW) {
+                    std::string p_old_st = pq.column_str(0);
+                    std::string p_type = pq.column_str(1);
+                    // Auto-close parent Story/Task when all subtasks reach Done
+                    if (p_old_st != parent_target_status && (p_type == "Story" || p_type == "Task")) {
+                        int def_res = resolve_default_resolution_id(conn);
+                        auto pupd = conn.prepare(R"SQL(
+                            UPDATE work_items
+                            SET status = ?, progress = 100,
+                                resolution_id = COALESCE(resolution_id, ?),
+                                resolution_date = COALESCE(NULLIF(resolution_date, ''), datetime('now')),
+                                updated_at = datetime('now')
+                            WHERE id = ?;
+                        )SQL");
+                        pupd.bind_text(1, parent_target_status);
+                        pupd.bind_int(2, def_res);
+                        pupd.bind_int(3, old_parent_id);
+                        pupd.step_done();
+
+                        auto phist = conn.prepare(R"SQL(
+                            INSERT INTO workflow_history (
+                                work_item_id, from_status, to_status, changed_by, comment,
+                                transition_name, executed_post_functions
+                            ) VALUES (?, ?, ?, ?, 'Auto-transitioned by post-function: all child subtasks completed', 'Auto-Close Parent', 'update_parent_status');
+                        )SQL");
+                        phist.bind_int(1, old_parent_id);
+                        phist.bind_text(2, p_old_st);
+                        phist.bind_text(3, parent_target_status);
+                        phist.bind_int(4, u_auth.id);
+                        phist.step_done();
+                    }
+                }
+            }
+        }
+
         tx.commit();
     }
 
@@ -5107,11 +6495,22 @@ int main(int argc, char *argv[]) {
         {"^/api/screen-tabs/([0-9]+)/fields$",      backend::POST,                  handle_screen_tab_fields    },
         {"^/api/screen-tab-fields/([0-9]+)$",       backend::DELETE,                handle_delete_screen_tab_field},
         {"^/api/screen-schemes$",                   backend::GET | backend::POST,   handle_screen_schemes       },
+        {"^/api/workflows$",                        backend::GET | backend::POST,   handle_workflows            },
+        {"^/api/workflows/([0-9]+)$",               backend::GET | backend::PUT | backend::DELETE, handle_workflow_detail},
+        {"^/api/workflows/([0-9]+)/statuses$",      backend::POST,                  handle_workflow_statuses    },
+        {"^/api/workflow-statuses/([0-9]+)$",       backend::PUT | backend::DELETE, handle_workflow_status_detail},
+        {"^/api/workflows/([0-9]+)/transitions$",   backend::POST,                  handle_workflow_transitions },
+        {"^/api/workflow-transitions/([0-9]+)$",    backend::PUT | backend::DELETE, handle_workflow_transition_detail},
+        {"^/api/workflow-transitions/([0-9]+)/rules$", backend::POST,               handle_workflow_transition_rules},
+        {"^/api/workflow-transition-rules/([0-9]+)$", backend::DELETE,              handle_delete_workflow_transition_rule},
+        {"^/api/workflow-schemes$",                 backend::GET | backend::POST,   handle_workflow_schemes     },
+        {"^/api/workflow-schemes/([0-9]+)$",        backend::DELETE,                handle_delete_workflow_scheme},
         {"^/api/sprints$",                          backend::GET | backend::POST,   handle_sprints              },
         {"^/api/sprints/([0-9]+)$",                 backend::PUT | backend::DELETE, handle_sprint_detail        },
         {"^/api/sprints/([0-9]+)/current$",         backend::POST,                  handle_sprint_set_current   },
         {"^/api/items$",                                backend::GET | backend::POST,   handle_items                },
         {"^/api/items/([A-Za-z0-9_-]+)$",               backend::GET | backend::PUT | backend::DELETE, handle_item_detail },
+        {"^/api/items/([A-Za-z0-9_-]+)/transitions$",   backend::GET | backend::POST,   handle_item_available_transitions},
         {"^/api/items/([A-Za-z0-9_-]+)/state$",         backend::PATCH | backend::POST, handle_item_state_transition},
         {"^/api/items/([A-Za-z0-9_-]+)/comments$",      backend::POST,                  handle_item_comments        },
         {"^/api/items/([A-Za-z0-9_-]+)/links$",         backend::POST,                  handle_item_links           },

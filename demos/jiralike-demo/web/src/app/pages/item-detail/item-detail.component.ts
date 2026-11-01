@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { ApiService } from '../../services/api.service';
 import {
+  AvailableTransition,
   PRIORITIES,
   ScreenDef,
   ScreenTab,
@@ -55,24 +56,281 @@ import {
           <div class="toast-banner">{{ toastMsg() }}</div>
         }
 
-        <!-- Interactive Jira Workflow State Transition Pipeline -->
-        <div class="workflow-pipeline-bar">
-          <span class="pipeline-label">Workflow State:</span>
-          <div class="pipeline-steps">
-            @for (st of states; track st) {
-              <button
-                type="button"
-                class="pipeline-step"
-                [attr.data-state]="st"
-                [class.active]="it.status === st"
-                (click)="transitionState(st)"
-              >
-                <span class="state-dot" [attr.data-state]="st"></span>
-                {{ st }}
-              </button>
-            }
+        <!-- Interactive Jira Directed Workflow State & Transition Bar -->
+        <div class="workflow-pipeline-bar" style="flex-direction: column; align-items: stretch; gap: 10px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+            <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+              <span class="pipeline-label">Current Status:</span>
+              <span class="state-pill" [attr.data-state]="it.status" style="font-size: 13px; padding: 4px 12px;">
+                {{ it.status }}
+              </span>
+              @if (it.workflow; as wf) {
+                <span class="badge badge-info" title="Active Directed Workflow">
+                  🔀 {{ wf.workflow_name }} ({{ wf.current_category }})
+                </span>
+              }
+              @if (it.resolution_name) {
+                <span class="badge" style="background: #dcfce7; color: #166534;">
+                  ✔ Resolution: {{ it.resolution_name }}
+                </span>
+              }
+            </div>
+            <a routerLink="/workflows" class="btn btn-ghost btn-sm">
+              ⚙ Edit Workflow Graph →
+            </a>
           </div>
+
+          <!-- Dynamic Available Next Transitions from Transition Guard -->
+          @if (it.workflow && it.workflow.transitions.length > 0) {
+            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+              <span class="text-muted" style="font-size: 12px; font-weight: 600;">
+                Available Transitions:
+              </span>
+              @for (tr of it.workflow.transitions; track tr.id) {
+                @if (tr.allowed) {
+                  <button
+                    type="button"
+                    class="pipeline-step"
+                    [attr.data-state]="tr.to_status"
+                    (click)="triggerWorkflowTransition(tr)"
+                    [title]="'Transition to ' + tr.to_status"
+                  >
+                    <span class="state-dot" [attr.data-state]="tr.to_status"></span>
+                    <strong>{{ tr.name }}</strong>
+                    <span class="text-muted" style="font-size: 11px;">→ {{ tr.to_status }}</span>
+                    @if (tr.requires_screen) {
+                      <span title="Opens Transition Screen Modal" style="margin-left: 3px;">🗔</span>
+                    }
+                  </button>
+                } @else {
+                  <button
+                    type="button"
+                    class="pipeline-step"
+                    style="opacity: 0.6; cursor: not-allowed; border-style: dashed;"
+                    [title]="tr.blocked_reasons.join('; ')"
+                    (click)="showToast(tr.blocked_reasons[0] || 'Transition blocked by workflow condition')"
+                  >
+                    🔒 {{ tr.name }} → {{ tr.to_status }}
+                  </button>
+                }
+              }
+            </div>
+          } @else {
+            <div class="pipeline-steps">
+              @for (st of states; track st) {
+                <button
+                  type="button"
+                  class="pipeline-step"
+                  [attr.data-state]="st"
+                  [class.active]="it.status === st"
+                  (click)="transitionState(st)"
+                >
+                  <span class="state-dot" [attr.data-state]="st"></span>
+                  {{ st }}
+                </button>
+              }
+            </div>
+          }
         </div>
+
+        <!-- Transition Screen Modal -->
+        @if (activeTransitionModal(); as tr) {
+          <div
+            style="position: fixed; inset: 0; background: rgba(15, 23, 42, 0.55); z-index: 1200; display: flex; align-items: center; justify-content: center; padding: 16px;"
+          >
+            <div
+              class="card-panel"
+              style="width: 100%; max-width: 640px; max-height: 90vh; overflow-y: auto; box-shadow: 0 20px 45px rgba(0,0,0,0.25);"
+            >
+              <div class="section-header">
+                <div>
+                  <h3>🗔 Transition Issue: {{ tr.name }}</h3>
+                  <small class="text-muted">
+                    <code>{{ it.key }}</code>:
+                    <span class="state-pill" [attr.data-state]="it.status">{{ it.status }}</span>
+                    →
+                    <span class="state-pill" [attr.data-state]="tr.to_status">{{ tr.to_status }}</span>
+                    @if (tr.screen_name) {
+                      · Screen: <strong>{{ tr.screen_name }}</strong>
+                    }
+                  </small>
+                </div>
+                <button type="button" class="btn btn-ghost btn-sm" (click)="closeTransitionModal()">✕</button>
+              </div>
+
+              @if (transitionModalError()) {
+                <div
+                  style="margin: 10px 0; padding: 10px 12px; background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c; border-radius: 6px; font-size: 13px;"
+                >
+                  ⚠ {{ transitionModalError() }}
+                </div>
+              }
+
+              <!-- Active Validators & Post-Functions Summary -->
+              @if (tr.validators.length > 0 || tr.post_functions.length > 0) {
+                <div
+                  style="margin: 12px 0; padding: 10px 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 12px;"
+                >
+                  @if (tr.validators.length > 0) {
+                    <div style="margin-bottom: 4px;">
+                      <strong>✔ Active Validators:</strong>
+                      @for (v of tr.validators; track v.id) {
+                        <span class="badge" style="margin-left: 6px; background: #fef3c7; color: #92400e;">
+                          {{ v.rule_type }}{{ v.field_name ? ': ' + v.field_name : '' }}
+                        </span>
+                      }
+                    </div>
+                  }
+                  @if (tr.post_functions.length > 0) {
+                    <div>
+                      <strong>⚡ Post-Functions to Execute:</strong>
+                      @for (pf of tr.post_functions; track pf.id) {
+                        <span class="badge" style="margin-left: 6px; background: #dcfce7; color: #166534;">
+                          {{ pf.rule_type }}({{ pf.field_name }}{{ pf.config_value ? '=' + pf.config_value : '' }})
+                        </span>
+                      }
+                    </div>
+                  }
+                </div>
+              }
+
+              <!-- Resolution Field (shown when transitioning to Done or when resolution_id validator exists) -->
+              @if (tr.to_status === 'Done' || hasValidatorForField(tr, 'resolution_id')) {
+                <div class="form-group">
+                  <label>
+                    Resolution
+                    <span style="color: #de350b; font-weight: bold;">*</span>
+                  </label>
+                  <select name="tr_modal_resolution" [(ngModel)]="transitionDraft.resolution_id">
+                    <option [ngValue]="0">— Select Resolution —</option>
+                    @for (r of api.resolutions(); track r.id) {
+                      <option [ngValue]="r.id">✔ {{ r.name }} — {{ r.description }}</option>
+                    }
+                  </select>
+                </div>
+              }
+
+              <!-- Steps to Reproduce Field (shown when required by validator) -->
+              @if (hasValidatorForField(tr, 'steps_to_reproduce')) {
+                <div class="form-group">
+                  <label>
+                    Steps to Reproduce
+                    <span style="color: #de350b; font-weight: bold;">*</span>
+                  </label>
+                  <textarea
+                    rows="3"
+                    name="tr_modal_steps"
+                    [(ngModel)]="transitionDraft.steps_to_reproduce"
+                    placeholder="Document step-by-step reproduction instructions..."
+                  ></textarea>
+                </div>
+              }
+
+              <!-- Dynamic Transition Screen Fields (if tr.screen has tabs/fields) -->
+              @if (tr.screen && tr.screen.tabs.length > 0) {
+                @for (tab of tr.screen.tabs; track tab.id) {
+                  <div style="margin-top: 10px;">
+                    <h4 style="margin: 0 0 8px 0; font-size: 13px; color: #334155;">
+                      Tab: {{ tab.name }}
+                    </h4>
+                    <div class="grid-2">
+                      @for (f of tab.fields; track f.field_key) {
+                        <div
+                          class="form-group"
+                          [style.gridColumn]="f.field_type === 'long_text' ? '1 / -1' : 'auto'"
+                        >
+                          <label>
+                            {{ f.name }}
+                            @if (f.is_required || hasValidatorForField(tr, f.field_key)) {
+                              <span style="color: #de350b; font-weight: bold;">*</span>
+                            }
+                          </label>
+                          @switch (f.field_type) {
+                            @case ('long_text') {
+                              <textarea
+                                rows="2"
+                                [name]="'tr_cf_' + f.field_key"
+                                [(ngModel)]="customFieldsDraft[f.field_key]"
+                              ></textarea>
+                            }
+                            @case ('user_picker_single') {
+                              <select
+                                [name]="'tr_cf_' + f.field_key"
+                                [(ngModel)]="customFieldsDraft[f.field_key]"
+                              >
+                                <option [ngValue]="null">— None —</option>
+                                @for (u of api.users(); track u.id) {
+                                  <option [ngValue]="u.id">{{ u.display_name }} ({{ u.role }})</option>
+                                }
+                              </select>
+                            }
+                            @case ('date') {
+                              <input
+                                type="date"
+                                [name]="'tr_cf_' + f.field_key"
+                                [(ngModel)]="customFieldsDraft[f.field_key]"
+                              />
+                            }
+                            @case ('checkbox') {
+                              <label style="display: inline-flex; align-items: center; gap: 8px; margin-top: 6px;">
+                                <input
+                                  type="checkbox"
+                                  [name]="'tr_cf_' + f.field_key"
+                                  [(ngModel)]="customFieldsDraft[f.field_key]"
+                                />
+                                <span>{{ f.description || f.name }}</span>
+                              </label>
+                            }
+                            @default {
+                              <input
+                                type="text"
+                                [name]="'tr_cf_' + f.field_key"
+                                [(ngModel)]="customFieldsDraft[f.field_key]"
+                              />
+                            }
+                          }
+                        </div>
+                      }
+                    </div>
+                  </div>
+                }
+              }
+
+              <!-- Transition Comment -->
+              <div class="form-group" style="margin-top: 10px;">
+                <label>
+                  Transition Comment
+                  @if (hasCommentValidator(tr)) {
+                    <span style="color: #de350b; font-weight: bold;">* (Required by Validator)</span>
+                  }
+                </label>
+                <textarea
+                  rows="3"
+                  name="tr_modal_comment"
+                  [(ngModel)]="transitionDraft.comment"
+                  placeholder="Explain the context or verification notes for this state transition..."
+                ></textarea>
+                <label style="display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 12.5px;">
+                  <input
+                    type="checkbox"
+                    name="tr_modal_post_comment"
+                    [(ngModel)]="transitionDraft.post_comment"
+                  />
+                  Also post this note to the Issue Comments thread
+                </label>
+              </div>
+
+              <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px;">
+                <button type="button" class="btn btn-secondary" (click)="closeTransitionModal()">
+                  Cancel
+                </button>
+                <button type="button" class="btn btn-primary" (click)="submitTransitionModal()">
+                  Execute '{{ tr.name }}' → {{ tr.to_status }}
+                </button>
+              </div>
+            </div>
+          </div>
+        }
 
         <!-- Two Column Detail Layout -->
         <div class="detail-grid">
@@ -521,11 +779,21 @@ import {
                 <div class="history-list">
                   @for (h of it.history; track h.id) {
                     <div class="history-row">
-                      <strong>{{ h.changed_by_name }}</strong> transitioned state from
+                      <strong>{{ h.changed_by_name }}</strong>
+                      @if (h.transition_name) {
+                        executed <span class="badge badge-info">{{ h.transition_name }}</span>:
+                      } @else {
+                        transitioned state from
+                      }
                       <span class="state-pill" [attr.data-state]="h.from_status">{{ h.from_status }}</span>
                       →
                       <span class="state-pill" [attr.data-state]="h.to_status">{{ h.to_status }}</span>
                       <span class="text-muted">({{ h.created_at }})</span>
+                      @if (h.executed_post_functions) {
+                        <div style="margin-top: 4px; font-size: 11.5px; color: #166534;">
+                          ⚡ Post-Functions: <code>{{ h.executed_post_functions }}</code>
+                        </div>
+                      }
                       @if (h.comment) {
                         <div class="history-note">{{ h.comment }}</div>
                       }
@@ -781,8 +1049,17 @@ export class ItemDetailComponent implements OnInit {
   readonly toastMsg = signal('');
   readonly resolvedScreen = signal<ScreenDef | null>(null);
   readonly activeScreenTabId = signal<number>(0);
+  readonly activeTransitionModal = signal<AvailableTransition | null>(null);
+  readonly transitionModalError = signal('');
 
   customFieldsDraft: Record<string, any> = {};
+
+  transitionDraft = {
+    resolution_id: 0,
+    steps_to_reproduce: '',
+    comment: '',
+    post_comment: true,
+  };
 
   newSubtaskTitle = '';
   newCommentText = '';
@@ -870,14 +1147,91 @@ export class ItemDetailComponent implements OnInit {
     await this.saveChanges();
   }
 
+  hasValidatorForField(tr: AvailableTransition, fieldName: string): boolean {
+    return tr.validators.some((v) => v.rule_type === 'field_required' && v.field_name === fieldName);
+  }
+
+  hasCommentValidator(tr: AvailableTransition): boolean {
+    return tr.validators.some((v) => v.rule_type === 'comment_required');
+  }
+
+  async triggerWorkflowTransition(tr: AvailableTransition): Promise<void> {
+    const cur = this.item();
+    if (!cur) return;
+    if (!tr.allowed) {
+      this.showToast(tr.blocked_reasons[0] || 'Transition blocked by workflow condition');
+      return;
+    }
+
+    if (tr.requires_screen) {
+      const defRes = cur.resolution_id || this.api.resolutions().find((r) => r.is_default)?.id || 1;
+      this.transitionDraft = {
+        resolution_id: tr.to_status === 'Done' ? defRes : cur.resolution_id || 0,
+        steps_to_reproduce: cur.steps_to_reproduce || '',
+        comment: '',
+        post_comment: true,
+      };
+      this.transitionModalError.set('');
+      this.activeTransitionModal.set(tr);
+      return;
+    }
+
+    try {
+      await this.api.transitionItemState(cur.key, tr.to_status, {
+        transition_id: tr.id,
+        comment: `Executed '${tr.name}' (${cur.status} → ${tr.to_status})`,
+      });
+      await this.reloadDetail(cur.key);
+      this.showToast(`${cur.key}: ${tr.name} → ${tr.to_status}`);
+    } catch (err: any) {
+      this.showToast(`Transition failed: ${err?.message || 'Error'}`);
+    }
+  }
+
+  closeTransitionModal(): void {
+    this.activeTransitionModal.set(null);
+    this.transitionModalError.set('');
+  }
+
+  async submitTransitionModal(): Promise<void> {
+    const cur = this.item();
+    const tr = this.activeTransitionModal();
+    if (!cur || !tr) return;
+
+    try {
+      await this.api.transitionItemState(cur.key, tr.to_status, {
+        transition_id: tr.id,
+        resolution_id: this.transitionDraft.resolution_id || undefined,
+        steps_to_reproduce: this.transitionDraft.steps_to_reproduce || undefined,
+        comment: this.transitionDraft.comment.trim() || undefined,
+        post_comment: this.transitionDraft.post_comment,
+        custom_fields: this.customFieldsDraft,
+      });
+      this.closeTransitionModal();
+      await this.reloadDetail(cur.key);
+      this.showToast(`${cur.key} transitioned via '${tr.name}' to ${tr.to_status}`);
+    } catch (err: any) {
+      this.transitionModalError.set(err?.message || 'Transition validation failed');
+    }
+  }
+
   async transitionState(newState: WorkflowState): Promise<void> {
     const cur = this.item();
     if (!cur || cur.status === newState) return;
-    await this.api.transitionItemState(cur.key, newState, {
-      comment: `Transitioned to '${newState}' from Item Detail page`,
-    });
-    await this.reloadDetail(cur.key);
-    this.showToast(`${cur.key} transitioned to ${newState}`);
+    const tr = cur.workflow?.transitions.find((t) => t.to_status === newState);
+    if (tr) {
+      await this.triggerWorkflowTransition(tr);
+      return;
+    }
+    try {
+      await this.api.transitionItemState(cur.key, newState, {
+        comment: `Transitioned to '${newState}' from Item Detail page`,
+      });
+      await this.reloadDetail(cur.key);
+      this.showToast(`${cur.key} transitioned to ${newState}`);
+    } catch (err: any) {
+      this.showToast(`Transition blocked: ${err?.message || 'Rule check failed'}`);
+    }
   }
 
   async saveChanges(): Promise<void> {
@@ -985,7 +1339,7 @@ export class ItemDetailComponent implements OnInit {
     await this.router.navigate(['/board']);
   }
 
-  private showToast(msg: string): void {
+  showToast(msg: string): void {
     this.toastMsg.set(msg);
     setTimeout(() => {
       if (this.toastMsg() === msg) this.toastMsg.set('');

@@ -263,6 +263,9 @@ export interface WorkflowHistoryItem {
   changed_by_name: string;
   comment: string;
   created_at: string;
+  transition_id?: number | null;
+  transition_name?: string;
+  executed_post_functions?: string;
 }
 
 export interface WorkItemDetail extends WorkItem {
@@ -271,6 +274,7 @@ export interface WorkItemDetail extends WorkItem {
   comments: CommentItem[];
   attachments: AttachmentItem[];
   history: WorkflowHistoryItem[];
+  workflow?: ItemTransitionsPayload;
 }
 
 export type CustomFieldType =
@@ -410,3 +414,112 @@ export interface ScreenScheme {
   transition_screen_name?: string;
   created_at?: string;
 }
+
+export type StatusCategory = 'To Do' | 'In Progress' | 'Done' | string;
+
+export interface WorkflowStatusNode {
+  id: number;
+  workflow_id?: number;
+  name: string;
+  category: StatusCategory;
+  color: string;
+  pos_x: number;
+  pos_y: number;
+  sort_order: number;
+  is_initial: boolean;
+  item_count?: number;
+}
+
+export interface WorkflowTransitionRule {
+  id: number;
+  transition_id: number;
+  rule_category: 'condition' | 'validator' | 'post_function' | string;
+  rule_type:
+    | 'only_assignee'
+    | 'user_in_role'
+    | 'subtasks_completed'
+    | 'permission'
+    | 'field_required'
+    | 'comment_required'
+    | 'regex_match'
+    | 'set_field_value'
+    | 'clear_field_value'
+    | 'assign_to_user'
+    | 'update_parent_status'
+    | 'dispatch_event'
+    | string;
+  field_name: string;
+  config_value: string;
+  description: string;
+  sort_order: number;
+}
+
+export interface WorkflowTransitionDef {
+  id: number;
+  workflow_id: number;
+  name: string;
+  from_status: string;
+  to_status: string;
+  screen_id: number | null;
+  screen_name: string;
+  sort_order: number;
+  created_at?: string;
+  rules: WorkflowTransitionRule[];
+  conditions: WorkflowTransitionRule[];
+  validators: WorkflowTransitionRule[];
+  post_functions: WorkflowTransitionRule[];
+}
+
+export interface WorkflowDef {
+  id: number;
+  name: string;
+  description: string;
+  is_default: boolean;
+  is_system: boolean;
+  created_at?: string;
+  statuses: WorkflowStatusNode[];
+  transitions: WorkflowTransitionDef[];
+}
+
+export interface WorkflowSchemeBinding {
+  id: number;
+  name: string;
+  description: string;
+  project_id: number | null;
+  project_name: string;
+  issue_type: string;
+  workflow_id: number;
+  workflow_name: string;
+  is_default: boolean;
+  created_at?: string;
+}
+
+export interface AvailableTransition {
+  id: number;
+  workflow_id: number;
+  name: string;
+  from_status: string;
+  to_status: WorkflowState | string;
+  to_category: StatusCategory;
+  to_color: string;
+  screen_id: number | null;
+  screen_name: string;
+  allowed: boolean;
+  requires_screen: boolean;
+  blocked_reasons: string[];
+  conditions: WorkflowTransitionRule[];
+  validators: WorkflowTransitionRule[];
+  post_functions: WorkflowTransitionRule[];
+  screen: ScreenDef | null;
+}
+
+export interface ItemTransitionsPayload {
+  item_id: number;
+  workflow_id: number;
+  workflow_name: string;
+  current_status: string;
+  current_category: StatusCategory;
+  statuses: WorkflowStatusNode[];
+  transitions: AvailableTransition[];
+}
+
