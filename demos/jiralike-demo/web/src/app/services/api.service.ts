@@ -22,14 +22,21 @@ import {
   EpicSummaryItem,
   FieldConfiguration,
   GadgetCatalogItem,
+  IssueSecurityGrant,
+  IssueSecurityLevel,
+  IssueSecurityScheme,
   IssueTypeDef,
   IssueTypeScheme,
   ItemTransitionsPayload,
   JqlSearchResponse,
   JqlSuggestions,
   JqlValidateResponse,
+  PermissionGrant,
+  PermissionScheme,
+  PersonalAccessToken,
   Project,
   ProjectComponent,
+  ProjectRoleMember,
   ProjectVersion,
   ReleaseBurndownReport,
   ReleaseNotesResponse,
@@ -44,7 +51,10 @@ import {
   TimeRollup,
   TimesheetResponse,
   User,
+  UserGroup,
+  UserGroupMember,
   UserMention,
+  UserMyPermissions,
   VelocityReport,
   VotesPayload,
   WatchersPayload,
@@ -1738,5 +1748,262 @@ export class ApiService {
         method: 'DELETE',
       }
     );
+  }
+
+  // Epic 10 / Step 11: Permissions, Security Schemes, Groups & Personal Access Tokens
+  async getPermissionSchemes(): Promise<PermissionScheme[]> {
+    return this.request<PermissionScheme[]>('/api/permission-schemes');
+  }
+
+  async getPermissionScheme(id: number): Promise<PermissionScheme> {
+    return this.request<PermissionScheme>(`/api/permission-schemes/${id}`);
+  }
+
+  async createPermissionScheme(
+    data: Partial<PermissionScheme> & { copy_from_scheme_id?: number }
+  ): Promise<PermissionScheme> {
+    return this.request<PermissionScheme>('/api/permission-schemes', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updatePermissionScheme(
+    id: number,
+    data: Partial<PermissionScheme>
+  ): Promise<{ ok: boolean; id: number }> {
+    return this.request<{ ok: boolean; id: number }>(`/api/permission-schemes/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deletePermissionScheme(id: number): Promise<{ deleted: boolean }> {
+    return this.request<{ deleted: boolean }>(`/api/permission-schemes/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async addPermissionGrant(
+    schemeId: number,
+    data: { permission_key: string; grantee_type: string; grantee_value: string }
+  ): Promise<PermissionGrant> {
+    return this.request<PermissionGrant>(`/api/permission-schemes/${schemeId}/grants`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deletePermissionGrant(schemeId: number, grantId: number): Promise<{ deleted: boolean }> {
+    return this.request<{ deleted: boolean }>(
+      `/api/permission-schemes/${schemeId}/grants/${grantId}`,
+      {
+        method: 'DELETE',
+      }
+    );
+  }
+
+  async getSecuritySchemes(): Promise<IssueSecurityScheme[]> {
+    return this.request<IssueSecurityScheme[]>('/api/security-schemes');
+  }
+
+  async getSecurityScheme(id: number): Promise<IssueSecurityScheme> {
+    return this.request<IssueSecurityScheme>(`/api/security-schemes/${id}`);
+  }
+
+  async createSecurityScheme(data: Partial<IssueSecurityScheme>): Promise<IssueSecurityScheme> {
+    return this.request<IssueSecurityScheme>('/api/security-schemes', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateSecurityScheme(
+    id: number,
+    data: Partial<IssueSecurityScheme>
+  ): Promise<{ ok: boolean }> {
+    return this.request<{ ok: boolean }>(`/api/security-schemes/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteSecurityScheme(id: number): Promise<{ deleted: boolean }> {
+    return this.request<{ deleted: boolean }>(`/api/security-schemes/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async addSecurityLevel(
+    schemeId: number,
+    data: { name: string; description?: string; is_default?: boolean }
+  ): Promise<IssueSecurityLevel> {
+    return this.request<IssueSecurityLevel>(`/api/security-schemes/${schemeId}/levels`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateSecurityLevel(
+    schemeId: number,
+    levelId: number,
+    data: { name?: string; description?: string; is_default?: boolean }
+  ): Promise<{ ok: boolean }> {
+    return this.request<{ ok: boolean }>(
+      `/api/security-schemes/${schemeId}/levels/${levelId}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }
+    );
+  }
+
+  async deleteSecurityLevel(schemeId: number, levelId: number): Promise<{ deleted: boolean }> {
+    return this.request<{ deleted: boolean }>(
+      `/api/security-schemes/${schemeId}/levels/${levelId}`,
+      {
+        method: 'DELETE',
+      }
+    );
+  }
+
+  async addSecurityLevelGrant(
+    schemeId: number,
+    levelId: number,
+    data: { grantee_type: string; grantee_value: string }
+  ): Promise<IssueSecurityGrant> {
+    return this.request<IssueSecurityGrant>(
+      `/api/security-schemes/${schemeId}/levels/${levelId}/grants`,
+      {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }
+    );
+  }
+
+  async deleteSecurityLevelGrant(
+    schemeId: number,
+    levelId: number,
+    grantId: number
+  ): Promise<{ deleted: boolean }> {
+    return this.request<{ deleted: boolean }>(
+      `/api/security-schemes/${schemeId}/levels/${levelId}/grants/${grantId}`,
+      {
+        method: 'DELETE',
+      }
+    );
+  }
+
+  async getSecurityLevels(projectId?: number): Promise<IssueSecurityLevel[]> {
+    const q = projectId ? `?project_id=${projectId}` : '';
+    return this.request<IssueSecurityLevel[]>(`/api/security-levels${q}`);
+  }
+
+  async getUserGroups(): Promise<UserGroup[]> {
+    return this.request<UserGroup[]>('/api/groups');
+  }
+
+  async getUserGroup(id: number): Promise<UserGroup> {
+    return this.request<UserGroup>(`/api/groups/${id}`);
+  }
+
+  async createUserGroup(data: { name: string; description?: string }): Promise<UserGroup> {
+    return this.request<UserGroup>('/api/groups', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteUserGroup(id: number): Promise<{ deleted: boolean }> {
+    return this.request<{ deleted: boolean }>(`/api/groups/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async addUserToGroup(groupId: number, userId: number): Promise<{ added: boolean }> {
+    return this.request<{ added: boolean }>(`/api/groups/${groupId}/members`, {
+      method: 'POST',
+      body: JSON.stringify({ user_id: userId }),
+    });
+  }
+
+  async removeUserFromGroup(groupId: number, userId: number): Promise<{ deleted: boolean }> {
+    return this.request<{ deleted: boolean }>(`/api/groups/${groupId}/members/${userId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async setProjectPermissionScheme(
+    projectId: number,
+    schemeId: number
+  ): Promise<{ ok: boolean }> {
+    return this.request<{ ok: boolean }>(`/api/projects/${projectId}/permission-scheme`, {
+      method: 'PUT',
+      body: JSON.stringify({ permission_scheme_id: schemeId }),
+    });
+  }
+
+  async setProjectSecurityScheme(
+    projectId: number,
+    schemeId: number
+  ): Promise<{ ok: boolean }> {
+    return this.request<{ ok: boolean }>(`/api/projects/${projectId}/security-scheme`, {
+      method: 'PUT',
+      body: JSON.stringify({ security_scheme_id: schemeId }),
+    });
+  }
+
+  async getProjectRoleMembers(projectId: number): Promise<ProjectRoleMember[]> {
+    return this.request<ProjectRoleMember[]>(`/api/projects/${projectId}/role-members`);
+  }
+
+  async addProjectRoleMember(
+    projectId: number,
+    roleName: string,
+    userId: number
+  ): Promise<{ added: boolean }> {
+    return this.request<{ added: boolean }>(`/api/projects/${projectId}/role-members`, {
+      method: 'POST',
+      body: JSON.stringify({ role_name: roleName, user_id: userId }),
+    });
+  }
+
+  async deleteProjectRoleMember(
+    projectId: number,
+    roleName: string,
+    userId: number
+  ): Promise<{ deleted: boolean }> {
+    return this.request<{ deleted: boolean }>(
+      `/api/projects/${projectId}/role-members?role_name=${encodeURIComponent(roleName)}&user_id=${userId}`,
+      {
+        method: 'DELETE',
+      }
+    );
+  }
+
+  async getPersonalAccessTokens(): Promise<PersonalAccessToken[]> {
+    return this.request<PersonalAccessToken[]>('/api/tokens');
+  }
+
+  async createPersonalAccessToken(data: {
+    name: string;
+    scopes?: string;
+    expires_at?: string;
+  }): Promise<PersonalAccessToken> {
+    return this.request<PersonalAccessToken>('/api/tokens', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deletePersonalAccessToken(id: number): Promise<{ deleted: boolean }> {
+    return this.request<{ deleted: boolean }>(`/api/tokens/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getMyPermissions(projectId?: number): Promise<UserMyPermissions> {
+    const q = projectId ? `?project_id=${projectId}` : '';
+    return this.request<UserMyPermissions>(`/api/permissions/my${q}`);
   }
 }

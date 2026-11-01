@@ -7,6 +7,7 @@ import { RichEditorComponent } from '../../components/rich-editor/rich-editor.co
 import { MarkdownViewerComponent } from '../../components/rich-editor/markdown-viewer.component';
 import {
   AvailableTransition,
+  IssueSecurityLevel,
   PRIORITIES,
   ScreenDef,
   ScreenTab,
@@ -41,6 +42,11 @@ import {
             }
             <span class="type-badge" [attr.data-type]="it.type">{{ it.type }}</span>
             <span class="cat-badge" [attr.data-cat]="it.category">{{ it.category }}</span>
+            @if (it.security_level_name) {
+              <span class="badge" style="background: #fffbe6; color: #d46b08; border: 1px solid #ffe58f; font-weight: 600; padding: 2px 8px; border-radius: 4px;">
+                🔒 {{ it.security_level_name }}
+              </span>
+            }
             <strong class="issue-key-lg">{{ it.key }}</strong>
           </div>
           <div class="toolbar-actions">
@@ -1432,6 +1438,26 @@ import {
               </div>
 
               <div class="form-group">
+                <label for="detail-security-level">Security Level</label>
+                <select
+                  id="detail-security-level"
+                  name="detail_security_level_id"
+                  [(ngModel)]="it.security_level_id"
+                  (change)="saveChanges()"
+                >
+                  <option [ngValue]="null">— None (Public) —</option>
+                  @for (sec of securityLevels(); track sec.id) {
+                    <option [ngValue]="sec.id">🔒 {{ sec.name }}</option>
+                  }
+                </select>
+                @if (it.security_level_name) {
+                  <small class="text-muted" style="display: block; margin-top: 4px;">
+                    Current level: <strong>{{ it.security_level_name }}</strong>
+                  </small>
+                }
+              </div>
+
+              <div class="form-group">
                 <label>Components</label>
                 <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px;">
                   @for (c of projectComponents(); track c.id) {
@@ -1545,6 +1571,7 @@ export class ItemDetailComponent implements OnInit {
 
   readonly item = signal<WorkItemDetail | null>(null);
   readonly allItems = signal<WorkItem[]>([]);
+  readonly securityLevels = signal<IssueSecurityLevel[]>([]);
   readonly activeTab = signal<'comments' | 'worklogs' | 'history' | 'changelog'>('comments');
   readonly toastMsg = signal('');
   readonly resolvedScreen = signal<ScreenDef | null>(null);
@@ -1624,6 +1651,13 @@ export class ItemDetailComponent implements OnInit {
       }
     } catch {
       // ignore
+    }
+
+    try {
+      const secLevels = await this.api.getSecurityLevels(d.project_id);
+      this.securityLevels.set(secLevels);
+    } catch {
+      this.securityLevels.set([]);
     }
   }
 
@@ -1782,6 +1816,7 @@ export class ItemDetailComponent implements OnInit {
         sprint_id: cur.sprint_id || 0,
         assignee_id: cur.assignee_id || 0,
         resolution_id: cur.resolution_id || 0,
+        security_level_id: cur.security_level_id || 0,
         component_ids: cur.component_ids || [],
         fix_version_ids: cur.fix_version_ids || [],
         affects_version_ids: cur.affects_version_ids || [],

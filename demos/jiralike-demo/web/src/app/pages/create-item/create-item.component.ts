@@ -5,6 +5,7 @@ import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { ApiService } from '../../services/api.service';
 import { RichEditorComponent } from '../../components/rich-editor/rich-editor.component';
 import {
+  IssueSecurityLevel,
   PRIORITIES,
   PriorityType,
   ScreenDef,
@@ -194,6 +195,16 @@ import {
                 <option [ngValue]="sp.id">
                   {{ sp.is_current ? '★ Current Sprint: ' + sp.name : sp.name + ' (' + sp.status + ')' }}
                 </option>
+              }
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="create-security-level">Security Level</label>
+            <select id="create-security-level" name="security_level_id" [(ngModel)]="form.security_level_id">
+              <option [ngValue]="null">— None (Public) —</option>
+              @for (sec of availableSecurityLevels(); track sec.id) {
+                <option [ngValue]="sec.id">{{ sec.name }}</option>
               }
             </select>
           </div>
@@ -536,6 +547,7 @@ export class CreateItemComponent implements OnInit {
   readonly errorMsg = signal('');
   readonly resolvedScreen = signal<ScreenDef | null>(null);
   readonly activeScreenTabId = signal<number>(0);
+  readonly availableSecurityLevels = signal<IssueSecurityLevel[]>([]);
 
   form: {
     project_id: number;
@@ -561,6 +573,7 @@ export class CreateItemComponent implements OnInit {
     fix_version_ids: number[];
     affects_version_ids: number[];
     custom_fields: Record<string, any>;
+    security_level_id: number | null;
   } = {
     project_id: 1,
     type: 'Task',
@@ -585,6 +598,7 @@ export class CreateItemComponent implements OnInit {
     fix_version_ids: [],
     affects_version_ids: [],
     custom_fields: {},
+    security_level_id: null,
   };
 
   onTshirtChange(): void {
@@ -704,6 +718,16 @@ export class CreateItemComponent implements OnInit {
     if (qParent > 0) {
       this.form.parent_id = qParent;
     }
+
+    try {
+      const secLevels = await this.api.getSecurityLevels(this.form.project_id);
+      this.availableSecurityLevels.set(secLevels);
+      const defSec = secLevels.find((s) => s.is_default);
+      if (defSec) {
+        this.form.security_level_id = defSec.id;
+      }
+    } catch {}
+
     await this.loadCreateScreen();
   }
 

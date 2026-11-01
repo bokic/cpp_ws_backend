@@ -440,10 +440,10 @@ This document provides a comprehensive gap analysis and exhaustive development r
 
 ---
 
-## 11. Epic 10: Security, Granular Permissions & Directory Management
+## 11. Epic 10: Security, Granular Permissions & Directory Management *(Completed)*
 
 ### 11.1 Granular Permission Schemes
-- [ ] **Permission Schemes Model (`permission_schemes`, `permission_scheme_grants`)**:
+- [x] **Permission Schemes Model (`permission_schemes`, `permission_scheme_grants`)**:
   - Permissions Matrix:
     - *Project*: Browse Projects, Administer Projects.
     - *Issues*: Create, Edit, Assign, Resolve, Close, Delete, Move, Link.
@@ -451,25 +451,25 @@ This document provides a comprehensive gap analysis and exhaustive development r
     - *Attachments*: Create Attachments, Delete All, Delete Own.
     - *Time Tracking*: Work On Issues, Edit Own Worklogs, Edit All Worklogs, Delete Worklogs.
     - *Agile*: Manage Sprints.
-- [ ] **Grants Mapping**: Map each permission to a combination of:
+- [x] **Grants Mapping**: Map each permission to a combination of:
   - Project Roles (`Administrators`, `Developers`, `QA`, `Product Managers`, `Viewers`).
-  - User Groups (`jira-administrators`, `jira-software-users`).
+  - User Groups (`jira-administrators`, `jira-software-users`, custom groups).
   - Dynamic Roles (`Current Assignee`, `Reporter`, `Project Lead`).
 
 ### 11.2 Issue-Level Security Schemes
-- [ ] **Issue Security Schemes (`issue_security_schemes`, `issue_security_levels`)**:
+- [x] **Issue Security Schemes (`issue_security_schemes`, `issue_security_levels`)**:
   - Define security levels (e.g., *Default*, *Internal Only*, *Confidential / Security Vulnerability*).
   - Restrict visibility of specific sensitive issues to designated groups or roles.
 
 ### 11.3 Directory Management, SSO & API Security
-- [ ] **User Groups (`user_groups`, `user_group_members`)**: Administrative grouping of users.
+- [x] **User Groups (`user_groups`, `user_group_members`)**: Administrative grouping of users.
 - [ ] **Enterprise SSO (Single Sign-On)**:
   - SAML 2.0 and OpenID Connect (OIDC) / OAuth 2.0 integration.
   - LDAP / Active Directory synchronization for enterprise user provisioning.
 - [ ] **Two-Factor Authentication (2FA / MFA)**: TOTP authenticator app support.
-- [ ] **Personal Access Tokens (PAT)**:
+- [x] **Personal Access Tokens (PAT)**:
   - Generate scoped API tokens with expiration dates for automated scripts and CI/CD pipelines.
-- [ ] **Admin Audit Log**: Log all administrative actions (user creations, permission changes, scheme edits).
+- [x] **Admin Audit Log**: Log all administrative actions (user creations, permission changes, scheme edits).
 
 ---
 
@@ -849,16 +849,18 @@ flowchart TD
   - [x] Top Navigation: In-app Mentions & Activity bell with unread badge counter.
 - **Verification**: Pasting a screenshot uploads the image to `blobs/` and displays it inline; typing `@marcus` highlights the mention and triggers an alert; 9/9 test suites verified end-to-end in `verify_step10.py`.
 
-#### Step 11: Granular Project Permission Schemes & Issue Security Levels
+#### Step 11: Granular Project Permission Schemes & Issue Security Levels *(Completed)*
 - **Why Next**: Prepares the platform for enterprise multi-team deployment and secure automations.
 - **Backend Deliverables**:
-  - Database Migration: Create `permission_schemes`, `permission_scheme_grants`, `issue_security_schemes`, `issue_security_levels`, `user_groups`, `user_group_members`.
-  - C++ Permission Middleware: Check granular permissions (`BROWSE_PROJECT`, `CREATE_ISSUE`, `EDIT_ISSUE`, `CLOSE_ISSUE`, `LOG_WORK`, `MANAGE_SPRINTS`) on every API call.
-  - Issue Security Filter: Automatically inject security level filters into SQL and JQL execution to hide sensitive issues.
+  - [x] Database Migration: Create `permission_schemes`, `permission_scheme_grants`, `issue_security_schemes`, `issue_security_levels`, `issue_security_level_grants`, `user_groups`, `user_group_members`, `project_role_members`, and `personal_access_tokens` (schema v16).
+  - [x] C++ Permission Middleware: Check granular permissions (`BROWSE_PROJECT`, `CREATE_ISSUE`, `EDIT_ISSUE`, `DELETE_ISSUE`, `ADD_COMMENTS`, `WORK_ON_ISSUES`, `MANAGE_SPRINTS`, `ADMINISTER_PROJECTS`) on every API call.
+  - [x] Issue Security Filter: Automatically inject security level filters into SQL and JQL execution to hide sensitive issues from unauthorized users.
+  - [x] Personal Access Tokens (PAT): Complete token generation (`pat_...`), hashing, lifecycle management, and bearer authentication.
+  - [x] Endpoints: 21 REST endpoints for permission schemes, security schemes/levels, user groups, role members, and `/api/permissions/my`.
 - **Frontend Deliverables**:
-  - Permission Schemes Admin: Matrix interface assigning permissions to Project Roles, Groups, or Dynamic Users (Reporter, Assignee).
-  - Issue Security Level Selector: Assign security classification on issue creation/edit.
-- **Verification**: Users lacking `BROWSE_PROJECT` or assigned security level cannot retrieve or search for restricted items.
+  - [x] Permission Schemes Admin (`/permissions`): Matrix interface assigning permissions to Project Roles, Groups, or Dynamic Users (Reporter, Assignee), security schemes editor, groups directory, and PAT manager.
+  - [x] Issue Security Level Selector: Assign security classification on issue creation and issue detail sidebar, plus security badge.
+- **Verification**: Users lacking `BROWSE_PROJECT` or assigned security level cannot retrieve, search for, or access restricted items (403 Forbidden); dynamic reporter access and PAT authentication verified with 9/9 passing tests in `verify_step11.py`.
 
 #### Step 12: No-Code Automation Engine (Automation for Jira Rules Runner)
 - **Why Next**: Connects Workflows (Step 4), JQL (Step 5), and Custom Fields (Step 3) into an event-driven automation framework.

@@ -13,6 +13,7 @@ import { CustomFieldsComponent } from './pages/custom-fields/custom-fields.compo
 import { SearchComponent } from './pages/search/search.component';
 import { ReportsComponent } from './pages/reports/reports.component';
 import { DashboardsComponent } from './pages/dashboards/dashboards.component';
+import { PermissionsAdminComponent } from './pages/permissions-admin/permissions-admin.component';
 
 export const routes: Routes = [
   { path: '', pathMatch: 'full', redirectTo: 'dashboards' },
@@ -30,6 +31,8 @@ export const routes: Routes = [
   { path: 'project-settings', component: ProjectSettingsComponent },
   { path: 'custom-fields', component: CustomFieldsComponent },
   { path: 'workflows', component: WorkflowsComponent },
+  { path: 'permissions', component: PermissionsAdminComponent },
+  { path: 'settings/permissions', component: PermissionsAdminComponent },
   { path: 'items/:id', component: ItemDetailComponent },
   { path: ':id', component: ItemDetailComponent },
   { path: '**', redirectTo: 'board' },

@@ -1,0 +1,853 @@
+<div class="page-container">
+  <div class="page-toolbar">
+    <div>
+      <h2>Enterprise Directory &amp; Security Schemes</h2>
+      <p class="text-muted">
+        Manage granular Permission Schemes &amp; Matrix, Issue-Level Security tiers, User Groups, and Personal Access Tokens (PAT).
+      </p>
+    </div>
+    <div class="toolbar-actions">
+      <a routerLink="/board" class="btn btn-secondary">Back to Board</a>
+    </div>
+  </div>
+
+  @if (toastMsg()) {
+    <div class="toast-banner">{{ toastMsg() }}</div>
+  }
+  @if (errorMsg()) {
+    <div class="alert alert-error">{{ errorMsg() }}</div>
+  }
+
+  <!-- Section Tabs Bar -->
+  <div class="tabs-bar" style="margin-bottom: 20px;">
+    <button
+      type="button"
+      class="tab-btn"
+      [class.active]="activeTab() === 'permissions'"
+      (click)="activeTab.set('permissions')"
+    >
+      🛡️ Permission Schemes &amp; Matrix
+    </button>
+    <button
+      type="button"
+      class="tab-btn"
+      [class.active]="activeTab() === 'security'"
+      (click)="activeTab.set('security')"
+    >
+      🔒 Issue Security Schemes &amp; Levels
+    </button>
+    <button
+      type="button"
+      class="tab-btn"
+      [class.active]="activeTab() === 'groups'"
+      (click)="activeTab.set('groups')"
+    >
+      👥 User Groups Directory ({{ userGroups().length }})
+    </button>
+    <button
+      type="button"
+      class="tab-btn"
+      [class.active]="activeTab() === 'tokens'"
+      (click)="activeTab.set('tokens')"
+    >
+      🔑 Personal Access Tokens ({{ tokens().length }})
+    </button>
+    <button
+      type="button"
+      class="tab-btn"
+      [class.active]="activeTab() === 'project-schemes'"
+      (click)="activeTab.set('project-schemes')"
+    >
+      ⚙️ Project Scheme Assignments
+    </button>
+  </div>
+
+  <!-- TAB 1: PERMISSION SCHEMES & MATRIX -->
+  @if (activeTab() === 'permissions') {
+    <div class="split-view-grid">
+      <!-- Left sidebar: schemes list -->
+      <div class="card-panel scheme-list-card">
+        <div class="panel-header-row">
+          <h3>Permission Schemes</h3>
+          <button type="button" class="btn btn-primary btn-sm" (click)="showNewSchemeModal.set(true)">
+            + New Scheme
+          </button>
+        </div>
+
+        <div class="schemes-list">
+          @for (s of permissionSchemes(); track s.id) {
+            <div
+              class="scheme-item-row"
+              [class.active]="selectedPermissionScheme()?.id === s.id"
+              (click)="selectPermissionScheme(s.id)"
+            >
+              <div>
+                <strong>{{ s.name }}</strong>
+                @if (s.is_default) {
+                  <span class="badge badge-info" style="margin-left: 6px;">Default</span>
+                }
+                <div class="text-muted small-text">{{ s.description || 'No description' }}</div>
+                <div class="text-muted small-text" style="margin-top: 4px;">
+                  Grants: {{ s.grants_count || s.grants?.length || 0 }} · Assigned Projects: {{ s.projects_count || s.projects?.length || 0 }}
+                </div>
+              </div>
+              @if (!s.is_default) {
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-xs text-danger"
+                  (click)="deletePermissionScheme(s); $event.stopPropagation()"
+                  title="Delete scheme"
+                >
+                  🗑
+                </button>
+              }
+            </div>
+          }
+        </div>
+      </div>
+
+      <!-- Right detail: Matrix -->
+      <div class="card-panel matrix-card">
+        @if (selectedPermissionScheme(); as curScheme) {
+          <div class="panel-header-row">
+            <div>
+              <h3>{{ curScheme.name }} — Permissions Matrix</h3>
+              <p class="text-muted">{{ curScheme.description }}</p>
+            </div>
+            @if (curScheme.projects && curScheme.projects.length > 0) {
+              <div class="assigned-projects-pills">
+                <span class="small-text text-muted">Applied to:</span>
+                @for (p of curScheme.projects; track p.id) {
+                  <span class="pill-tag">{{ p.key }}</span>
+                }
+              </div>
+            }
+          </div>
+
+          <div class="matrix-table-wrap">
+            <table class="table matrix-table">
+              <thead>
+                <tr>
+                  <th style="width: 250px;">Permission</th>
+                  <th>Granted Entities (Roles, Groups, Dynamic Users)</th>
+                  <th style="width: 90px; text-align: right;">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (cat of categories; track cat) {
+                  <tr class="category-divider-row">
+                    <td colspan="3">
+                      <strong>{{ cat }} Permissions</strong>
+                    </td>
+                  </tr>
+                  @for (pm of permissionMetas; track pm.key) {
+                    @if (pm.category === cat) {
+                      <tr>
+                        <td>
+                          <strong>{{ pm.name }}</strong>
+                          <div class="text-muted small-text">{{ pm.description }}</div>
+                          <code class="perm-key-badge">{{ pm.key }}</code>
+                        </td>
+                        <td>
+                          <div class="grants-pill-list">
+                            @for (g of getGrantsForPerm(pm.key); track g.id) {
+                              <span class="grant-pill" [attr.data-type]="g.grantee_type">
+                                <span class="grant-type-label">{{ g.grantee_type }}:</span>
+                                <strong>{{ g.grantee_value }}</strong>
+                                <button
+                                  type="button"
+                                  class="revoke-btn"
+                                  (click)="revokeGrant(g)"
+                                  title="Revoke permission"
+                                >
+                                  ×
+                                </button>
+                              </span>
+                            }
+                            @if (getGrantsForPerm(pm.key).length === 0) {
+                              <span class="text-muted small-text">No entities granted (Deny all)</span>
+                            }
+                          </div>
+                        </td>
+                        <td style="text-align: right;">
+                          <button
+                            type="button"
+                            class="btn btn-secondary btn-xs"
+                            (click)="openGrantModal(pm.key)"
+                          >
+                            + Grant
+                          </button>
+                        </td>
+                      </tr>
+                    }
+                  }
+                }
+              </tbody>
+            </table>
+          </div>
+        } @else {
+          <div class="empty-state">Select a permission scheme from the left to view and configure its matrix.</div>
+        }
+      </div>
+    </div>
+  }
+
+  <!-- TAB 2: ISSUE SECURITY SCHEMES & LEVELS -->
+  @if (activeTab() === 'security') {
+    <div class="split-view-grid">
+      <!-- Left sidebar: schemes list -->
+      <div class="card-panel scheme-list-card">
+        <div class="panel-header-row">
+          <h3>Issue Security Schemes</h3>
+          <button type="button" class="btn btn-primary btn-sm" (click)="showNewSecSchemeModal.set(true)">
+            + New Scheme
+          </button>
+        </div>
+
+        <div class="schemes-list">
+          @for (ss of securitySchemes(); track ss.id) {
+            <div
+              class="scheme-item-row"
+              [class.active]="selectedSecurityScheme()?.id === ss.id"
+              (click)="selectSecurityScheme(ss.id)"
+            >
+              <div>
+                <strong>{{ ss.name }}</strong>
+                <div class="text-muted small-text">{{ ss.description || 'No description' }}</div>
+                <div class="text-muted small-text" style="margin-top: 4px;">
+                  Tiers: {{ ss.levels_count || ss.levels?.length || 0 }} · Projects: {{ ss.projects_count || ss.projects?.length || 0 }}
+                </div>
+              </div>
+            </div>
+          }
+        </div>
+      </div>
+
+      <!-- Right detail: Security Levels & Grants -->
+      <div class="card-panel matrix-card">
+        @if (selectedSecurityScheme(); as curSec) {
+          <div class="panel-header-row">
+            <div>
+              <h3>{{ curSec.name }} — Security Levels</h3>
+              <p class="text-muted">{{ curSec.description }}</p>
+            </div>
+            <button type="button" class="btn btn-primary btn-sm" (click)="showNewSecLevelModal.set(true)">
+              + Add Security Level
+            </button>
+          </div>
+
+          <div class="sec-levels-container">
+            @for (lvl of curSec.levels || []; track lvl.id) {
+              <div class="card-panel sec-level-box">
+                <div class="sec-level-header">
+                  <div>
+                    <span class="sec-lock-icon">🔒</span>
+                    <strong>{{ lvl.name }}</strong>
+                    @if (lvl.is_default) {
+                      <span class="badge badge-info" style="margin-left: 6px;">Default Level</span>
+                    }
+                    <div class="text-muted small-text">{{ lvl.description }}</div>
+                  </div>
+                  <div class="sec-level-actions">
+                    <button type="button" class="btn btn-secondary btn-xs" (click)="openSecGrantModal(lvl.id)">
+                      + Add Grantee
+                    </button>
+                    @if (!lvl.is_default) {
+                      <button type="button" class="btn btn-ghost btn-xs text-danger" (click)="deleteSecurityLevel(lvl)">
+                        Delete
+                      </button>
+                    }
+                  </div>
+                </div>
+
+                <div class="grants-pill-list" style="margin-top: 10px;">
+                  <span class="small-text text-muted" style="margin-right: 6px;">Permitted:</span>
+                  @for (g of lvl.grants || []; track g.id) {
+                    <span class="grant-pill" [attr.data-type]="g.grantee_type">
+                      <span class="grant-type-label">{{ g.grantee_type }}:</span>
+                      <strong>{{ g.grantee_value }}</strong>
+                      <button
+                        type="button"
+                        class="revoke-btn"
+                        (click)="revokeSecGrant(lvl.id, g)"
+                        title="Revoke"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  }
+                  @if (!lvl.grants || lvl.grants.length === 0) {
+                    <span class="text-muted small-text">Exclusively visible to Admins &amp; Assignee/Reporter</span>
+                  }
+                </div>
+              </div>
+            }
+          </div>
+        }
+      </div>
+    </div>
+  }
+
+  <!-- TAB 3: USER GROUPS DIRECTORY -->
+  @if (activeTab() === 'groups') {
+    <div class="split-view-grid">
+      <!-- Left sidebar: groups list -->
+      <div class="card-panel scheme-list-card">
+        <div class="panel-header-row">
+          <h3>User Groups Directory</h3>
+          <button type="button" class="btn btn-primary btn-sm" (click)="showNewGroupModal.set(true)">
+            + New Group
+          </button>
+        </div>
+
+        <div class="schemes-list">
+          @for (g of userGroups(); track g.id) {
+            <div
+              class="scheme-item-row"
+              [class.active]="selectedGroup()?.id === g.id"
+              (click)="selectGroup(g.id)"
+            >
+              <div>
+                <strong>{{ g.name }}</strong>
+                <div class="text-muted small-text">{{ g.description }}</div>
+                <div class="text-muted small-text" style="margin-top: 4px;">
+                  Members: {{ g.member_count || g.members?.length || 0 }}
+                </div>
+              </div>
+              @if (g.name !== 'jira-administrators') {
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-xs text-danger"
+                  (click)="deleteGroup(g); $event.stopPropagation()"
+                >
+                  🗑
+                </button>
+              }
+            </div>
+          }
+        </div>
+      </div>
+
+      <!-- Right detail: Group Members -->
+      <div class="card-panel matrix-card">
+        @if (selectedGroup(); as curGroup) {
+          <div class="panel-header-row">
+            <div>
+              <h3>Group: {{ curGroup.name }}</h3>
+              <p class="text-muted">{{ curGroup.description }}</p>
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <select [(ngModel)]="addUserToGroupId" style="min-width: 180px;">
+                <option [ngValue]="null">— Select User to Add —</option>
+                @for (u of api.users(); track u.id) {
+                  <option [ngValue]="u.id">{{ u.display_name }} (&#64;{{ u.username }})</option>
+                }
+              </select>
+              <button
+                type="button"
+                class="btn btn-primary btn-sm"
+                [disabled]="!addUserToGroupId()"
+                (click)="addUserToGroup()"
+              >
+                + Add Member
+              </button>
+            </div>
+          </div>
+
+          <table class="table" style="margin-top: 14px;">
+            <thead>
+              <tr>
+                <th>User</th>
+                <th>Username</th>
+                <th>System Role</th>
+                <th>Added Date</th>
+                <th style="width: 80px; text-align: right;">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (m of curGroup.members || []; track m.user_id) {
+                <tr>
+                  <td>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                      <span class="avatar-circle-sm" [style.background]="m.avatar_color">
+                        {{ m.display_name.slice(0, 2).toUpperCase() }}
+                      </span>
+                      <strong>{{ m.display_name }}</strong>
+                    </div>
+                  </td>
+                  <td><code>&#64;{{ m.username }}</code></td>
+                  <td>{{ m.role }}</td>
+                  <td class="text-muted small-text">{{ m.added_at }}</td>
+                  <td style="text-align: right;">
+                    <button
+                      type="button"
+                      class="btn btn-ghost btn-xs text-danger"
+                      (click)="removeUserFromGroup(m.user_id)"
+                      title="Remove from group"
+                    >
+                      Remove
+                    </button>
+                  </td>
+                </tr>
+              }
+              @if (!curGroup.members || curGroup.members.length === 0) {
+                <tr>
+                  <td colspan="5" class="text-center text-muted">No members currently in this group.</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        }
+      </div>
+    </div>
+  }
+
+  <!-- TAB 4: PERSONAL ACCESS TOKENS (PAT) -->
+  @if (activeTab() === 'tokens') {
+    <div class="card-panel">
+      <div class="panel-header-row">
+        <div>
+          <h3>Personal Access Tokens (PAT)</h3>
+          <p class="text-muted">
+            Personal access tokens allow scripts, Git webhooks, and CI/CD pipelines to authenticate securely without using your password.
+          </p>
+        </div>
+        <button type="button" class="btn btn-primary btn-sm" (click)="showNewTokenModal.set(true)">
+          + Generate New Token
+        </button>
+      </div>
+
+      @if (createdRawToken()) {
+        <div class="pat-created-alert">
+          <strong>Token successfully generated!</strong>
+          <p>Copy this token now. For security purposes, it will never be displayed again.</p>
+          <div class="token-code-row">
+            <code>{{ createdRawToken() }}</code>
+            <button type="button" class="btn btn-secondary btn-sm" (click)="copyTokenToClipboard(createdRawToken())">
+              📋 Copy Token
+            </button>
+          </div>
+        </div>
+      }
+
+      <table class="table" style="margin-top: 16px;">
+        <thead>
+          <tr>
+            <th>Token Name</th>
+            <th>Scopes</th>
+            <th>Created</th>
+            <th>Expires</th>
+            <th>Last Used</th>
+            <th style="width: 90px; text-align: right;">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (tok of tokens(); track tok.id) {
+            <tr>
+              <td><strong>{{ tok.name }}</strong></td>
+              <td><code>{{ tok.scopes }}</code></td>
+              <td class="text-muted small-text">{{ tok.created_at }}</td>
+              <td class="text-muted small-text">{{ tok.expires_at || 'Never' }}</td>
+              <td class="text-muted small-text">{{ tok.last_used_at || 'Never used' }}</td>
+              <td style="text-align: right;">
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-xs text-danger"
+                  (click)="deleteToken(tok)"
+                >
+                  Revoke
+                </button>
+              </td>
+            </tr>
+          }
+          @if (tokens().length === 0) {
+            <tr>
+              <td colspan="6" class="text-center text-muted">
+                No active personal access tokens. Click "+ Generate New Token" to create one.
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+
+  <!-- TAB 5: PROJECT SCHEME ASSIGNMENTS & ROLES -->
+  @if (activeTab() === 'project-schemes') {
+    <div class="card-panel">
+      <div class="panel-header-row">
+        <div>
+          <h3>Project Scheme Associations &amp; Role Members</h3>
+          <p class="text-muted">Link a project to specific Permission and Security Schemes, and assign users to project roles.</p>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <label for="proj-sel-schemes"><strong>Project:</strong></label>
+          <select
+            id="proj-sel-schemes"
+            [ngModel]="selectedProjectId()"
+            (ngModelChange)="onProjectSelectChange($event)"
+            style="min-width: 220px;"
+          >
+            @for (p of api.projects(); track p.id) {
+              <option [ngValue]="p.id">{{ p.key }} — {{ p.name }}</option>
+            }
+          </select>
+        </div>
+      </div>
+
+      <div class="grid-2" style="margin-top: 16px;">
+        <div class="card-panel" style="background: #f8fafc;">
+          <h4>Permission Scheme Association</h4>
+          <p class="text-muted small-text">Determines who can browse, edit, create, close, and manage sprints in this project.</p>
+          <div style="display: flex; gap: 8px; margin-top: 10px;">
+            <select [(ngModel)]="assignPermSchemeId" style="flex: 1;">
+              @for (ps of permissionSchemes(); track ps.id) {
+                <option [ngValue]="ps.id">{{ ps.name }} @if (ps.is_default) { (Default) }</option>
+              }
+            </select>
+            <button type="button" class="btn btn-primary btn-sm" (click)="saveProjectPermissionScheme()">
+              Save Scheme
+            </button>
+          </div>
+        </div>
+
+        <div class="card-panel" style="background: #f8fafc;">
+          <h4>Issue Security Scheme Association</h4>
+          <p class="text-muted small-text">Determines available classification levels (Public, Internal, Confidential) for issues.</p>
+          <div style="display: flex; gap: 8px; margin-top: 10px;">
+            <select [(ngModel)]="assignSecSchemeId" style="flex: 1;">
+              @for (ss of securitySchemes(); track ss.id) {
+                <option [ngValue]="ss.id">{{ ss.name }}</option>
+              }
+            </select>
+            <button type="button" class="btn btn-primary btn-sm" (click)="saveProjectSecurityScheme()">
+              Save Scheme
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Project Role Members Matrix -->
+      <div style="margin-top: 24px;">
+        <div class="panel-header-row">
+          <div>
+            <h4>Project Role Members</h4>
+            <p class="text-muted small-text">Users assigned to roles in this project.</p>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <select [(ngModel)]="newRoleMemberName">
+              @for (r of standardRoles; track r) {
+                <option [value]="r">{{ r }}</option>
+              }
+            </select>
+            <select [(ngModel)]="newRoleMemberUserId">
+              <option [ngValue]="null">— Select User —</option>
+              @for (u of api.users(); track u.id) {
+                <option [ngValue]="u.id">{{ u.display_name }} ({{ u.role }})</option>
+              }
+            </select>
+            <button
+              type="button"
+              class="btn btn-primary btn-sm"
+              [disabled]="!newRoleMemberUserId()"
+              (click)="addProjectRoleMember()"
+            >
+              + Assign Role
+            </button>
+          </div>
+        </div>
+
+        <table class="table" style="margin-top: 12px;">
+          <thead>
+            <tr>
+              <th>Role</th>
+              <th>User</th>
+              <th>Username</th>
+              <th>Global System Role</th>
+              <th style="width: 80px; text-align: right;">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (m of projectRoleMembers(); track m.id) {
+              <tr>
+                <td><span class="role-badge">{{ m.role_name }}</span></td>
+                <td>
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <span class="avatar-circle-sm" [style.background]="m.avatar_color">
+                      {{ m.display_name.slice(0, 2).toUpperCase() }}
+                    </span>
+                    <strong>{{ m.display_name }}</strong>
+                  </div>
+                </td>
+                <td><code>&#64;{{ m.username }}</code></td>
+                <td>{{ m.system_role }}</td>
+                <td style="text-align: right;">
+                  <button type="button" class="btn btn-ghost btn-xs text-danger" (click)="deleteProjectRoleMember(m)">
+                    Remove
+                  </button>
+                </td>
+              </tr>
+            }
+            @if (projectRoleMembers().length === 0) {
+              <tr>
+                <td colspan="5" class="text-center text-muted">No explicit role members assigned.</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+  }
+</div>
+
+<!-- MODAL: Create Permission Scheme -->
+@if (showNewSchemeModal()) {
+  <div class="modal-backdrop" (click)="showNewSchemeModal.set(false)">
+    <div class="modal-card" (click)="$event.stopPropagation()">
+      <h3>Create Permission Scheme</h3>
+      <div class="form-group" style="margin-top: 12px;">
+        <label>Scheme Name *</label>
+        <input type="text" [(ngModel)]="newSchemeName" placeholder="e.g. Restricted Contractor Scheme" />
+      </div>
+      <div class="form-group">
+        <label>Description</label>
+        <textarea [(ngModel)]="newSchemeDesc" rows="2" placeholder="Scheme purpose and team scope..."></textarea>
+      </div>
+      <div class="form-group">
+        <label>Copy Grants From Existing Scheme</label>
+        <select [(ngModel)]="copyFromSchemeId">
+          <option [ngValue]="null">— Blank Scheme —</option>
+          @for (s of permissionSchemes(); track s.id) {
+            <option [ngValue]="s.id">{{ s.name }}</option>
+          }
+        </select>
+      </div>
+      <div class="modal-actions" style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;">
+        <button type="button" class="btn btn-secondary" (click)="showNewSchemeModal.set(false)">Cancel</button>
+        <button type="button" class="btn btn-primary" [disabled]="!newSchemeName().trim()" (click)="createPermissionScheme()">
+          Create Scheme
+        </button>
+      </div>
+    </div>
+  </div>
+}
+
+<!-- MODAL: Add Permission Grant -->
+@if (showGrantModal()) {
+  <div class="modal-backdrop" (click)="showGrantModal.set(false)">
+    <div class="modal-card" (click)="$event.stopPropagation()">
+      <h3>Grant Permission: {{ grantTargetPermKey() }}</h3>
+      <div class="form-group" style="margin-top: 12px;">
+        <label>Grantee Type</label>
+        <select [(ngModel)]="grantType">
+          <option value="role">Project Role</option>
+          <option value="group">User Group</option>
+          <option value="dynamic">Dynamic Role (Reporter, Assignee, Lead)</option>
+          <option value="user">Specific User</option>
+          <option value="anyone">Anyone Authenticated</option>
+        </select>
+      </div>
+
+      @if (grantType() === 'role') {
+        <div class="form-group">
+          <label>Select Project Role</label>
+          <select [(ngModel)]="grantRoleValue">
+            @for (r of standardRoles; track r) {
+              <option [value]="r">{{ r }}</option>
+            }
+          </select>
+        </div>
+      }
+
+      @if (grantType() === 'group') {
+        <div class="form-group">
+          <label>Select User Group</label>
+          <select [(ngModel)]="grantGroupValue">
+            @for (g of userGroups(); track g.id) {
+              <option [value]="g.name">{{ g.name }}</option>
+            }
+          </select>
+        </div>
+      }
+
+      @if (grantType() === 'dynamic') {
+        <div class="form-group">
+          <label>Select Dynamic Role</label>
+          <select [(ngModel)]="grantDynamicValue">
+            <option value="assignee">Current Assignee</option>
+            <option value="reporter">Reporter</option>
+            <option value="lead">Project Lead</option>
+          </select>
+        </div>
+      }
+
+      @if (grantType() === 'user') {
+        <div class="form-group">
+          <label>Select User</label>
+          <select [(ngModel)]="grantUserId">
+            <option [ngValue]="null">— Select User —</option>
+            @for (u of api.users(); track u.id) {
+              <option [ngValue]="u.id">{{ u.display_name }} (&#64;{{ u.username }})</option>
+            }
+          </select>
+        </div>
+      }
+
+      <div class="modal-actions" style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;">
+        <button type="button" class="btn btn-secondary" (click)="showGrantModal.set(false)">Cancel</button>
+        <button type="button" class="btn btn-primary" (click)="submitGrant()">
+          Grant Permission
+        </button>
+      </div>
+    </div>
+  </div>
+}
+
+<!-- MODAL: Add Security Level -->
+@if (showNewSecLevelModal()) {
+  <div class="modal-backdrop" (click)="showNewSecLevelModal.set(false)">
+    <div class="modal-card" (click)="$event.stopPropagation()">
+      <h3>Add Issue Security Level</h3>
+      <div class="form-group" style="margin-top: 12px;">
+        <label>Level Name *</label>
+        <input type="text" [(ngModel)]="newSecLevelName" placeholder="e.g. Confidential / Security Vulnerability" />
+      </div>
+      <div class="form-group">
+        <label>Description</label>
+        <textarea [(ngModel)]="newSecLevelDesc" rows="2" placeholder="Who should see this tier..."></textarea>
+      </div>
+      <div class="form-group checkbox-row">
+        <label style="display: flex; align-items: center; gap: 8px;">
+          <input type="checkbox" [(ngModel)]="newSecLevelIsDefault" />
+          Set as Default Level for new issues
+        </label>
+      </div>
+      <div class="modal-actions" style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;">
+        <button type="button" class="btn btn-secondary" (click)="showNewSecLevelModal.set(false)">Cancel</button>
+        <button type="button" class="btn btn-primary" [disabled]="!newSecLevelName().trim()" (click)="addSecurityLevel()">
+          Add Level
+        </button>
+      </div>
+    </div>
+  </div>
+}
+
+<!-- MODAL: Add Security Level Grant -->
+@if (showSecGrantModal()) {
+  <div class="modal-backdrop" (click)="showSecGrantModal.set(false)">
+    <div class="modal-card" (click)="$event.stopPropagation()">
+      <h3>Add Grantee to Security Level</h3>
+      <div class="form-group" style="margin-top: 12px;">
+        <label>Grantee Type</label>
+        <select [(ngModel)]="secGrantType">
+          <option value="role">Project Role</option>
+          <option value="group">User Group</option>
+          <option value="dynamic">Dynamic Role</option>
+          <option value="user">Specific User</option>
+        </select>
+      </div>
+
+      @if (secGrantType() === 'role') {
+        <div class="form-group">
+          <label>Project Role</label>
+          <select [(ngModel)]="secGrantRole">
+            @for (r of standardRoles; track r) {
+              <option [value]="r">{{ r }}</option>
+            }
+          </select>
+        </div>
+      }
+
+      @if (secGrantType() === 'group') {
+        <div class="form-group">
+          <label>User Group</label>
+          <select [(ngModel)]="secGrantGroup">
+            @for (g of userGroups(); track g.id) {
+              <option [value]="g.name">{{ g.name }}</option>
+            }
+          </select>
+        </div>
+      }
+
+      @if (secGrantType() === 'dynamic') {
+        <div class="form-group">
+          <label>Dynamic Role</label>
+          <select [(ngModel)]="secGrantDynamic">
+            <option value="reporter">Reporter</option>
+            <option value="assignee">Current Assignee</option>
+            <option value="lead">Project Lead</option>
+          </select>
+        </div>
+      }
+
+      @if (secGrantType() === 'user') {
+        <div class="form-group">
+          <label>Specific User</label>
+          <select [(ngModel)]="secGrantUserId">
+            <option [ngValue]="null">— Select User —</option>
+            @for (u of api.users(); track u.id) {
+              <option [ngValue]="u.id">{{ u.display_name }} (&#64;{{ u.username }})</option>
+            }
+          </select>
+        </div>
+      }
+
+      <div class="modal-actions" style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;">
+        <button type="button" class="btn btn-secondary" (click)="showSecGrantModal.set(false)">Cancel</button>
+        <button type="button" class="btn btn-primary" (click)="submitSecGrant()">
+          Add Grantee
+        </button>
+      </div>
+    </div>
+  </div>
+}
+
+<!-- MODAL: Create User Group -->
+@if (showNewGroupModal()) {
+  <div class="modal-backdrop" (click)="showNewGroupModal.set(false)">
+    <div class="modal-card" (click)="$event.stopPropagation()">
+      <h3>Create User Group</h3>
+      <div class="form-group" style="margin-top: 12px;">
+        <label>Group Name *</label>
+        <input type="text" [(ngModel)]="newGroupName" placeholder="e.g. security-team or external-auditors" />
+      </div>
+      <div class="form-group">
+        <label>Description</label>
+        <textarea [(ngModel)]="newGroupDesc" rows="2" placeholder="Group responsibility..."></textarea>
+      </div>
+      <div class="modal-actions" style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;">
+        <button type="button" class="btn btn-secondary" (click)="showNewGroupModal.set(false)">Cancel</button>
+        <button type="button" class="btn btn-primary" [disabled]="!newGroupName().trim()" (click)="createGroup()">
+          Create Group
+        </button>
+      </div>
+    </div>
+  </div>
+}
+
+<!-- MODAL: Generate Personal Access Token -->
+@if (showNewTokenModal()) {
+  <div class="modal-backdrop" (click)="showNewTokenModal.set(false)">
+    <div class="modal-card" (click)="$event.stopPropagation()">
+      <h3>Generate Personal Access Token</h3>
+      <div class="form-group" style="margin-top: 12px;">
+        <label>Token Name *</label>
+        <input type="text" [(ngModel)]="newTokenName" placeholder="e.g. GitHub Actions or GitLab Runner" />
+      </div>
+      <div class="form-group">
+        <label>Scopes</label>
+        <input type="text" [(ngModel)]="newTokenScopes" placeholder="read,write" />
+      </div>
+      <div class="form-group">
+        <label>Expiration Date (Optional)</label>
+        <input type="date" [(ngModel)]="newTokenExpires" />
+      </div>
+      <div class="modal-actions" style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;">
+        <button type="button" class="btn btn-secondary" (click)="showNewTokenModal.set(false)">Cancel</button>
+        <button type="button" class="btn btn-primary" [disabled]="!newTokenName().trim()" (click)="createToken(); showNewTokenModal.set(false)">
+          Generate Token
+        </button>
+      </div>
+    </div>
+  </div>
+}

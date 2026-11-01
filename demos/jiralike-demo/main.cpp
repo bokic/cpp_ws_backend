@@ -13,6 +13,7 @@
 #include "src/jql_parser.h"
 #include "src/dashboard_engine.h"
 #include "src/collaboration_engine.h"
+#include "src/security_engine.h"
 
 #include <algorithm>
 #include <atomic>
@@ -162,6 +163,28 @@ static auth_user get_authenticated_user(db::sqlite_db &conn,
         u.role = stmt.column_str(4);
         u.avatar_color = stmt.column_str(5);
         u.authenticated = true;
+    } else {
+        auto pat_stmt = conn.prepare(R"SQL(
+            SELECT u.id, u.username, u.email, u.display_name, u.role, u.avatar_color
+            FROM personal_access_tokens p
+            INNER JOIN users u ON u.id = p.user_id
+            WHERE p.token = ? AND (p.expires_at IS NULL OR p.expires_at = '' OR p.expires_at > datetime('now'));
+        )SQL");
+        pat_stmt.bind_text(1, token);
+        if (pat_stmt.step() == SQLITE_ROW) {
+            u.id = pat_stmt.column_int(0);
+            u.username = pat_stmt.column_str(1);
+            u.email = pat_stmt.column_str(2);
+            u.display_name = pat_stmt.column_str(3);
+            u.role = pat_stmt.column_str(4);
+            u.avatar_color = pat_stmt.column_str(5);
+            u.authenticated = true;
+            try {
+                auto upd = conn.prepare("UPDATE personal_access_tokens SET last_used_at = datetime('now') WHERE token = ?;");
+                upd.bind_text(1, token);
+                upd.step_done();
+            } catch (...) {}
+        }
     }
     return u;
 }
@@ -280,6 +303,26 @@ static void seed_demo_workspace(db::sqlite_db &conn, int admin_id, int project_i
     int sarah_id = add_member("sarah", "sarah@jiralike.local", "Sarah Chen", "Project Manager", "#00875A");
     int marcus_id = add_member("marcus", "marcus@jiralike.local", "Marcus Vance", "Developer", "#6554C0");
     int elena_id = add_member("elena", "elena@jiralike.local", "Elena Rostova", "QA Engineer", "#FF5630");
+
+    // Seed default group memberships and project roles
+    try {
+        auto ins_gm = conn.prepare("INSERT OR IGNORE INTO user_group_members (group_id, user_id) VALUES (?, ?);");
+        ins_gm.bind_int(1, 1); ins_gm.bind_int(2, admin_id); ins_gm.step_done(); ins_gm.clear_and_reset();
+        ins_gm.bind_int(1, 2); ins_gm.bind_int(2, admin_id); ins_gm.step_done(); ins_gm.clear_and_reset();
+        ins_gm.bind_int(1, 2); ins_gm.bind_int(2, sarah_id); ins_gm.step_done(); ins_gm.clear_and_reset();
+        ins_gm.bind_int(1, 2); ins_gm.bind_int(2, marcus_id); ins_gm.step_done(); ins_gm.clear_and_reset();
+        ins_gm.bind_int(1, 2); ins_gm.bind_int(2, elena_id); ins_gm.step_done(); ins_gm.clear_and_reset();
+
+        auto ins_pr = conn.prepare("INSERT OR IGNORE INTO project_role_members (project_id, role_name, user_id) VALUES (?, ?, ?);");
+        ins_pr.bind_int(1, project_id); ins_pr.bind_text(2, "Administrators"); ins_pr.bind_int(3, admin_id); ins_pr.step_done(); ins_pr.clear_and_reset();
+        ins_pr.bind_int(1, project_id); ins_pr.bind_text(2, "Product Managers"); ins_pr.bind_int(3, sarah_id); ins_pr.step_done(); ins_pr.clear_and_reset();
+        ins_pr.bind_int(1, project_id); ins_pr.bind_text(2, "Developers"); ins_pr.bind_int(3, marcus_id); ins_pr.step_done(); ins_pr.clear_and_reset();
+        ins_pr.bind_int(1, project_id); ins_pr.bind_text(2, "QA"); ins_pr.bind_int(3, elena_id); ins_pr.step_done(); ins_pr.clear_and_reset();
+
+        auto upd_proj_schemes = conn.prepare("UPDATE projects SET permission_scheme_id = 1, security_scheme_id = 1 WHERE id = ?;");
+        upd_proj_schemes.bind_int(1, project_id);
+        upd_proj_schemes.step_done();
+    } catch (...) {}
 
     // Create Sprints
     auto ins_sprint = conn.prepare(R"SQL(
@@ -5249,6 +5292,13 @@ static json::json_value row_to_work_item_json(db::sqlite_db &conn, db::sqlite_st
     item.add_str("time_spent_formatted", time_tracking::format_seconds_to_duration(spent_sec, false));
     item.add_str("tshirt_size", tshirt_sz);
     item.add_int("worklog_count", worklog_cnt);
+    int sec_level_id = stmt.column_int(40);
+    if (sec_level_id > 0) {
+        item.add_int("security_level_id", sec_level_id);
+    } else {
+        item.add("security_level_id", json::json_value::make_null());
+    }
+    item.add_str("security_level_name", stmt.column_str(41));
 
     int time_pct = 0;
     if (spent_sec + rem_sec > 0) {
@@ -5455,13 +5505,16 @@ static const char *BASE_WORK_ITEM_SELECT = R"SQL(
         COALESCE(w.remaining_estimate_seconds, 0),
         COALESCE(w.time_spent_seconds, 0),
         COALESCE(w.tshirt_size, ''),
-        (SELECT COUNT(*) FROM worklogs wl WHERE wl.work_item_id = w.id)
+        (SELECT COUNT(*) FROM worklogs wl WHERE wl.work_item_id = w.id),
+        COALESCE(w.security_level_id, 0),
+        COALESCE(isl.name, '')
     FROM work_items w
     LEFT JOIN users ua ON ua.id = w.assignee_id
     LEFT JOIN users ur ON ur.id = w.reporter_id
     LEFT JOIN work_items wp ON wp.id = w.parent_id
     LEFT JOIN sprints sp ON sp.id = w.sprint_id
     LEFT JOIN resolutions res ON res.id = w.resolution_id
+    LEFT JOIN issue_security_levels isl ON isl.id = w.security_level_id
 )SQL";
 
 // ============================================================================
@@ -5550,8 +5603,10 @@ static void handle_search_jql(backend::wsworker *worker,
         std::string where_sql = ast.to_where_sql(ctx);
         std::string order_by_sql = ast.to_order_by_sql(ctx);
 
+        std::string sec_filter = security::build_security_filter(conn, u_auth.authenticated ? u_auth.id : 1, "w");
+
         std::string full_sql = std::string(BASE_WORK_ITEM_SELECT) +
-                               " WHERE " + where_sql +
+                               " WHERE (" + where_sql + ") AND (" + sec_filter + ")" +
                                " ORDER BY " + order_by_sql +
                                " LIMIT " + std::to_string(limit) +
                                " OFFSET " + std::to_string(offset) + ";";
@@ -5612,7 +5667,8 @@ static void handle_search_jql(backend::wsworker *worker,
                 "LEFT JOIN work_items wp ON wp.id = w.parent_id "
                 "LEFT JOIN sprints sp ON sp.id = w.sprint_id "
                 "LEFT JOIN resolutions res ON res.id = w.resolution_id "
-                "WHERE " + where_sql + ";";
+                "LEFT JOIN issue_security_levels isl ON isl.id = w.security_level_id "
+                "WHERE (" + where_sql + ") AND (" + sec_filter + ");";
             auto cstmt = conn.prepare(count_sql);
             for (size_t i = 0; i < ctx.params.size(); ++i) {
                 cstmt.bind_text(static_cast<int>(i + 1), ctx.params[i]);
@@ -6964,7 +7020,8 @@ static void handle_board_items(backend::wsworker *worker,
         }
     }
 
-    std::string sql = std::string(BASE_WORK_ITEM_SELECT) + " WHERE 1=1 ";
+    std::string sec_filter = security::build_security_filter(conn, uid, "w");
+    std::string sql = std::string(BASE_WORK_ITEM_SELECT) + " WHERE (" + sec_filter + ") ";
     std::vector<std::string> bind_vals;
 
     int project_id = board_json.get_int("project_id", 0);
@@ -7844,8 +7901,10 @@ static void handle_items(backend::wsworker *worker,
     std::string method = get_header(header, "REQUEST_METHOD");
 
     if (method == "GET") {
+        auto u_auth = get_authenticated_user(conn, worker, header);
         auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
-        std::string sql = std::string(BASE_WORK_ITEM_SELECT) + " WHERE 1=1 ";
+        std::string sec_filter = security::build_security_filter(conn, u_auth.authenticated ? u_auth.id : 1, "w");
+        std::string sql = std::string(BASE_WORK_ITEM_SELECT) + " WHERE (" + sec_filter + ") ";
         std::vector<std::string> bind_vals;
 
         if (!args["project_id"].empty()) {
@@ -7951,6 +8010,16 @@ static void handle_items(backend::wsworker *worker,
     }
 
     int project_id = body.get_int("project_id", 1);
+    if (!security::has_permission(conn, u_auth.id, project_id, "CREATE_ISSUE")) {
+        send_error(worker, header, "403 Forbidden", "You do not have permission to create issues in this project");
+        return;
+    }
+    int security_level_id = body.get_int("security_level_id", 0);
+    if (security_level_id > 0 && !security::can_access_security_level(conn, u_auth.id, project_id, security_level_id, u_auth.id, 0)) {
+        send_error(worker, header, "403 Forbidden", "You do not have permission to assign this security level");
+        return;
+    }
+
     std::string type = body.get_string("type", "Task");
     std::string category = body.get_string("category", "New Feature");
     std::string status = body.get_string("status", "To Do");
@@ -8087,6 +8156,13 @@ static void handle_items(backend::wsworker *worker,
         ins.step_done();
         new_item_id = static_cast<int>(conn.last_insert_rowid());
 
+        if (security_level_id > 0) {
+            auto upd_sec = conn.prepare("UPDATE work_items SET security_level_id = ? WHERE id = ?;");
+            upd_sec.bind_int(1, security_level_id);
+            upd_sec.bind_int(2, new_item_id);
+            upd_sec.step_done();
+        }
+
         sync_item_components_and_versions(conn, new_item_id, body, true);
         sync_item_custom_fields(conn, new_item_id, body, true);
 
@@ -8166,9 +8242,39 @@ static void handle_item_detail(backend::wsworker *worker,
         send_error(worker, header, "404 Not Found", "Work item not found");
         return;
     }
+
+    int proj_id = 0, sec_id = 0, rep_id = 0, ass_id = 0;
+    {
+        auto info_stmt = conn.prepare("SELECT project_id, COALESCE(security_level_id, 0), COALESCE(reporter_id, 0), COALESCE(assignee_id, 0) FROM work_items WHERE id = ?;");
+        info_stmt.bind_int(1, item_id);
+        if (info_stmt.step() == SQLITE_ROW) {
+            proj_id = info_stmt.column_int(0);
+            sec_id = info_stmt.column_int(1);
+            rep_id = info_stmt.column_int(2);
+            ass_id = info_stmt.column_int(3);
+        } else {
+            send_error(worker, header, "404 Not Found", "Work item not found");
+            return;
+        }
+    }
+
     std::string method = get_header(header, "REQUEST_METHOD");
 
     if (method == "GET") {
+        std::string token_str = extract_token(worker, header);
+        auto u_viewer = get_authenticated_user(conn, worker, header);
+        if (!token_str.empty() && !u_viewer.authenticated) {
+            send_error(worker, header, "401 Unauthorized", "Invalid or expired authorization token");
+            return;
+        }
+        if (!security::has_permission(conn, u_viewer.id, proj_id, "BROWSE_PROJECT", rep_id, ass_id)) {
+            send_error(worker, header, "403 Forbidden", "You do not have permission to browse this project");
+            return;
+        }
+        if (sec_id > 0 && !security::can_access_security_level(conn, u_viewer.id, proj_id, sec_id, rep_id, ass_id)) {
+            send_error(worker, header, "403 Forbidden", "You do not have permission to view this secured issue");
+            return;
+        }
         auto q = conn.prepare(std::string(BASE_WORK_ITEM_SELECT) + " WHERE w.id = ?;");
         q.bind_int(1, item_id);
         if (q.step() != SQLITE_ROW) {
@@ -8298,7 +8404,6 @@ static void handle_item_detail(backend::wsworker *worker,
         item.add("history", std::move(history));
 
         // Active workflow & available transitions for this item
-        auto u_viewer = get_authenticated_user(conn, worker, header);
         item.add("workflow", build_item_transitions_payload(conn, item_id, u_viewer));
 
         // Worklogs & Time Rollup (Step 7)
@@ -8325,6 +8430,10 @@ static void handle_item_detail(backend::wsworker *worker,
     }
 
     if (method == "DELETE") {
+        if (!security::has_permission(conn, u_auth.id, proj_id, "DELETE_ISSUE", rep_id, ass_id)) {
+            send_error(worker, header, "403 Forbidden", "You do not have permission to delete this issue");
+            return;
+        }
         // Remove physical blob files for this item first
         auto b_stmt = conn.prepare("SELECT blob_filename FROM attachments WHERE work_item_id = ?;");
         b_stmt.bind_int(1, item_id);
@@ -8354,6 +8463,31 @@ static void handle_item_detail(backend::wsworker *worker,
     if (!body) {
         send_error(worker, header, "400 Bad Request", "Invalid JSON body");
         return;
+    }
+
+    if (!security::has_permission(conn, u_auth.id, proj_id, "EDIT_ISSUE", rep_id, ass_id)) {
+        send_error(worker, header, "403 Forbidden", "You do not have permission to edit this issue");
+        return;
+    }
+
+    if (body.has_key("security_level_id")) {
+        int new_sec_id = body.get_int("security_level_id", 0);
+        if (new_sec_id > 0 && !security::can_access_security_level(conn, u_auth.id, proj_id, new_sec_id, rep_id, ass_id)) {
+            send_error(worker, header, "403 Forbidden", "You do not have permission to assign this security level");
+            return;
+        }
+        if (new_sec_id != sec_id) {
+            auto u_sec = conn.prepare("UPDATE work_items SET security_level_id = ? WHERE id = ?;");
+            if (new_sec_id > 0) u_sec.bind_int(1, new_sec_id);
+            else u_sec.bind_null(1);
+            u_sec.bind_int(2, item_id);
+            u_sec.step_done();
+
+            collaboration::record_changelog(conn, item_id, u_auth.id, "security_level",
+                                            sec_id > 0 ? std::to_string(sec_id) : "None",
+                                            new_sec_id > 0 ? std::to_string(new_sec_id) : "None");
+            sec_id = new_sec_id;
+        }
     }
 
     std::string old_status;
@@ -9047,6 +9181,26 @@ static void handle_item_comments(backend::wsworker *worker,
     auto u_auth = get_authenticated_user(conn, worker, header);
     if (!u_auth.authenticated) {
         send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    int proj_id = 0, sec_id = 0, rep_id = 0, ass_id = 0;
+    {
+        auto info_stmt = conn.prepare("SELECT project_id, COALESCE(security_level_id, 0), COALESCE(reporter_id, 0), COALESCE(assignee_id, 0) FROM work_items WHERE id = ?;");
+        info_stmt.bind_int(1, item_id);
+        if (info_stmt.step() == SQLITE_ROW) {
+            proj_id = info_stmt.column_int(0);
+            sec_id = info_stmt.column_int(1);
+            rep_id = info_stmt.column_int(2);
+            ass_id = info_stmt.column_int(3);
+        }
+    }
+    if (sec_id > 0 && !security::can_access_security_level(conn, u_auth.id, proj_id, sec_id, rep_id, ass_id)) {
+        send_error(worker, header, "403 Forbidden", "You do not have permission to access this secured issue");
+        return;
+    }
+    if (!security::has_permission(conn, u_auth.id, proj_id, "ADD_COMMENTS", rep_id, ass_id)) {
+        send_error(worker, header, "403 Forbidden", "You do not have permission to add comments");
         return;
     }
 
@@ -11401,6 +11555,1359 @@ static void handle_gadget_data(backend::wsworker *worker,
     send_json(worker, header, "200 OK", res);
 }
 
+// ============================================================================
+// Epic 10 / Step 11: Granular Permissions, Issue Security Schemes, Groups & PATs
+// ============================================================================
+
+// GET | POST /api/permission-schemes
+static void handle_permission_schemes(backend::wsworker *worker,
+                                      const std::map<std::string, std::string> &header,
+                                      const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto stmt = conn.prepare(R"SQL(
+            SELECT ps.id, ps.name, ps.description, ps.is_default, ps.created_at, ps.updated_at,
+                   (SELECT COUNT(*) FROM permission_scheme_grants psg WHERE psg.scheme_id = ps.id) AS grants_count,
+                   (SELECT COUNT(*) FROM projects p WHERE p.permission_scheme_id = ps.id) AS projects_count
+            FROM permission_schemes ps
+            ORDER BY ps.id ASC;
+        )SQL");
+        auto arr = json::json_value::make_array();
+        while (stmt.step() == SQLITE_ROW) {
+            auto obj = json::json_value::make_object();
+            obj.add_int("id", stmt.column_int(0));
+            obj.add_str("name", stmt.column_str(1));
+            obj.add_str("description", stmt.column_str(2));
+            obj.add_bool("is_default", stmt.column_int(3) != 0);
+            obj.add_str("created_at", stmt.column_str(4));
+            obj.add_str("updated_at", stmt.column_str(5));
+            obj.add_int("grants_count", stmt.column_int(6));
+            obj.add_int("projects_count", stmt.column_int(7));
+            arr.add(std::move(obj));
+        }
+        send_json(worker, header, "200 OK", arr);
+        return;
+    }
+
+    // POST /api/permission-schemes
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+    if (!security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Only administrators can create permission schemes");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+    std::string name = body.get_string("name");
+    std::string desc = body.get_string("description");
+    int copy_from_id = body.get_int("copy_from_scheme_id", 0);
+
+    if (name.empty()) {
+        send_error(worker, header, "400 Bad Request", "Permission scheme name is required");
+        return;
+    }
+
+    int new_id = 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare("INSERT INTO permission_schemes (name, description, is_default) VALUES (?, ?, 0);");
+        ins.bind_text(1, name);
+        ins.bind_text(2, desc);
+        ins.step_done();
+        new_id = static_cast<int>(conn.last_insert_rowid());
+
+        if (copy_from_id > 0) {
+            auto copy_stmt = conn.prepare(R"SQL(
+                INSERT INTO permission_scheme_grants (scheme_id, permission_key, grantee_type, grantee_value)
+                SELECT ?, permission_key, grantee_type, grantee_value
+                FROM permission_scheme_grants
+                WHERE scheme_id = ?;
+            )SQL");
+            copy_stmt.bind_int(1, new_id);
+            copy_stmt.bind_int(2, copy_from_id);
+            copy_stmt.step_done();
+        }
+
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", std::string("Failed to create permission scheme: ") + ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", new_id);
+    res.add_str("name", name);
+    res.add_str("description", desc);
+    res.add_bool("is_default", false);
+    send_json(worker, header, "201 Created", res);
+}
+
+// GET | PUT | DELETE /api/permission-schemes/([0-9]+)
+static void handle_permission_scheme_detail(backend::wsworker *worker,
+                                            const std::map<std::string, std::string> &header,
+                                            const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing scheme ID");
+        return;
+    }
+    int scheme_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto stmt = conn.prepare("SELECT id, name, description, is_default, created_at, updated_at FROM permission_schemes WHERE id = ?;");
+        stmt.bind_int(1, scheme_id);
+        if (stmt.step() != SQLITE_ROW) {
+            send_error(worker, header, "404 Not Found", "Permission scheme not found");
+            return;
+        }
+
+        auto obj = json::json_value::make_object();
+        obj.add_int("id", stmt.column_int(0));
+        obj.add_str("name", stmt.column_str(1));
+        obj.add_str("description", stmt.column_str(2));
+        obj.add_bool("is_default", stmt.column_int(3) != 0);
+        obj.add_str("created_at", stmt.column_str(4));
+        obj.add_str("updated_at", stmt.column_str(5));
+        stmt.reset();
+
+        // Load grants
+        auto gstmt = conn.prepare("SELECT id, permission_key, grantee_type, grantee_value, created_at FROM permission_scheme_grants WHERE scheme_id = ? ORDER BY permission_key ASC, id ASC;");
+        gstmt.bind_int(1, scheme_id);
+        auto garr = json::json_value::make_array();
+        while (gstmt.step() == SQLITE_ROW) {
+            auto go = json::json_value::make_object();
+            go.add_int("id", gstmt.column_int(0));
+            go.add_str("permission_key", gstmt.column_str(1));
+            go.add_str("grantee_type", gstmt.column_str(2));
+            go.add_str("grantee_value", gstmt.column_str(3));
+            go.add_str("created_at", gstmt.column_str(4));
+            garr.add(std::move(go));
+        }
+        obj.add("grants", std::move(garr));
+
+        // Load projects
+        auto pstmt = conn.prepare("SELECT id, key, name FROM projects WHERE permission_scheme_id = ?;");
+        pstmt.bind_int(1, scheme_id);
+        auto parr = json::json_value::make_array();
+        while (pstmt.step() == SQLITE_ROW) {
+            auto po = json::json_value::make_object();
+            po.add_int("id", pstmt.column_int(0));
+            po.add_str("key", pstmt.column_str(1));
+            po.add_str("name", pstmt.column_str(2));
+            parr.add(std::move(po));
+        }
+        obj.add("projects", std::move(parr));
+
+        send_json(worker, header, "200 OK", obj);
+        return;
+    }
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+    if (!security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Only administrators can modify permission schemes");
+        return;
+    }
+
+    if (method == "DELETE") {
+        if (scheme_id == 1) {
+            send_error(worker, header, "400 Bad Request", "Cannot delete the default permission scheme");
+            return;
+        }
+        db::sqlite_transaction tx(conn);
+        auto upd = conn.prepare("UPDATE projects SET permission_scheme_id = 1 WHERE permission_scheme_id = ?;");
+        upd.bind_int(1, scheme_id);
+        upd.step_done();
+
+        auto del = conn.prepare("DELETE FROM permission_schemes WHERE id = ?;");
+        del.bind_int(1, scheme_id);
+        del.step_done();
+        tx.commit();
+
+        auto res = json::json_value::make_object();
+        res.add_bool("deleted", true);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    // PUT /api/permission-schemes/:id
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string name = body.get_string("name");
+    std::string desc = body.get_string("description");
+    bool is_def = body.get_bool("is_default", false);
+
+    try {
+        db::sqlite_transaction tx(conn);
+        if (is_def) {
+            conn.exec("UPDATE permission_schemes SET is_default = 0;");
+        }
+        auto upd = conn.prepare("UPDATE permission_schemes SET name = COALESCE(NULLIF(?, ''), name), description = ?, is_default = ?, updated_at = datetime('now') WHERE id = ?;");
+        upd.bind_text(1, name);
+        upd.bind_text(2, desc);
+        upd.bind_int(3, is_def ? 1 : 0);
+        upd.bind_int(4, scheme_id);
+        upd.step_done();
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_bool("ok", true);
+    res.add_int("id", scheme_id);
+    send_json(worker, header, "200 OK", res);
+}
+
+// POST /api/permission-schemes/([0-9]+)/grants
+static void handle_permission_scheme_grants(backend::wsworker *worker,
+                                            const std::map<std::string, std::string> &header,
+                                            const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing scheme ID");
+        return;
+    }
+    int scheme_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Only administrators can grant permissions");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+    std::string perm_key = body.get_string("permission_key");
+    std::string g_type = body.get_string("grantee_type");
+    std::string g_val = body.get_string("grantee_value");
+
+    if (perm_key.empty() || g_type.empty()) {
+        send_error(worker, header, "400 Bad Request", "permission_key and grantee_type are required");
+        return;
+    }
+    if (g_val.empty()) {
+        if (g_type == "reporter" || g_type == "assignee" || g_type == "lead" || g_type == "anyone") {
+            g_val = g_type;
+        } else {
+            send_error(worker, header, "400 Bad Request", "grantee_value is required for " + g_type);
+            return;
+        }
+    }
+
+    int grant_id = 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare("INSERT OR IGNORE INTO permission_scheme_grants (scheme_id, permission_key, grantee_type, grantee_value) VALUES (?, ?, ?, ?);");
+        ins.bind_int(1, scheme_id);
+        ins.bind_text(2, perm_key);
+        ins.bind_text(3, g_type);
+        ins.bind_text(4, g_val);
+        ins.step_done();
+        grant_id = static_cast<int>(conn.last_insert_rowid());
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", grant_id);
+    res.add_int("scheme_id", scheme_id);
+    res.add_str("permission_key", perm_key);
+    res.add_str("grantee_type", g_type);
+    res.add_str("grantee_value", g_val);
+    send_json(worker, header, "201 Created", res);
+}
+
+// DELETE /api/permission-schemes/([0-9]+)/grants/([0-9]+)
+static void handle_permission_scheme_grant_delete(backend::wsworker *worker,
+                                                  const std::map<std::string, std::string> &header,
+                                                  const std::list<std::string> &uri_params) {
+    if (uri_params.size() < 2) {
+        send_error(worker, header, "400 Bad Request", "Missing scheme ID or grant ID");
+        return;
+    }
+    int scheme_id = std::atoi(uri_params.front().c_str());
+    int grant_id = std::atoi(std::next(uri_params.begin())->c_str());
+
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Only administrators can revoke permission grants");
+        return;
+    }
+
+    db::sqlite_transaction tx(conn);
+    auto del = conn.prepare("DELETE FROM permission_scheme_grants WHERE scheme_id = ? AND id = ?;");
+    del.bind_int(1, scheme_id);
+    del.bind_int(2, grant_id);
+    del.step_done();
+    tx.commit();
+
+    auto res = json::json_value::make_object();
+    res.add_bool("deleted", true);
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET | POST /api/security-schemes
+static void handle_security_schemes(backend::wsworker *worker,
+                                    const std::map<std::string, std::string> &header,
+                                    const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto stmt = conn.prepare(R"SQL(
+            SELECT ss.id, ss.name, ss.description, COALESCE(ss.default_level_id, 0), ss.created_at, ss.updated_at,
+                   (SELECT COUNT(*) FROM issue_security_levels isl WHERE isl.scheme_id = ss.id) AS levels_count,
+                   (SELECT COUNT(*) FROM projects p WHERE p.security_scheme_id = ss.id) AS projects_count
+            FROM issue_security_schemes ss
+            ORDER BY ss.id ASC;
+        )SQL");
+        auto arr = json::json_value::make_array();
+        while (stmt.step() == SQLITE_ROW) {
+            auto obj = json::json_value::make_object();
+            obj.add_int("id", stmt.column_int(0));
+            obj.add_str("name", stmt.column_str(1));
+            obj.add_str("description", stmt.column_str(2));
+            obj.add_nullable_int("default_level_id", stmt.column_int(3));
+            obj.add_str("created_at", stmt.column_str(4));
+            obj.add_str("updated_at", stmt.column_str(5));
+            obj.add_int("levels_count", stmt.column_int(6));
+            obj.add_int("projects_count", stmt.column_int(7));
+            arr.add(std::move(obj));
+        }
+        send_json(worker, header, "200 OK", arr);
+        return;
+    }
+
+    // POST /api/security-schemes
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Only administrators can create issue security schemes");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+    std::string name = body.get_string("name");
+    std::string desc = body.get_string("description");
+    if (name.empty()) {
+        send_error(worker, header, "400 Bad Request", "Security scheme name is required");
+        return;
+    }
+
+    int new_id = 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare("INSERT INTO issue_security_schemes (name, description, default_level_id) VALUES (?, ?, 0);");
+        ins.bind_text(1, name);
+        ins.bind_text(2, desc);
+        ins.step_done();
+        new_id = static_cast<int>(conn.last_insert_rowid());
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", new_id);
+    res.add_str("name", name);
+    res.add_str("description", desc);
+    send_json(worker, header, "201 Created", res);
+}
+
+// GET | PUT | DELETE /api/security-schemes/([0-9]+)
+static void handle_security_scheme_detail(backend::wsworker *worker,
+                                          const std::map<std::string, std::string> &header,
+                                          const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing scheme ID");
+        return;
+    }
+    int scheme_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto stmt = conn.prepare("SELECT id, name, description, COALESCE(default_level_id, 0), created_at, updated_at FROM issue_security_schemes WHERE id = ?;");
+        stmt.bind_int(1, scheme_id);
+        if (stmt.step() != SQLITE_ROW) {
+            send_error(worker, header, "404 Not Found", "Security scheme not found");
+            return;
+        }
+
+        auto obj = json::json_value::make_object();
+        obj.add_int("id", stmt.column_int(0));
+        obj.add_str("name", stmt.column_str(1));
+        obj.add_str("description", stmt.column_str(2));
+        obj.add_nullable_int("default_level_id", stmt.column_int(3));
+        obj.add_str("created_at", stmt.column_str(4));
+        obj.add_str("updated_at", stmt.column_str(5));
+        stmt.reset();
+
+        // Load levels
+        auto lstmt = conn.prepare("SELECT id, name, description, is_default, created_at FROM issue_security_levels WHERE scheme_id = ? ORDER BY id ASC;");
+        lstmt.bind_int(1, scheme_id);
+        auto larr = json::json_value::make_array();
+        while (lstmt.step() == SQLITE_ROW) {
+            auto lo = json::json_value::make_object();
+            int lid = lstmt.column_int(0);
+            lo.add_int("id", lid);
+            lo.add_str("name", lstmt.column_str(1));
+            lo.add_str("description", lstmt.column_str(2));
+            lo.add_bool("is_default", lstmt.column_int(3) != 0);
+            lo.add_str("created_at", lstmt.column_str(4));
+
+            // Load grants for this level
+            auto gstmt = conn.prepare("SELECT id, grantee_type, grantee_value, created_at FROM issue_security_level_grants WHERE level_id = ? ORDER BY id ASC;");
+            gstmt.bind_int(1, lid);
+            auto garr = json::json_value::make_array();
+            while (gstmt.step() == SQLITE_ROW) {
+                auto go = json::json_value::make_object();
+                go.add_int("id", gstmt.column_int(0));
+                go.add_str("grantee_type", gstmt.column_str(1));
+                go.add_str("grantee_value", gstmt.column_str(2));
+                go.add_str("created_at", gstmt.column_str(3));
+                garr.add(std::move(go));
+            }
+            lo.add("grants", std::move(garr));
+            larr.add(std::move(lo));
+        }
+        obj.add("levels", std::move(larr));
+
+        // Load projects
+        auto pstmt = conn.prepare("SELECT id, key, name FROM projects WHERE security_scheme_id = ?;");
+        pstmt.bind_int(1, scheme_id);
+        auto parr = json::json_value::make_array();
+        while (pstmt.step() == SQLITE_ROW) {
+            auto po = json::json_value::make_object();
+            po.add_int("id", pstmt.column_int(0));
+            po.add_str("key", pstmt.column_str(1));
+            po.add_str("name", pstmt.column_str(2));
+            parr.add(std::move(po));
+        }
+        obj.add("projects", std::move(parr));
+
+        send_json(worker, header, "200 OK", obj);
+        return;
+    }
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Only administrators can modify security schemes");
+        return;
+    }
+
+    if (method == "DELETE") {
+        if (scheme_id == 1) {
+            send_error(worker, header, "400 Bad Request", "Cannot delete the default security scheme");
+            return;
+        }
+        db::sqlite_transaction tx(conn);
+        auto upd = conn.prepare("UPDATE projects SET security_scheme_id = 1 WHERE security_scheme_id = ?;");
+        upd.bind_int(1, scheme_id);
+        upd.step_done();
+
+        auto del = conn.prepare("DELETE FROM issue_security_schemes WHERE id = ?;");
+        del.bind_int(1, scheme_id);
+        del.step_done();
+        tx.commit();
+
+        auto res = json::json_value::make_object();
+        res.add_bool("deleted", true);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    // PUT
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+    std::string name = body.get_string("name");
+    std::string desc = body.get_string("description");
+    int def_lvl = body.get_int("default_level_id", 0);
+
+    try {
+        db::sqlite_transaction tx(conn);
+        auto upd = conn.prepare("UPDATE issue_security_schemes SET name = COALESCE(NULLIF(?, ''), name), description = ?, default_level_id = ?, updated_at = datetime('now') WHERE id = ?;");
+        upd.bind_text(1, name);
+        upd.bind_text(2, desc);
+        upd.bind_int(3, def_lvl);
+        upd.bind_int(4, scheme_id);
+        upd.step_done();
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_bool("ok", true);
+    send_json(worker, header, "200 OK", res);
+}
+
+// POST /api/security-schemes/([0-9]+)/levels
+static void handle_security_scheme_levels(backend::wsworker *worker,
+                                          const std::map<std::string, std::string> &header,
+                                          const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing scheme ID");
+        return;
+    }
+    int scheme_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Only administrators can configure security levels");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+    std::string name = body.get_string("name");
+    std::string desc = body.get_string("description");
+    bool is_def = body.get_bool("is_default", false);
+
+    if (name.empty()) {
+        send_error(worker, header, "400 Bad Request", "Security level name is required");
+        return;
+    }
+
+    int level_id = 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        if (is_def) {
+            auto rst = conn.prepare("UPDATE issue_security_levels SET is_default = 0 WHERE scheme_id = ?;");
+            rst.bind_int(1, scheme_id);
+            rst.step_done();
+        }
+        auto ins = conn.prepare("INSERT INTO issue_security_levels (scheme_id, name, description, is_default) VALUES (?, ?, ?, ?);");
+        ins.bind_int(1, scheme_id);
+        ins.bind_text(2, name);
+        ins.bind_text(3, desc);
+        ins.bind_int(4, is_def ? 1 : 0);
+        ins.step_done();
+        level_id = static_cast<int>(conn.last_insert_rowid());
+        if (is_def) {
+            auto u_def = conn.prepare("UPDATE issue_security_schemes SET default_level_id = ? WHERE id = ?;");
+            u_def.bind_int(1, level_id);
+            u_def.bind_int(2, scheme_id);
+            u_def.step_done();
+        }
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", level_id);
+    res.add_int("scheme_id", scheme_id);
+    res.add_str("name", name);
+    res.add_str("description", desc);
+    res.add_bool("is_default", is_def);
+    send_json(worker, header, "201 Created", res);
+}
+
+// PUT | DELETE /api/security-schemes/([0-9]+)/levels/([0-9]+)
+static void handle_security_scheme_level_detail(backend::wsworker *worker,
+                                                const std::map<std::string, std::string> &header,
+                                                const std::list<std::string> &uri_params) {
+    if (uri_params.size() < 2) {
+        send_error(worker, header, "400 Bad Request", "Missing scheme ID or level ID");
+        return;
+    }
+    int scheme_id = std::atoi(uri_params.front().c_str());
+    int level_id = std::atoi(std::next(uri_params.begin())->c_str());
+
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Only administrators can configure security levels");
+        return;
+    }
+
+    std::string method = get_header(header, "REQUEST_METHOD");
+    if (method == "DELETE") {
+        db::sqlite_transaction tx(conn);
+        auto upd_w = conn.prepare("UPDATE work_items SET security_level_id = NULL WHERE security_level_id = ?;");
+        upd_w.bind_int(1, level_id);
+        upd_w.step_done();
+
+        auto del = conn.prepare("DELETE FROM issue_security_levels WHERE scheme_id = ? AND id = ?;");
+        del.bind_int(1, scheme_id);
+        del.bind_int(2, level_id);
+        del.step_done();
+        tx.commit();
+
+        auto res = json::json_value::make_object();
+        res.add_bool("deleted", true);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    // PUT
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+    std::string name = body.get_string("name");
+    std::string desc = body.get_string("description");
+    bool is_def = body.get_bool("is_default", false);
+
+    try {
+        db::sqlite_transaction tx(conn);
+        if (is_def) {
+            auto rst = conn.prepare("UPDATE issue_security_levels SET is_default = 0 WHERE scheme_id = ?;");
+            rst.bind_int(1, scheme_id);
+            rst.step_done();
+
+            auto u_def = conn.prepare("UPDATE issue_security_schemes SET default_level_id = ? WHERE id = ?;");
+            u_def.bind_int(1, level_id);
+            u_def.bind_int(2, scheme_id);
+            u_def.step_done();
+        }
+        auto upd = conn.prepare("UPDATE issue_security_levels SET name = COALESCE(NULLIF(?, ''), name), description = ?, is_default = ? WHERE id = ?;");
+        upd.bind_text(1, name);
+        upd.bind_text(2, desc);
+        upd.bind_int(3, is_def ? 1 : 0);
+        upd.bind_int(4, level_id);
+        upd.step_done();
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_bool("ok", true);
+    send_json(worker, header, "200 OK", res);
+}
+
+// POST /api/security-schemes/([0-9]+)/levels/([0-9]+)/grants
+static void handle_security_scheme_level_grants(backend::wsworker *worker,
+                                                const std::map<std::string, std::string> &header,
+                                                const std::list<std::string> &uri_params) {
+    if (uri_params.size() < 2) {
+        send_error(worker, header, "400 Bad Request", "Missing scheme ID or level ID");
+        return;
+    }
+    int level_id = std::atoi(std::next(uri_params.begin())->c_str());
+
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Only administrators can configure security level grants");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+    std::string g_type = body.get_string("grantee_type");
+    std::string g_val = body.get_string("grantee_value");
+
+    if (g_type.empty()) {
+        send_error(worker, header, "400 Bad Request", "grantee_type is required");
+        return;
+    }
+    if (g_val.empty()) {
+        if (g_type == "reporter" || g_type == "assignee" || g_type == "lead" || g_type == "anyone") {
+            g_val = g_type;
+        } else {
+            send_error(worker, header, "400 Bad Request", "grantee_value is required for " + g_type);
+            return;
+        }
+    }
+
+    int grant_id = 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare("INSERT OR IGNORE INTO issue_security_level_grants (level_id, grantee_type, grantee_value) VALUES (?, ?, ?);");
+        ins.bind_int(1, level_id);
+        ins.bind_text(2, g_type);
+        ins.bind_text(3, g_val);
+        ins.step_done();
+        grant_id = static_cast<int>(conn.last_insert_rowid());
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", grant_id);
+    res.add_int("level_id", level_id);
+    res.add_str("grantee_type", g_type);
+    res.add_str("grantee_value", g_val);
+    send_json(worker, header, "201 Created", res);
+}
+
+// DELETE /api/security-schemes/([0-9]+)/levels/([0-9]+)/grants/([0-9]+)
+static void handle_security_scheme_level_grant_delete(backend::wsworker *worker,
+                                                      const std::map<std::string, std::string> &header,
+                                                      const std::list<std::string> &uri_params) {
+    if (uri_params.size() < 3) {
+        send_error(worker, header, "400 Bad Request", "Missing scheme ID, level ID, or grant ID");
+        return;
+    }
+    auto it = uri_params.begin();
+    std::advance(it, 1);
+    int level_id = std::atoi(it->c_str());
+    std::advance(it, 1);
+    int grant_id = std::atoi(it->c_str());
+
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Only administrators can configure security level grants");
+        return;
+    }
+
+    db::sqlite_transaction tx(conn);
+    auto del = conn.prepare("DELETE FROM issue_security_level_grants WHERE level_id = ? AND id = ?;");
+    del.bind_int(1, level_id);
+    del.bind_int(2, grant_id);
+    del.step_done();
+    tx.commit();
+
+    auto res = json::json_value::make_object();
+    res.add_bool("deleted", true);
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET /api/security-levels?project_id=...
+static void handle_security_levels(backend::wsworker *worker,
+                                   const std::map<std::string, std::string> &header,
+                                   const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+
+    int project_id = args["project_id"].empty() ? 1 : std::atoi(args["project_id"].c_str());
+    int scheme_id = 1;
+    if (project_id > 0) {
+        auto pstmt = conn.prepare("SELECT COALESCE(security_scheme_id, 1) FROM projects WHERE id = ?;");
+        pstmt.bind_int(1, project_id);
+        if (pstmt.step() == SQLITE_ROW) {
+            scheme_id = pstmt.column_int(0);
+            if (scheme_id <= 0) scheme_id = 1;
+        }
+    }
+
+    auto stmt = conn.prepare("SELECT id, scheme_id, name, description, is_default FROM issue_security_levels WHERE scheme_id = ? ORDER BY id ASC;");
+    stmt.bind_int(1, scheme_id);
+
+    auto arr = json::json_value::make_array();
+    while (stmt.step() == SQLITE_ROW) {
+        int lid = stmt.column_int(0);
+        bool can_access = u_auth.authenticated ? security::can_access_security_level(conn, u_auth.id, project_id, lid) : true;
+        auto obj = json::json_value::make_object();
+        obj.add_int("id", lid);
+        obj.add_int("scheme_id", stmt.column_int(1));
+        obj.add_str("name", stmt.column_str(2));
+        obj.add_str("description", stmt.column_str(3));
+        obj.add_bool("is_default", stmt.column_int(4) != 0);
+        obj.add_bool("can_access", can_access);
+        arr.add(std::move(obj));
+    }
+
+    send_json(worker, header, "200 OK", arr);
+}
+
+// GET | POST /api/groups
+static void handle_groups(backend::wsworker *worker,
+                          const std::map<std::string, std::string> &header,
+                          const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto stmt = conn.prepare(R"SQL(
+            SELECT g.id, g.name, g.description, g.created_at,
+                   (SELECT COUNT(*) FROM user_group_members ugm WHERE ugm.group_id = g.id) AS member_count
+            FROM user_groups g
+            ORDER BY g.id ASC;
+        )SQL");
+        auto arr = json::json_value::make_array();
+        while (stmt.step() == SQLITE_ROW) {
+            auto obj = json::json_value::make_object();
+            obj.add_int("id", stmt.column_int(0));
+            obj.add_str("name", stmt.column_str(1));
+            obj.add_str("description", stmt.column_str(2));
+            obj.add_str("created_at", stmt.column_str(3));
+            obj.add_int("member_count", stmt.column_int(4));
+            arr.add(std::move(obj));
+        }
+        send_json(worker, header, "200 OK", arr);
+        return;
+    }
+
+    // POST /api/groups
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Only administrators can create user groups");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+    std::string name = body.get_string("name");
+    std::string desc = body.get_string("description");
+    if (name.empty()) {
+        send_error(worker, header, "400 Bad Request", "Group name is required");
+        return;
+    }
+
+    int group_id = 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare("INSERT INTO user_groups (name, description) VALUES (?, ?);");
+        ins.bind_text(1, name);
+        ins.bind_text(2, desc);
+        ins.step_done();
+        group_id = static_cast<int>(conn.last_insert_rowid());
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", group_id);
+    res.add_str("name", name);
+    res.add_str("description", desc);
+    send_json(worker, header, "201 Created", res);
+}
+
+// GET | DELETE /api/groups/([0-9]+)
+static void handle_group_detail(backend::wsworker *worker,
+                                const std::map<std::string, std::string> &header,
+                                const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing group ID");
+        return;
+    }
+    int group_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto stmt = conn.prepare("SELECT id, name, description, created_at FROM user_groups WHERE id = ?;");
+        stmt.bind_int(1, group_id);
+        if (stmt.step() != SQLITE_ROW) {
+            send_error(worker, header, "404 Not Found", "Group not found");
+            return;
+        }
+
+        auto obj = json::json_value::make_object();
+        obj.add_int("id", stmt.column_int(0));
+        obj.add_str("name", stmt.column_str(1));
+        obj.add_str("description", stmt.column_str(2));
+        obj.add_str("created_at", stmt.column_str(3));
+        stmt.reset();
+
+        auto mstmt = conn.prepare(R"SQL(
+            SELECT u.id, u.username, u.display_name, u.email, u.role, u.avatar_color, ugm.added_at
+            FROM user_group_members ugm
+            INNER JOIN users u ON u.id = ugm.user_id
+            WHERE ugm.group_id = ?
+            ORDER BY u.display_name ASC;
+        )SQL");
+        mstmt.bind_int(1, group_id);
+        auto marr = json::json_value::make_array();
+        while (mstmt.step() == SQLITE_ROW) {
+            auto mo = json::json_value::make_object();
+            mo.add_int("user_id", mstmt.column_int(0));
+            mo.add_str("username", mstmt.column_str(1));
+            mo.add_str("display_name", mstmt.column_str(2));
+            mo.add_str("email", mstmt.column_str(3));
+            mo.add_str("role", mstmt.column_str(4));
+            mo.add_str("avatar_color", mstmt.column_str(5));
+            mo.add_str("added_at", mstmt.column_str(6));
+            marr.add(std::move(mo));
+        }
+        obj.add("members", std::move(marr));
+
+        send_json(worker, header, "200 OK", obj);
+        return;
+    }
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Only administrators can delete groups");
+        return;
+    }
+
+    if (group_id == 1) {
+        send_error(worker, header, "400 Bad Request", "Cannot delete default system administrator group");
+        return;
+    }
+
+    db::sqlite_transaction tx(conn);
+    auto del = conn.prepare("DELETE FROM user_groups WHERE id = ?;");
+    del.bind_int(1, group_id);
+    del.step_done();
+    tx.commit();
+
+    auto res = json::json_value::make_object();
+    res.add_bool("deleted", true);
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET / POST /api/groups/([0-9]+)/members
+static void handle_group_members(backend::wsworker *worker,
+                                 const std::map<std::string, std::string> &header,
+                                 const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing group ID");
+        return;
+    }
+    int group_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto mstmt = conn.prepare(R"SQL(
+            SELECT ugm.user_id, u.username, u.display_name, u.email, u.role, u.avatar_color, ugm.added_at
+            FROM user_group_members ugm
+            INNER JOIN users u ON u.id = ugm.user_id
+            WHERE ugm.group_id = ?
+            ORDER BY u.display_name ASC;
+        )SQL");
+        mstmt.bind_int(1, group_id);
+        auto marr = json::json_value::make_array();
+        while (mstmt.step() == SQLITE_ROW) {
+            auto mo = json::json_value::make_object();
+            mo.add_int("user_id", mstmt.column_int(0));
+            mo.add_str("username", mstmt.column_str(1));
+            mo.add_str("display_name", mstmt.column_str(2));
+            mo.add_str("email", mstmt.column_str(3));
+            mo.add_str("role", mstmt.column_str(4));
+            mo.add_str("avatar_color", mstmt.column_str(5));
+            mo.add_str("added_at", mstmt.column_str(6));
+            marr.add(std::move(mo));
+        }
+        send_json(worker, header, "200 OK", marr);
+        return;
+    }
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Only administrators can manage group members");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+    int user_id = body.get_int("user_id", 0);
+    if (user_id <= 0) {
+        send_error(worker, header, "400 Bad Request", "user_id is required");
+        return;
+    }
+
+    db::sqlite_transaction tx(conn);
+    auto ins = conn.prepare("INSERT OR IGNORE INTO user_group_members (group_id, user_id) VALUES (?, ?);");
+    ins.bind_int(1, group_id);
+    ins.bind_int(2, user_id);
+    ins.step_done();
+    tx.commit();
+
+    auto res = json::json_value::make_object();
+    res.add_bool("added", true);
+    res.add_int("group_id", group_id);
+    res.add_int("user_id", user_id);
+    send_json(worker, header, "201 Created", res);
+}
+
+// DELETE /api/groups/([0-9]+)/members/([0-9]+)
+static void handle_group_member_delete(backend::wsworker *worker,
+                                       const std::map<std::string, std::string> &header,
+                                       const std::list<std::string> &uri_params) {
+    if (uri_params.size() < 2) {
+        send_error(worker, header, "400 Bad Request", "Missing group ID or user ID");
+        return;
+    }
+    int group_id = std::atoi(uri_params.front().c_str());
+    int user_id = std::atoi(std::next(uri_params.begin())->c_str());
+
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Only administrators can manage group members");
+        return;
+    }
+
+    db::sqlite_transaction tx(conn);
+    auto del = conn.prepare("DELETE FROM user_group_members WHERE group_id = ? AND user_id = ?;");
+    del.bind_int(1, group_id);
+    del.bind_int(2, user_id);
+    del.step_done();
+    tx.commit();
+
+    auto res = json::json_value::make_object();
+    res.add_bool("deleted", true);
+    send_json(worker, header, "200 OK", res);
+}
+
+// PUT /api/projects/([0-9]+)/permission-scheme
+static void handle_project_permission_scheme(backend::wsworker *worker,
+                                             const std::map<std::string, std::string> &header,
+                                             const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing project ID");
+        return;
+    }
+    int project_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::has_permission(conn, u_auth.id, project_id, "ADMINISTER_PROJECTS")) {
+        send_error(worker, header, "403 Forbidden", "Administer Projects permission required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+    int scheme_id = body.get_int("permission_scheme_id", 1);
+
+    db::sqlite_transaction tx(conn);
+    auto upd = conn.prepare("UPDATE projects SET permission_scheme_id = ? WHERE id = ?;");
+    upd.bind_int(1, scheme_id);
+    upd.bind_int(2, project_id);
+    upd.step_done();
+    tx.commit();
+
+    auto res = json::json_value::make_object();
+    res.add_bool("ok", true);
+    res.add_int("project_id", project_id);
+    res.add_int("permission_scheme_id", scheme_id);
+    send_json(worker, header, "200 OK", res);
+}
+
+// PUT /api/projects/([0-9]+)/security-scheme
+static void handle_project_security_scheme(backend::wsworker *worker,
+                                           const std::map<std::string, std::string> &header,
+                                           const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing project ID");
+        return;
+    }
+    int project_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::has_permission(conn, u_auth.id, project_id, "ADMINISTER_PROJECTS")) {
+        send_error(worker, header, "403 Forbidden", "Administer Projects permission required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+    int scheme_id = body.get_int("security_scheme_id", 1);
+
+    db::sqlite_transaction tx(conn);
+    auto upd = conn.prepare("UPDATE projects SET security_scheme_id = ? WHERE id = ?;");
+    upd.bind_int(1, scheme_id);
+    upd.bind_int(2, project_id);
+    upd.step_done();
+    tx.commit();
+
+    auto res = json::json_value::make_object();
+    res.add_bool("ok", true);
+    res.add_int("project_id", project_id);
+    res.add_int("security_scheme_id", scheme_id);
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET | POST | DELETE /api/projects/([0-9]+)/role-members
+static void handle_project_role_members(backend::wsworker *worker,
+                                        const std::map<std::string, std::string> &header,
+                                        const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing project ID");
+        return;
+    }
+    int project_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto stmt = conn.prepare(R"SQL(
+            SELECT prm.id, prm.project_id, prm.role_name, prm.user_id,
+                   u.username, u.display_name, u.avatar_color, u.role, prm.created_at
+            FROM project_role_members prm
+            INNER JOIN users u ON u.id = prm.user_id
+            WHERE prm.project_id = ?
+            ORDER BY prm.role_name ASC, u.display_name ASC;
+        )SQL");
+        stmt.bind_int(1, project_id);
+        auto arr = json::json_value::make_array();
+        while (stmt.step() == SQLITE_ROW) {
+            auto obj = json::json_value::make_object();
+            obj.add_int("id", stmt.column_int(0));
+            obj.add_int("project_id", stmt.column_int(1));
+            obj.add_str("role_name", stmt.column_str(2));
+            obj.add_int("user_id", stmt.column_int(3));
+            obj.add_str("username", stmt.column_str(4));
+            obj.add_str("display_name", stmt.column_str(5));
+            obj.add_str("avatar_color", stmt.column_str(6));
+            obj.add_str("system_role", stmt.column_str(7));
+            obj.add_str("created_at", stmt.column_str(8));
+            arr.add(std::move(obj));
+        }
+        send_json(worker, header, "200 OK", arr);
+        return;
+    }
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::has_permission(conn, u_auth.id, project_id, "ADMINISTER_PROJECTS")) {
+        send_error(worker, header, "403 Forbidden", "Administer Projects permission required");
+        return;
+    }
+
+    if (method == "POST") {
+        auto body = json::json_value::parse(worker->body());
+        if (!body) {
+            send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+            return;
+        }
+        std::string role_name = body.get_string("role_name");
+        int user_id = body.get_int("user_id", 0);
+        if (role_name.empty() || user_id <= 0) {
+            send_error(worker, header, "400 Bad Request", "role_name and user_id are required");
+            return;
+        }
+
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare("INSERT OR IGNORE INTO project_role_members (project_id, role_name, user_id) VALUES (?, ?, ?);");
+        ins.bind_int(1, project_id);
+        ins.bind_text(2, role_name);
+        ins.bind_int(3, user_id);
+        ins.step_done();
+        tx.commit();
+
+        auto res = json::json_value::make_object();
+        res.add_bool("added", true);
+        send_json(worker, header, "201 Created", res);
+        return;
+    }
+
+    if (method == "DELETE") {
+        auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+        std::string role_name = args["role_name"];
+        int user_id = std::atoi(args["user_id"].c_str());
+        if (user_id <= 0 && !worker->body().empty()) {
+            auto body = json::json_value::parse(worker->body());
+            if (body) {
+                if (role_name.empty()) role_name = body.get_string("role_name");
+                user_id = body.get_int("user_id", 0);
+            }
+        }
+        db::sqlite_transaction tx(conn);
+        auto del = conn.prepare("DELETE FROM project_role_members WHERE project_id = ? AND role_name = ? AND user_id = ?;");
+        del.bind_int(1, project_id);
+        del.bind_text(2, role_name);
+        del.bind_int(3, user_id);
+        del.step_done();
+        tx.commit();
+
+        auto res = json::json_value::make_object();
+        res.add_bool("deleted", true);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+}
+
+// GET | POST /api/tokens
+static void handle_personal_access_tokens(backend::wsworker *worker,
+                                          const std::map<std::string, std::string> &header,
+                                          const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto stmt = conn.prepare("SELECT id, name, scopes, COALESCE(expires_at, ''), created_at, COALESCE(last_used_at, '') FROM personal_access_tokens WHERE user_id = ? ORDER BY id DESC;");
+        stmt.bind_int(1, u_auth.id);
+        auto arr = json::json_value::make_array();
+        while (stmt.step() == SQLITE_ROW) {
+            auto obj = json::json_value::make_object();
+            obj.add_int("id", stmt.column_int(0));
+            obj.add_str("name", stmt.column_str(1));
+            obj.add_str("scopes", stmt.column_str(2));
+            obj.add_str("expires_at", stmt.column_str(3));
+            obj.add_str("created_at", stmt.column_str(4));
+            obj.add_str("last_used_at", stmt.column_str(5));
+            arr.add(std::move(obj));
+        }
+        send_json(worker, header, "200 OK", arr);
+        return;
+    }
+
+    // POST /api/tokens
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+    std::string name = body.get_string("name");
+    std::string scopes = body.get_string("scopes", "read,write");
+    std::string expires_at = body.get_string("expires_at");
+
+    if (name.empty()) {
+        send_error(worker, header, "400 Bad Request", "Token name is required");
+        return;
+    }
+
+    std::string raw_token = "pat_" + utils::generate_random_hex(32);
+    int new_id = 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare("INSERT INTO personal_access_tokens (user_id, token, name, scopes, expires_at) VALUES (?, ?, ?, ?, NULLIF(?, ''));");
+        ins.bind_int(1, u_auth.id);
+        ins.bind_text(2, raw_token);
+        ins.bind_text(3, name);
+        ins.bind_text(4, scopes);
+        ins.bind_text(5, expires_at);
+        ins.step_done();
+        new_id = static_cast<int>(conn.last_insert_rowid());
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", new_id);
+    res.add_str("name", name);
+    res.add_str("token", raw_token);
+    res.add_str("scopes", scopes);
+    res.add_str("expires_at", expires_at);
+    send_json(worker, header, "201 Created", res);
+}
+
+// DELETE /api/tokens/([0-9]+)
+static void handle_personal_access_token_delete(backend::wsworker *worker,
+                                                const std::map<std::string, std::string> &header,
+                                                const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing token ID");
+        return;
+    }
+    int token_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    db::sqlite_transaction tx(conn);
+    auto del = conn.prepare("DELETE FROM personal_access_tokens WHERE id = ? AND (user_id = ? OR ? = 1);");
+    del.bind_int(1, token_id);
+    del.bind_int(2, u_auth.id);
+    del.bind_int(3, security::user_is_admin(conn, u_auth.id, u_auth.role) ? 1 : 0);
+    del.step_done();
+    tx.commit();
+
+    auto res = json::json_value::make_object();
+    res.add_bool("deleted", true);
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET /api/permissions/my?project_id=...
+static void handle_my_permissions(backend::wsworker *worker,
+                                  const std::map<std::string, std::string> &header,
+                                  const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+    int project_id = args["project_id"].empty() ? 1 : std::atoi(args["project_id"].c_str());
+
+    bool is_admin = security::user_is_admin(conn, u_auth.id, u_auth.role);
+
+    static const std::vector<std::string> standard_perms = {
+        "BROWSE_PROJECT", "ADMINISTER_PROJECTS",
+        "CREATE_ISSUE", "EDIT_ISSUE", "ASSIGN_ISSUE", "RESOLVE_ISSUE", "CLOSE_ISSUE", "DELETE_ISSUE", "MOVE_ISSUE", "LINK_ISSUE",
+        "ADD_COMMENTS", "EDIT_OWN_COMMENTS", "EDIT_ALL_COMMENTS", "DELETE_OWN_COMMENTS", "DELETE_ALL_COMMENTS",
+        "CREATE_ATTACHMENTS", "DELETE_OWN_ATTACHMENTS", "DELETE_ALL_ATTACHMENTS",
+        "WORK_ON_ISSUES", "EDIT_OWN_WORKLOGS", "EDIT_ALL_WORKLOGS", "DELETE_WORKLOGS",
+        "MANAGE_SPRINTS"
+    };
+
+    auto perms_arr = json::json_value::make_array();
+    for (const auto &p : standard_perms) {
+        if (is_admin || security::has_permission(conn, u_auth.id, project_id, p)) {
+            perms_arr.add(json::json_value::make_string(p));
+        }
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("user_id", u_auth.id);
+    res.add_str("username", u_auth.username);
+    res.add_str("role", u_auth.role);
+    res.add_bool("is_admin", is_admin);
+    res.add_int("project_id", project_id);
+    res.add("permissions", std::move(perms_arr));
+
+    send_json(worker, header, "200 OK", res);
+}
+
 static constexpr auto DEFAULT_SOCKET_NAME = ":9002";
 static constexpr auto DEFAULT_BACKLOG = 100;
 
@@ -11577,6 +13084,27 @@ int main(int argc, char *argv[]) {
         {"^/api/users/mentions$",                       backend::GET,                   handle_mentions             },
         {"^/api/mentions/([0-9]+)/read$",               backend::POST,                  handle_mention_mark_read    },
         {"^/api/mentions/read-all$",                    backend::POST,                  handle_mentions_mark_all_read},
+        {"^/api/permission-schemes$",                   backend::GET | backend::POST,   handle_permission_schemes   },
+        {"^/api/permission-schemes/([0-9]+)$",          backend::GET | backend::PUT | backend::DELETE, handle_permission_scheme_detail },
+        {"^/api/permission-schemes/([0-9]+)/grants$",   backend::POST,                  handle_permission_scheme_grants },
+        {"^/api/permission-schemes/([0-9]+)/grants/([0-9]+)$", backend::DELETE,         handle_permission_scheme_grant_delete },
+        {"^/api/security-schemes$",                     backend::GET | backend::POST,   handle_security_schemes     },
+        {"^/api/security-schemes/([0-9]+)$",            backend::GET | backend::PUT | backend::DELETE, handle_security_scheme_detail },
+        {"^/api/security-schemes/([0-9]+)/levels$",     backend::POST,                  handle_security_scheme_levels },
+        {"^/api/security-schemes/([0-9]+)/levels/([0-9]+)$", backend::PUT | backend::DELETE, handle_security_scheme_level_detail },
+        {"^/api/security-schemes/([0-9]+)/levels/([0-9]+)/grants$", backend::POST,      handle_security_scheme_level_grants },
+        {"^/api/security-schemes/([0-9]+)/levels/([0-9]+)/grants/([0-9]+)$", backend::DELETE, handle_security_scheme_level_grant_delete },
+        {"^/api/security-levels$",                      backend::GET,                   handle_security_levels      },
+        {"^/api/groups$",                               backend::GET | backend::POST,   handle_groups               },
+        {"^/api/groups/([0-9]+)$",                      backend::GET | backend::DELETE, handle_group_detail         },
+        {"^/api/groups/([0-9]+)/members$",              backend::GET | backend::POST,   handle_group_members        },
+        {"^/api/groups/([0-9]+)/members/([0-9]+)$",     backend::DELETE,                handle_group_member_delete  },
+        {"^/api/projects/([0-9]+)/permission-scheme$",  backend::PUT,                   handle_project_permission_scheme },
+        {"^/api/projects/([0-9]+)/security-scheme$",    backend::PUT,                   handle_project_security_scheme },
+        {"^/api/projects/([0-9]+)/role-members$",       backend::GET | backend::POST | backend::DELETE, handle_project_role_members },
+        {"^/api/tokens$",                               backend::GET | backend::POST,   handle_personal_access_tokens },
+        {"^/api/tokens/([0-9]+)$",                      backend::DELETE,                handle_personal_access_token_delete },
+        {"^/api/permissions/my$",                       backend::GET,                   handle_my_permissions       },
     });
 
     server.init(socket_name.c_str(), backlog, worker_num);

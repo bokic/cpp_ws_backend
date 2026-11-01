@@ -589,6 +589,21 @@ struct ClauseNode : JqlNode {
                 });
         }
 
+        // 10b. Issue Security Level: security = "Public" or securityLevel = "Confidential / Security Vulnerability"
+        if (f == "security" || f == "securitylevel" || f == "security_level" || f == "security_level_id") {
+            return compile_multi_match_clause(
+                ctx,
+                resolved_vals,
+                [](SqlContext &c, const std::string &val) {
+                    if (to_lower_ascii(val) == "unsecured" || to_lower_ascii(val) == "none" || to_lower_ascii(val) == "empty" || to_lower_ascii(val) == "null") {
+                        return std::string("(w.security_level_id IS NULL OR w.security_level_id = 0)");
+                    }
+                    std::string p1 = c.add_param(val);
+                    std::string p2 = c.add_param(val);
+                    return "(lower(COALESCE(isl.name, '')) = lower(" + p1 + ") OR CAST(w.security_level_id AS TEXT) = " + p2 + ")";
+                });
+        }
+
         // 11. Parent / Epic field
         if (f == "parent" || f == "parent_id" || f == "epic" || f == "parentepic" || f == "epiclink") {
             return compile_multi_match_clause(
@@ -914,6 +929,9 @@ private:
         if (f == "resolution" || f == "resolution_id") {
             return is_empty ? "(w.resolution_id IS NULL OR w.resolution_id = 0)" : "(w.resolution_id IS NOT NULL AND w.resolution_id > 0)";
         }
+        if (f == "security" || f == "securitylevel" || f == "security_level" || f == "security_level_id") {
+            return is_empty ? "(w.security_level_id IS NULL OR w.security_level_id = 0)" : "(w.security_level_id IS NOT NULL AND w.security_level_id > 0)";
+        }
         if (f == "component" || f == "components") {
             std::string ex = "EXISTS (SELECT 1 FROM work_item_components wc WHERE wc.work_item_id = w.id)";
             return is_empty ? "(NOT " + ex + ")" : ex;
@@ -1116,6 +1134,8 @@ struct JqlQueryAst {
                 oss << "lower(COALESCE(sp.name, 'zzzz')) " << dir;
             } else if (f == "resolution") {
                 oss << "lower(COALESCE(res.name, 'zzzz')) " << dir;
+            } else if (f == "security" || f == "securitylevel" || f == "security_level") {
+                oss << "lower(COALESCE(isl.name, 'zzzz')) " << dir;
             } else if (const CustomFieldMeta *cf = ctx.resolve_custom_field(order_by[i].field)) {
                 if (cf->field_type == "number") {
                     oss << "(SELECT cfv.numeric_value FROM custom_field_values cfv WHERE cfv.work_item_id = w.id AND cfv.custom_field_id = "

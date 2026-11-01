@@ -314,6 +314,8 @@ export interface WorkItem {
   votes_count?: number;
   is_watching?: boolean;
   has_voted?: boolean;
+  security_level_id?: number | null;
+  security_level_name?: string;
 }
 
 export type WorklogAdjustmentMode = 'auto' | 'leave' | 'set' | 'reduce';
@@ -1142,6 +1144,111 @@ export interface GadgetCatalogItem {
   category: string;
   icon: string;
   default_preferences: string;
+}
+
+// Epic 10 / Step 11: Permissions, Security Schemes, Groups & Personal Access Tokens
+export interface PermissionGrant {
+  id: number;
+  scheme_id: number;
+  permission_key: string;
+  grantee_type: string; // 'role' | 'group' | 'dynamic' | 'user' | 'anyone'
+  grantee_value: string;
+  created_at?: string;
+}
+
+export interface PermissionScheme {
+  id: number;
+  name: string;
+  description: string;
+  is_default: boolean;
+  grants_count?: number;
+  projects_count?: number;
+  grants?: PermissionGrant[];
+  projects?: { id: number; key: string; name: string }[];
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface IssueSecurityGrant {
+  id: number;
+  level_id: number;
+  grantee_type: string;
+  grantee_value: string;
+  created_at?: string;
+}
+
+export interface IssueSecurityLevel {
+  id: number;
+  scheme_id: number;
+  name: string;
+  description: string;
+  is_default: boolean;
+  can_access?: boolean;
+  grants?: IssueSecurityGrant[];
+  created_at?: string;
+}
+
+export interface IssueSecurityScheme {
+  id: number;
+  name: string;
+  description: string;
+  default_level_id?: number | null;
+  levels_count?: number;
+  projects_count?: number;
+  levels?: IssueSecurityLevel[];
+  projects?: { id: number; key: string; name: string }[];
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface UserGroupMember {
+  user_id: number;
+  username: string;
+  display_name: string;
+  email: string;
+  role: string;
+  avatar_color: string;
+  added_at?: string;
+}
+
+export interface UserGroup {
+  id: number;
+  name: string;
+  description: string;
+  member_count?: number;
+  members?: UserGroupMember[];
+  created_at?: string;
+}
+
+export interface ProjectRoleMember {
+  id: number;
+  project_id: number;
+  role_name: string;
+  user_id: number;
+  username: string;
+  display_name: string;
+  avatar_color: string;
+  system_role: string;
+  created_at?: string;
+}
+
+export interface PersonalAccessToken {
+  id: number;
+  name: string;
+  token?: string;
+  scopes: string;
+  expires_at?: string;
+  created_at?: string;
+  last_used_at?: string;
+}
+
+export interface UserMyPermissions {
+  user_id: number;
+  username: string;
+  role: string;
+  is_admin: boolean;
+  project_id: number;
+  permissions: string[];
 }
 
 
