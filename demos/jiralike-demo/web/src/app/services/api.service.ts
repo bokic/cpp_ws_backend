@@ -27,6 +27,7 @@ import {
   EpicSummaryItem,
   FieldConfiguration,
   GadgetCatalogItem,
+  InAppNotification,
   IssueSecurityGrant,
   IssueSecurityLevel,
   IssueSecurityScheme,
@@ -36,6 +37,9 @@ import {
   JqlSearchResponse,
   JqlSuggestions,
   JqlValidateResponse,
+  NotificationScheme,
+  NotificationSchemeEntry,
+  OutboundEmail,
   PermissionGrant,
   PermissionScheme,
   PersonalAccessToken,
@@ -52,6 +56,7 @@ import {
   ScreenScheme,
   ScreenTab,
   SetupStatus,
+  SmtpConfig,
   Sprint,
   TimeRollup,
   TimesheetResponse,
@@ -63,6 +68,8 @@ import {
   VelocityReport,
   VotesPayload,
   WatchersPayload,
+  Webhook,
+  WebhookDelivery,
   WorkItem,
   WorkItemChangelog,
   WorkItemDetail,
@@ -106,6 +113,11 @@ export class ApiService {
   readonly mentions = signal<UserMention[]>([]);
   readonly unreadMentionsCount = computed<number>(() => {
     return this.mentions().filter((m) => !m.is_read).length;
+  });
+  readonly notifications = signal<InAppNotification[]>([]);
+  readonly unreadNotificationsCount = signal<number>(0);
+  readonly totalUnreadActivityCount = computed<number>(() => {
+    return this.unreadMentionsCount() + this.unreadNotificationsCount();
   });
   readonly currentSprint = computed<Sprint | null>(() => {
     const list = this.sprints();
@@ -2073,6 +2085,153 @@ export class ApiService {
   async triggerAutomationCron(): Promise<{ success: boolean; message: string }> {
     return this.request<{ success: boolean; message: string }>('/api/automation/cron', {
       method: 'POST',
+    });
+  }
+
+  // ============================================================================
+  // Step 13: In-App Notifications, Schemes, SMTP & Webhooks
+  // ============================================================================
+
+  async refreshNotifications(): Promise<void> {
+    try {
+      const res = await this.request<{ unread_count: number; notifications: InAppNotification[] }>('/api/notifications');
+      this.notifications.set(res.notifications || []);
+      this.unreadNotificationsCount.set(res.unread_count || 0);
+    } catch {
+      // ignore offline/unauth
+    }
+  }
+
+  async markNotificationRead(id: number): Promise<void> {
+    await this.request<{ ok: boolean }>(`/api/notifications/${id}/read`, { method: 'POST' });
+    await this.refreshNotifications();
+  }
+
+  async markAllNotificationsRead(): Promise<void> {
+    await this.request<{ ok: boolean }>('/api/notifications/read-all', { method: 'POST' });
+    await this.refreshNotifications();
+  }
+
+  async deleteNotification(id: number): Promise<void> {
+    await this.request<{ deleted: boolean }>(`/api/notifications/${id}`, { method: 'DELETE' });
+    await this.refreshNotifications();
+  }
+
+  // Notification Schemes
+  async getNotificationSchemes(): Promise<NotificationScheme[]> {
+    return this.request<NotificationScheme[]>('/api/notification-schemes');
+  }
+
+  async getNotificationScheme(id: number): Promise<NotificationScheme> {
+    return this.request<NotificationScheme>(`/api/notification-schemes/${id}`);
+  }
+
+  async createNotificationScheme(payload: { name: string; description?: string; is_default?: boolean }): Promise<NotificationScheme> {
+    return this.request<NotificationScheme>('/api/notification-schemes', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateNotificationScheme(id: number, payload: Partial<NotificationScheme>): Promise<void> {
+    await this.request(`/api/notification-schemes/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteNotificationScheme(id: number): Promise<void> {
+    await this.request(`/api/notification-schemes/${id}`, { method: 'DELETE' });
+  }
+
+  async addNotificationSchemeEntry(
+    schemeId: number,
+    payload: { event_type: string; recipient_type: string; recipient_parameter?: string }
+  ): Promise<NotificationSchemeEntry> {
+    return this.request<NotificationSchemeEntry>(`/api/notification-schemes/${schemeId}/entries`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteNotificationSchemeEntry(schemeId: number, entryId: number): Promise<void> {
+    await this.request(`/api/notification-schemes/${schemeId}/entries/${entryId}`, { method: 'DELETE' });
+  }
+
+  async setProjectNotificationScheme(projectId: number, schemeId: number): Promise<void> {
+    await this.request(`/api/projects/${projectId}/notification-scheme`, {
+      method: 'PUT',
+      body: JSON.stringify({ notification_scheme_id: schemeId }),
+    });
+    this.projects.set(await this.getProjects());
+  }
+
+  // Outbound Webhooks
+  async getWebhooks(): Promise<Webhook[]> {
+    return this.request<Webhook[]>('/api/webhooks');
+  }
+
+  async getWebhook(id: number): Promise<Webhook> {
+    return this.request<Webhook>(`/api/webhooks/${id}`);
+  }
+
+  async createWebhook(payload: { name: string; url: string; secret?: string; events?: string; is_active?: boolean }): Promise<Webhook> {
+    return this.request<Webhook>('/api/webhooks', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateWebhook(id: number, payload: Partial<Webhook>): Promise<void> {
+    await this.request(`/api/webhooks/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteWebhook(id: number): Promise<void> {
+    await this.request(`/api/webhooks/${id}`, { method: 'DELETE' });
+  }
+
+  async testWebhook(id: number): Promise<{ ok: boolean; status: string; response_status: number; duration_ms: number; signature: string; error: string }> {
+    return this.request<{ ok: boolean; status: string; response_status: number; duration_ms: number; signature: string; error: string }>(
+      `/api/webhooks/${id}/test`,
+      { method: 'POST' }
+    );
+  }
+
+  async getWebhookDeliveries(webhookId?: number): Promise<WebhookDelivery[]> {
+    const url = webhookId ? `/api/webhooks/${webhookId}/deliveries` : '/api/webhooks/deliveries';
+    return this.request<WebhookDelivery[]>(url);
+  }
+
+  async redeliverWebhook(deliveryId: number): Promise<{ ok: boolean; status: string; response_status: number; duration_ms: number }> {
+    return this.request<{ ok: boolean; status: string; response_status: number; duration_ms: number }>(
+      `/api/webhooks/deliveries/${deliveryId}/redeliver`,
+      { method: 'POST' }
+    );
+  }
+
+  // SMTP Email Delivery
+  async getSmtpConfig(): Promise<SmtpConfig> {
+    return this.request<SmtpConfig>('/api/smtp/config');
+  }
+
+  async updateSmtpConfig(payload: Partial<SmtpConfig>): Promise<void> {
+    await this.request('/api/smtp/config', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getSmtpQueue(): Promise<OutboundEmail[]> {
+    return this.request<OutboundEmail[]>('/api/smtp/queue');
+  }
+
+  async sendTestEmail(toEmail: string, subject?: string, message?: string): Promise<{ ok: boolean; email_id: number; status: string }> {
+    return this.request<{ ok: boolean; email_id: number; status: string }>('/api/smtp/test', {
+      method: 'POST',
+      body: JSON.stringify({ to_email: toEmail, subject, message }),
     });
   }
 }

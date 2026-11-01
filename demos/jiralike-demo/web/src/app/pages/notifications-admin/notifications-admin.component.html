@@ -1,0 +1,706 @@
+<div class="notifications-admin-page">
+  <div class="page-header">
+    <div class="header-left">
+      <h1 class="page-title">Webhooks &amp; Notification Schemes</h1>
+      <p class="page-subtitle">Configure outbound webhooks, project event notification matrices, and SMTP email delivery</p>
+    </div>
+    <div class="header-right">
+      @if (activeTab() === 'webhooks') {
+        <button type="button" class="btn btn-primary" (click)="showCreateWebhookModal.set(true)">
+          + Register Webhook
+        </button>
+      } @else if (activeTab() === 'schemes') {
+        <button type="button" class="btn btn-primary" (click)="showCreateSchemeModal.set(true)">
+          + New Notification Scheme
+        </button>
+      }
+    </div>
+  </div>
+
+  @if (feedback(); as fb) {
+    <div class="alert-banner" [class.alert-success]="fb.type === 'success'" [class.alert-error]="fb.type === 'error'">
+      <span>{{ fb.message }}</span>
+      <button type="button" class="close-alert-btn" (click)="feedback.set(null)">✕</button>
+    </div>
+  }
+
+  <!-- Navigation Tabs -->
+  <div class="tab-nav">
+    <button
+      type="button"
+      class="tab-btn"
+      [class.active]="activeTab() === 'webhooks'"
+      (click)="activeTab.set('webhooks')"
+    >
+      🌐 Outbound Webhooks ({{ webhooks().length }})
+    </button>
+    <button
+      type="button"
+      class="tab-btn"
+      [class.active]="activeTab() === 'schemes'"
+      (click)="activeTab.set('schemes')"
+    >
+      🔔 Notification Schemes ({{ schemes().length }})
+    </button>
+    <button
+      type="button"
+      class="tab-btn"
+      [class.active]="activeTab() === 'smtp'"
+      (click)="activeTab.set('smtp')"
+    >
+      ✉️ SMTP &amp; Outbound Email Queue ({{ outboundEmails().length }})
+    </button>
+  </div>
+
+  <!-- TAB 1: OUTBOUND WEBHOOKS -->
+  @if (activeTab() === 'webhooks') {
+    <div class="tab-content">
+      <div class="section-card">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">Configured Outbound Webhooks</h2>
+            <p class="card-subtitle">Dispatches signed HMAC-SHA256 HTTP POST payloads when Jira events trigger</p>
+          </div>
+          <button type="button" class="btn btn-secondary btn-sm" (click)="loadWebhooks()">
+            🔄 Refresh
+          </button>
+        </div>
+
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Status</th>
+                <th>Name</th>
+                <th>Target URL</th>
+                <th>Subscribed Events</th>
+                <th>Secret</th>
+                <th>Deliveries</th>
+                <th>Last Status</th>
+                <th style="text-align: right;">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (wh of webhooks(); track wh.id) {
+                <tr>
+                  <td>
+                    <button
+                      type="button"
+                      class="toggle-pill"
+                      [class.active]="wh.is_active"
+                      (click)="toggleWebhookActive(wh)"
+                      title="Toggle active status"
+                    >
+                      {{ wh.is_active ? 'ACTIVE' : 'DISABLED' }}
+                    </button>
+                  </td>
+                  <td><strong>{{ wh.name }}</strong></td>
+                  <td><code class="url-code">{{ wh.url }}</code></td>
+                  <td>
+                    <span class="events-badge">{{ wh.events }}</span>
+                  </td>
+                  <td>
+                    @if (wh.has_secret) {
+                      <span class="secret-badge" title="HMAC-SHA256 signature active">✓ HMAC-SHA256</span>
+                    } @else {
+                      <span class="text-muted">None</span>
+                    }
+                  </td>
+                  <td>{{ wh.deliveries_count || 0 }}</td>
+                  <td>
+                    @if (wh.last_status === 'success') {
+                      <span class="badge badge-success">200 OK</span>
+                    } @else if (wh.last_status === 'failed') {
+                      <span class="badge badge-danger">FAILED</span>
+                    } @else {
+                      <span class="text-muted">-</span>
+                    }
+                  </td>
+                  <td style="text-align: right; white-space: nowrap;">
+                    <button
+                      type="button"
+                      class="btn btn-sm btn-ghost"
+                      (click)="testWebhook(wh)"
+                      title="Send test ping"
+                    >
+                      🚀 Ping
+                    </button>
+                    <button
+                      type="button"
+                      class="btn btn-sm btn-ghost btn-danger-ghost"
+                      (click)="deleteWebhook(wh)"
+                      title="Delete webhook"
+                    >
+                      🗑️
+                    </button>
+                  </td>
+                </tr>
+              } @empty {
+                <tr>
+                  <td colspan="8" class="empty-cell">
+                    No webhooks registered yet. Click "+ Register Webhook" to integrate external systems.
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Webhook Delivery History Log -->
+      <div class="section-card" style="margin-top: 24px;">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">Recent Webhook Deliveries Log</h2>
+            <p class="card-subtitle">Audit past HTTP POST dispatches, execution duration, and server responses</p>
+          </div>
+        </div>
+
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Webhook</th>
+                <th>Event</th>
+                <th>HTTP Status</th>
+                <th>Duration</th>
+                <th>Attempt</th>
+                <th>Delivered At</th>
+                <th>Payload &amp; Response</th>
+                <th style="text-align: right;">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (d of webhookDeliveries(); track d.id) {
+                <tr>
+                  <td>#{{ d.id }}</td>
+                  <td><strong>{{ d.webhook_name || ('#' + d.webhook_id) }}</strong></td>
+                  <td><span class="badge badge-info">{{ d.event_type }}</span></td>
+                  <td>
+                    <span
+                      class="badge"
+                      [class.badge-success]="d.response_status >= 200 && d.response_status < 300"
+                      [class.badge-danger]="d.response_status === 0 || d.response_status >= 400"
+                    >
+                      {{ d.response_status > 0 ? (d.response_status + ' ' + (d.status | uppercase)) : 'ERR: ' + (d.error_message || 'Timeout') }}
+                    </span>
+                  </td>
+                  <td>{{ d.duration_ms.toFixed(1) }} ms</td>
+                  <td>#{{ d.attempt }}</td>
+                  <td><span class="text-muted">{{ d.created_at }}</span></td>
+                  <td>
+                    <details class="payload-details">
+                      <summary>Inspect Payload ({{ d.payload.length }} bytes)</summary>
+                      <pre class="json-box"><code>{{ formatJson(d.payload) }}</code></pre>
+                      @if (d.response_body) {
+                        <div style="margin-top: 6px; font-weight: 600;">Response Body:</div>
+                        <pre class="json-box"><code>{{ d.response_body }}</code></pre>
+                      }
+                    </details>
+                  </td>
+                  <td style="text-align: right;">
+                    <button type="button" class="btn btn-xs btn-secondary" (click)="redeliver(d)" title="Retry delivery">
+                      🔁 Redeliver
+                    </button>
+                  </td>
+                </tr>
+              } @empty {
+                <tr>
+                  <td colspan="9" class="empty-cell">No deliveries logged yet. Trigger an issue event or click "Ping" to see trace.</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- TAB 2: NOTIFICATION SCHEMES -->
+  @if (activeTab() === 'schemes') {
+    <div class="tab-content">
+      <div class="schemes-layout">
+        <!-- Scheme Selector Sidebar -->
+        <div class="schemes-sidebar section-card">
+          <div class="card-header">
+            <h3 class="card-title" style="font-size: 15px;">Schemes</h3>
+          </div>
+          <div class="schemes-list">
+            @for (s of schemes(); track s.id) {
+              <div
+                class="scheme-nav-item"
+                [class.active]="selectedScheme()?.id === s.id"
+                (click)="selectScheme(s)"
+              >
+                <div class="scheme-nav-header">
+                  <strong>{{ s.name }}</strong>
+                  @if (s.is_default) {
+                    <span class="badge badge-primary">DEFAULT</span>
+                  }
+                </div>
+                <div class="scheme-nav-desc">{{ s.description || 'No description provided' }}</div>
+                <div class="scheme-nav-stats text-muted">
+                  {{ s.entry_count || 0 }} recipient entries • {{ s.project_count || 0 }} projects
+                </div>
+              </div>
+            }
+          </div>
+
+          <!-- Project Association Box -->
+          <div class="project-assign-box">
+            <h4 style="margin: 0 0 8px; font-size: 13px;">Assign to Project</h4>
+            <div class="form-group">
+              <label class="form-label">Project</label>
+              <select class="form-control" [ngModel]="selectedProjectId()" (ngModelChange)="selectedProjectId.set(+$event)">
+                @for (p of api.projects(); track p.id) {
+                  <option [value]="p.id">{{ p.name }} ({{ p.key }})</option>
+                }
+              </select>
+            </div>
+            <div class="form-group" style="margin-top: 8px;">
+              <label class="form-label">Notification Scheme</label>
+              <select class="form-control" [ngModel]="assignSchemeId()" (ngModelChange)="assignSchemeId.set(+$event)">
+                @for (s of schemes(); track s.id) {
+                  <option [value]="s.id">{{ s.name }}</option>
+                }
+              </select>
+            </div>
+            <button type="button" class="btn btn-secondary btn-sm" style="width: 100%; margin-top: 8px;" (click)="assignSchemeToProject()">
+              Save Project Scheme
+            </button>
+          </div>
+        </div>
+
+        <!-- Scheme Matrix Detail -->
+        <div class="scheme-matrix-area section-card">
+          @if (selectedScheme(); as scheme) {
+            <div class="card-header">
+              <div>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                  <h2 class="card-title">{{ scheme.name }}</h2>
+                  @if (scheme.is_default) {
+                    <span class="badge badge-primary">Default Scheme</span>
+                  }
+                </div>
+                <p class="card-subtitle">{{ scheme.description || 'Configures recipient groups and roles per event type.' }}</p>
+              </div>
+              <div style="display: flex; gap: 8px;">
+                @if (!scheme.is_default) {
+                  <button type="button" class="btn btn-sm btn-danger-ghost" (click)="deleteScheme(scheme)">
+                    Delete Scheme
+                  </button>
+                }
+              </div>
+            </div>
+
+            <!-- Add Recipient Entry Form -->
+            <div class="add-entry-bar">
+              <div class="entry-field">
+                <label>Event Type</label>
+                <select class="form-control form-control-sm" [ngModel]="newEntryEventType()" (ngModelChange)="newEntryEventType.set($event)">
+                  @for (ev of availableEvents; track ev.key) {
+                    <option [value]="ev.key">{{ ev.label }}</option>
+                  }
+                </select>
+              </div>
+              <div class="entry-field">
+                <label>Recipient Target</label>
+                <select class="form-control form-control-sm" [ngModel]="newEntryRecipientType()" (ngModelChange)="newEntryRecipientType.set($event)">
+                  @for (rt of recipientTypes; track rt.key) {
+                    <option [value]="rt.key">{{ rt.label }}</option>
+                  }
+                </select>
+              </div>
+              <div class="entry-field">
+                <label>Parameter (optional)</label>
+                <input
+                  type="text"
+                  class="form-control form-control-sm"
+                  placeholder="Role ID, user, or group"
+                  [ngModel]="newEntryParam()"
+                  (ngModelChange)="newEntryParam.set($event)"
+                />
+              </div>
+              <div class="entry-action">
+                <button type="button" class="btn btn-primary btn-sm" (click)="addSchemeEntry()">
+                  + Add Recipient
+                </button>
+              </div>
+            </div>
+
+            <!-- Entries Matrix -->
+            <div class="table-responsive" style="margin-top: 16px;">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Event Type</th>
+                    <th>Recipient Type</th>
+                    <th>Parameter</th>
+                    <th style="text-align: right;">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (entry of scheme.entries || []; track entry.id) {
+                    <tr>
+                      <td>
+                        <span class="badge badge-info">{{ entry.event_type }}</span>
+                      </td>
+                      <td>
+                        <strong>{{ entry.recipient_type }}</strong>
+                      </td>
+                      <td>
+                        @if (entry.recipient_parameter) {
+                          <code>{{ entry.recipient_parameter }}</code>
+                        } @else {
+                          <span class="text-muted">(Issue Dynamic Actor)</span>
+                        }
+                      </td>
+                      <td style="text-align: right;">
+                        <button
+                          type="button"
+                          class="btn btn-xs btn-ghost btn-danger-ghost"
+                          (click)="deleteSchemeEntry(entry.id)"
+                          title="Remove recipient"
+                        >
+                          ✕ Remove
+                        </button>
+                      </td>
+                    </tr>
+                  } @empty {
+                    <tr>
+                      <td colspan="4" class="empty-cell">No recipient entries configured. Add recipients using the bar above.</td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+          } @else {
+            <div class="empty-state">Select a notification scheme to view its event routing matrix.</div>
+          }
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- TAB 3: SMTP & OUTBOUND EMAIL QUEUE -->
+  @if (activeTab() === 'smtp') {
+    <div class="tab-content">
+      <div class="smtp-grid">
+        <!-- SMTP Settings Form -->
+        <div class="section-card">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title">SMTP Server Settings</h2>
+              <p class="card-subtitle">Configure outbound mail host, ports, TLS encryption, and sender identity</p>
+            </div>
+          </div>
+
+          @if (smtpConfig(); as cfg) {
+            <div class="smtp-form">
+              <div class="form-row">
+                <div class="form-group flex-2">
+                  <label class="form-label">SMTP Host</label>
+                  <input type="text" class="form-control" [(ngModel)]="cfg.host" placeholder="smtp.gmail.com or localhost" />
+                </div>
+                <div class="form-group flex-1">
+                  <label class="form-label">Port</label>
+                  <input type="number" class="form-control" [(ngModel)]="cfg.port" placeholder="25, 465, 587" />
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group flex-1">
+                  <label class="form-label">From Address</label>
+                  <input type="email" class="form-control" [(ngModel)]="cfg.from_email" placeholder="jira@yourdomain.com" />
+                </div>
+                <div class="form-group flex-1">
+                  <label class="form-label">From Display Name</label>
+                  <input type="text" class="form-control" [(ngModel)]="cfg.from_name" placeholder="JiraLike Workspace" />
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group flex-1">
+                  <label class="form-label">TLS / Encryption Mode</label>
+                  <select class="form-control" [(ngModel)]="cfg.tls_mode">
+                    <option value="none">None (Plaintext / Local queue)</option>
+                    <option value="starttls">STARTTLS (Port 587)</option>
+                    <option value="ssl">SSL / TLS (Port 465)</option>
+                  </select>
+                </div>
+                <div class="form-group flex-1" style="display: flex; align-items: center; margin-top: 24px;">
+                  <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                    <input type="checkbox" [(ngModel)]="cfg.is_enabled" />
+                    <strong>Enable Live External Delivery</strong>
+                  </label>
+                </div>
+              </div>
+
+              <div style="margin-top: 16px;">
+                <button type="button" class="btn btn-primary" (click)="saveSmtpConfig()">
+                  Save SMTP Settings
+                </button>
+              </div>
+            </div>
+          }
+        </div>
+
+        <!-- Quick Test Email Card -->
+        <div class="section-card">
+          <div class="card-header">
+            <div>
+              <h2 class="card-title">Dispatch Test Notification</h2>
+              <p class="card-subtitle">Queue an instant test email to verify headers and HTML template rendering</p>
+            </div>
+          </div>
+
+          <div class="test-email-form">
+            <div class="form-group">
+              <label class="form-label">Recipient Email</label>
+              <input
+                type="email"
+                class="form-control"
+                placeholder="recipient@example.com"
+                [ngModel]="testEmailRecipient()"
+                (ngModelChange)="testEmailRecipient.set($event)"
+              />
+            </div>
+            <div class="form-group" style="margin-top: 8px;">
+              <label class="form-label">Subject</label>
+              <input
+                type="text"
+                class="form-control"
+                [ngModel]="testEmailSubject()"
+                (ngModelChange)="testEmailSubject.set($event)"
+              />
+            </div>
+            <div class="form-group" style="margin-top: 8px;">
+              <label class="form-label">Message Snippet</label>
+              <textarea
+                class="form-control"
+                rows="2"
+                [ngModel]="testEmailMessage()"
+                (ngModelChange)="testEmailMessage.set($event)"
+              ></textarea>
+            </div>
+            <button type="button" class="btn btn-secondary" style="margin-top: 12px;" (click)="sendTestEmail()">
+              ✉️ Send Test Notification
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Outbound Email Queue Audit Log -->
+      <div class="section-card" style="margin-top: 24px;">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">Outbound Email Queue &amp; Delivery Log</h2>
+            <p class="card-subtitle">Inspect threaded email notifications with Message-ID, In-Reply-To, and References</p>
+          </div>
+          <button type="button" class="btn btn-secondary btn-sm" (click)="loadSmtp()">
+            🔄 Refresh Queue
+          </button>
+        </div>
+
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Status</th>
+                <th>To</th>
+                <th>Subject</th>
+                <th>Email Threading Headers</th>
+                <th>Queued At</th>
+                <th style="text-align: right;">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (mail of outboundEmails(); track mail.id) {
+                <tr>
+                  <td>#{{ mail.id }}</td>
+                  <td>
+                    <span
+                      class="badge"
+                      [class.badge-success]="mail.status === 'sent'"
+                      [class.badge-primary]="mail.status === 'queued'"
+                      [class.badge-danger]="mail.status === 'failed'"
+                    >
+                      {{ mail.status | uppercase }}
+                    </span>
+                  </td>
+                  <td>
+                    <div><strong>{{ mail.to_name || mail.to_email }}</strong></div>
+                    <code class="url-code" style="font-size: 11px;">{{ mail.to_email }}</code>
+                  </td>
+                  <td>{{ mail.subject }}</td>
+                  <td>
+                    <details class="payload-details">
+                      <summary>Headers (RFC 2822 / 5322)</summary>
+                      <pre class="json-box"><code>{{ formatJson(mail.headers_json) }}</code></pre>
+                    </details>
+                  </td>
+                  <td><span class="text-muted">{{ mail.created_at }}</span></td>
+                  <td style="text-align: right;">
+                    <button type="button" class="btn btn-xs btn-ghost" (click)="selectedEmail.set(mail)">
+                      👁️ Preview HTML
+                    </button>
+                  </td>
+                </tr>
+              } @empty {
+                <tr>
+                  <td colspan="7" class="empty-cell">No emails currently in the outbound queue.</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- MODAL: REGISTER WEBHOOK -->
+  @if (showCreateWebhookModal()) {
+    <div class="modal-backdrop" (click)="showCreateWebhookModal.set(false)">
+      <div class="modal-card" (click)="$event.stopPropagation()">
+        <div class="modal-header">
+          <h3>Register New Outbound Webhook</h3>
+          <button type="button" class="modal-close" (click)="showCreateWebhookModal.set(false)">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label class="form-label">Webhook Name *</label>
+            <input
+              type="text"
+              class="form-control"
+              placeholder="e.g. CI/CD Pipeline or Slack Alert"
+              [(ngModel)]="webhookForm().name"
+            />
+          </div>
+          <div class="form-group" style="margin-top: 12px;">
+            <label class="form-label">Endpoint URL (HTTP/HTTPS) *</label>
+            <input
+              type="url"
+              class="form-control"
+              placeholder="http://localhost:8080/webhook"
+              [(ngModel)]="webhookForm().url"
+            />
+          </div>
+          <div class="form-group" style="margin-top: 12px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <label class="form-label">Secret Token (for HMAC-SHA256 signature verification)</label>
+              <button type="button" class="btn btn-ghost btn-xs" (click)="generateSecret()">
+                🎲 Generate Secret
+              </button>
+            </div>
+            <input
+              type="text"
+              class="form-control"
+              placeholder="Shared secret (X-Hub-Signature-256)"
+              [(ngModel)]="webhookForm().secret"
+            />
+          </div>
+
+          <div class="form-group" style="margin-top: 16px;">
+            <label class="form-label">Event Subscriptions</label>
+            <div class="events-checkbox-grid">
+              @for (ev of availableEvents; track ev.key) {
+                <label class="checkbox-label">
+                  <input
+                    type="checkbox"
+                    [checked]="webhookForm().events.includes(ev.key)"
+                    (change)="toggleWebhookEvent(ev.key)"
+                  />
+                  <span>{{ ev.label }}</span>
+                </label>
+              }
+            </div>
+          </div>
+
+          <div class="form-group" style="margin-top: 16px;">
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+              <input type="checkbox" [(ngModel)]="webhookForm().is_active" />
+              <span>Enable Webhook Immediately</span>
+            </label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" (click)="showCreateWebhookModal.set(false)">Cancel</button>
+          <button type="button" class="btn btn-primary" (click)="saveWebhook()">Register Webhook</button>
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- MODAL: CREATE SCHEME -->
+  @if (showCreateSchemeModal()) {
+    <div class="modal-backdrop" (click)="showCreateSchemeModal.set(false)">
+      <div class="modal-card" (click)="$event.stopPropagation()">
+        <div class="modal-header">
+          <h3>Create Notification Scheme</h3>
+          <button type="button" class="modal-close" (click)="showCreateSchemeModal.set(false)">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label class="form-label">Scheme Name *</label>
+            <input
+              type="text"
+              class="form-control"
+              placeholder="e.g. Critical Support Notification Scheme"
+              [ngModel]="newSchemeName()"
+              (ngModelChange)="newSchemeName.set($event)"
+            />
+          </div>
+          <div class="form-group" style="margin-top: 12px;">
+            <label class="form-label">Description</label>
+            <textarea
+              class="form-control"
+              rows="2"
+              placeholder="Purpose and audience of this scheme"
+              [ngModel]="newSchemeDesc()"
+              (ngModelChange)="newSchemeDesc.set($event)"
+            ></textarea>
+          </div>
+          <div class="form-group" style="margin-top: 12px;">
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+              <input
+                type="checkbox"
+                [ngModel]="newSchemeDefault()"
+                (ngModelChange)="newSchemeDefault.set($event)"
+              />
+              <span>Set as Default Scheme for New Projects</span>
+            </label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" (click)="showCreateSchemeModal.set(false)">Cancel</button>
+          <button type="button" class="btn btn-primary" (click)="createScheme()">Create Scheme</button>
+        </div>
+      </div>
+    </div>
+  }
+
+  <!-- MODAL: EMAIL HTML PREVIEW -->
+  @if (selectedEmail(); as email) {
+    <div class="modal-backdrop" (click)="selectedEmail.set(null)">
+      <div class="modal-card modal-large" (click)="$event.stopPropagation()">
+        <div class="modal-header">
+          <h3>Email Preview: {{ email.subject }}</h3>
+          <button type="button" class="modal-close" (click)="selectedEmail.set(null)">✕</button>
+        </div>
+        <div class="modal-body">
+          <div style="background: #f4f5f7; padding: 10px 14px; border-radius: 4px; margin-bottom: 16px; font-size: 13px;">
+            <div><strong>To:</strong> {{ email.to_name }} &lt;{{ email.to_email }}&gt;</div>
+            <div><strong>Subject:</strong> {{ email.subject }}</div>
+            <div><strong>Status:</strong> <span class="badge badge-primary">{{ email.status }}</span> ({{ email.created_at }})</div>
+          </div>
+          <div class="email-preview-frame" [innerHTML]="email.body_html"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" (click)="selectedEmail.set(null)">Close Preview</button>
+        </div>
+      </div>
+    </div>
+  }
+</div>

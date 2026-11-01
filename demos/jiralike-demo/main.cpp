@@ -1132,7 +1132,10 @@ static void handle_projects(backend::wsworker *worker,
                    (SELECT COUNT(*) FROM work_items w WHERE w.project_id = p.id) AS total_items,
                    COALESCE(p.issue_type_scheme_id, 1),
                    (SELECT COUNT(*) FROM components c WHERE c.project_id = p.id) AS component_count,
-                   (SELECT COUNT(*) FROM versions v WHERE v.project_id = p.id) AS version_count
+                   (SELECT COUNT(*) FROM versions v WHERE v.project_id = p.id) AS version_count,
+                   COALESCE(p.permission_scheme_id, 1),
+                   COALESCE(p.security_scheme_id, 1),
+                   COALESCE(p.notification_scheme_id, 1)
             FROM projects p
             LEFT JOIN users u ON u.id = p.lead_user_id
             ORDER BY p.id ASC;
@@ -1152,6 +1155,9 @@ static void handle_projects(backend::wsworker *worker,
             p.add_int("issue_type_scheme_id", stmt.column_int(9));
             p.add_int("component_count", stmt.column_int(10));
             p.add_int("version_count", stmt.column_int(11));
+            p.add_int("permission_scheme_id", stmt.column_int(12));
+            p.add_int("security_scheme_id", stmt.column_int(13));
+            p.add_int("notification_scheme_id", stmt.column_int(14));
             arr.add(std::move(p));
         }
         send_json(worker, header, "200 OK", arr);
@@ -10148,6 +10154,19 @@ static void handle_item_worklogs(backend::wsworker *worker,
     res.add_int("item_time_spent_seconds", static_cast<int>(new_spent_sec));
     res.add_str("item_time_spent_formatted", time_tracking::format_seconds_to_duration(new_spent_sec));
     res.add("time_rollup", build_item_time_rollup_json(conn, item_id));
+
+    // Dispatch worklog_added event
+    {
+        automation::AutomationEvent a_ev;
+        a_ev.type = automation::EventType::WorklogAdded;
+        a_ev.issue_id = item_id;
+        a_ev.issue_key = uri_params.front();
+        a_ev.user_id = u_auth.id;
+        a_ev.user_username = u_auth.username;
+        a_ev.user_display_name = u_auth.display_name;
+        automation::dispatch_event(conn, a_ev);
+    }
+
     send_json(worker, header, "201 Created", res);
 }
 
@@ -13534,6 +13553,955 @@ static void handle_automation_cron(backend::wsworker *worker,
     send_json(worker, header, "200 OK", res);
 }
 
+// ============================================================================
+// Step 13: Notifications, SMTP Delivery & Outbound Webhooks REST Endpoints
+// ============================================================================
+
+// PUT /api/projects/([0-9]+)/notification-scheme
+static void handle_project_notification_scheme(backend::wsworker *worker,
+                                               const std::map<std::string, std::string> &header,
+                                               const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing project ID");
+        return;
+    }
+    int project_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::has_permission(conn, u_auth.id, project_id, "ADMINISTER_PROJECTS")) {
+        send_error(worker, header, "403 Forbidden", "Administer Projects permission required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+    int scheme_id = body.get_int("notification_scheme_id", 1);
+
+    db::sqlite_transaction tx(conn);
+    auto upd = conn.prepare("UPDATE projects SET notification_scheme_id = ? WHERE id = ?;");
+    upd.bind_int(1, scheme_id);
+    upd.bind_int(2, project_id);
+    upd.step_done();
+    tx.commit();
+
+    auto res = json::json_value::make_object();
+    res.add_bool("ok", true);
+    res.add_int("project_id", project_id);
+    res.add_int("notification_scheme_id", scheme_id);
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET | POST /api/notification-schemes
+static void handle_notification_schemes(backend::wsworker *worker,
+                                        const std::map<std::string, std::string> &header,
+                                        const std::list<std::string> &) {
+    std::string method = get_header(header, "REQUEST_METHOD");
+    auto conn = acquire_db_connection();
+
+    if (method == "GET") {
+        auto stmt = conn.prepare(R"SQL(
+            SELECT s.id, s.name, s.description, s.is_default, s.created_at, s.updated_at,
+                   (SELECT COUNT(*) FROM notification_scheme_entries e WHERE e.scheme_id = s.id) AS entry_count,
+                   (SELECT COUNT(*) FROM projects p WHERE p.notification_scheme_id = s.id) AS project_count
+            FROM notification_schemes s
+            ORDER BY s.is_default DESC, s.name ASC;
+        )SQL");
+
+        auto arr = json::json_value::make_array();
+        while (stmt.step() == SQLITE_ROW) {
+            auto obj = json::json_value::make_object();
+            obj.add_int("id", stmt.column_int(0));
+            obj.add_str("name", stmt.column_str(1));
+            obj.add_str("description", stmt.column_str(2));
+            obj.add_bool("is_default", stmt.column_int(3) != 0);
+            obj.add_str("created_at", stmt.column_str(4));
+            obj.add_str("updated_at", stmt.column_str(5));
+            obj.add_int("entry_count", stmt.column_int(6));
+            obj.add_int("project_count", stmt.column_int(7));
+            arr.add(std::move(obj));
+        }
+        send_json(worker, header, "200 OK", arr);
+        return;
+    }
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Administrator privileges required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+    std::string name = body.get_string("name");
+    std::string desc = body.get_string("description");
+    bool is_default = body.get_bool("is_default", false);
+
+    if (name.empty()) {
+        send_error(worker, header, "400 Bad Request", "Scheme name is required");
+        return;
+    }
+
+    db::sqlite_transaction tx(conn);
+    if (is_default) {
+        conn.exec("UPDATE notification_schemes SET is_default = 0;");
+    }
+
+    auto ins = conn.prepare("INSERT INTO notification_schemes (name, description, is_default) VALUES (?, ?, ?);");
+    ins.bind_text(1, name);
+    ins.bind_text(2, desc);
+    ins.bind_int(3, is_default ? 1 : 0);
+    ins.step_done();
+    int new_id = static_cast<int>(conn.last_insert_rowid());
+    tx.commit();
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", new_id);
+    res.add_str("name", name);
+    res.add_str("description", desc);
+    res.add_bool("is_default", is_default);
+    send_json(worker, header, "201 Created", res);
+}
+
+// GET | PUT | DELETE /api/notification-schemes/([0-9]+)
+static void handle_notification_scheme_detail(backend::wsworker *worker,
+                                              const std::map<std::string, std::string> &header,
+                                              const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing scheme ID");
+        return;
+    }
+    int scheme_id = std::atoi(uri_params.front().c_str());
+    std::string method = get_header(header, "REQUEST_METHOD");
+    auto conn = acquire_db_connection();
+
+    if (method == "GET") {
+        auto stmt = conn.prepare("SELECT id, name, description, is_default, created_at, updated_at FROM notification_schemes WHERE id = ?;");
+        stmt.bind_int(1, scheme_id);
+        if (stmt.step() != SQLITE_ROW) {
+            send_error(worker, header, "404 Not Found", "Notification scheme not found");
+            return;
+        }
+
+        auto res = json::json_value::make_object();
+        res.add_int("id", stmt.column_int(0));
+        res.add_str("name", stmt.column_str(1));
+        res.add_str("description", stmt.column_str(2));
+        res.add_bool("is_default", stmt.column_int(3) != 0);
+        res.add_str("created_at", stmt.column_str(4));
+        res.add_str("updated_at", stmt.column_str(5));
+
+        auto stmt_entries = conn.prepare("SELECT id, scheme_id, event_type, recipient_type, recipient_parameter, created_at FROM notification_scheme_entries WHERE scheme_id = ? ORDER BY id ASC;");
+        stmt_entries.bind_int(1, scheme_id);
+        auto entries_arr = json::json_value::make_array();
+        while (stmt_entries.step() == SQLITE_ROW) {
+            auto e_obj = json::json_value::make_object();
+            e_obj.add_int("id", stmt_entries.column_int(0));
+            e_obj.add_int("scheme_id", stmt_entries.column_int(1));
+            e_obj.add_str("event_type", stmt_entries.column_str(2));
+            e_obj.add_str("recipient_type", stmt_entries.column_str(3));
+            e_obj.add_str("recipient_parameter", stmt_entries.column_str(4));
+            e_obj.add_str("created_at", stmt_entries.column_str(5));
+            entries_arr.add(std::move(e_obj));
+        }
+        res.add("entries", std::move(entries_arr));
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Administrator privileges required");
+        return;
+    }
+
+    if (method == "DELETE") {
+        auto check = conn.prepare("SELECT is_default FROM notification_schemes WHERE id = ?;");
+        check.bind_int(1, scheme_id);
+        if (check.step() != SQLITE_ROW) {
+            send_error(worker, header, "404 Not Found", "Scheme not found");
+            return;
+        }
+        if (check.column_int(0) != 0) {
+            send_error(worker, header, "400 Bad Request", "Cannot delete the default notification scheme");
+            return;
+        }
+
+        db::sqlite_transaction tx(conn);
+        auto del = conn.prepare("DELETE FROM notification_schemes WHERE id = ?;");
+        del.bind_int(1, scheme_id);
+        del.step_done();
+        tx.commit();
+
+        auto res = json::json_value::make_object();
+        res.add_bool("deleted", true);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    if (method == "PUT") {
+        auto body = json::json_value::parse(worker->body());
+        if (!body) {
+            send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+            return;
+        }
+        std::string name = body.get_string("name");
+        std::string desc = body.get_string("description");
+        bool is_default = body.get_bool("is_default", false);
+
+        db::sqlite_transaction tx(conn);
+        if (is_default) {
+            conn.exec("UPDATE notification_schemes SET is_default = 0;");
+        }
+        auto upd = conn.prepare("UPDATE notification_schemes SET name = ?, description = ?, is_default = ?, updated_at = datetime('now') WHERE id = ?;");
+        upd.bind_text(1, name);
+        upd.bind_text(2, desc);
+        upd.bind_int(3, is_default ? 1 : 0);
+        upd.bind_int(4, scheme_id);
+        upd.step_done();
+        tx.commit();
+
+        auto res = json::json_value::make_object();
+        res.add_bool("ok", true);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    send_error(worker, header, "405 Method Not Allowed", "Method not allowed");
+}
+
+// POST /api/notification-schemes/([0-9]+)/entries
+static void handle_notification_scheme_entries(backend::wsworker *worker,
+                                               const std::map<std::string, std::string> &header,
+                                               const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing scheme ID");
+        return;
+    }
+    int scheme_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Administrator privileges required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string event_type = body.get_string("event_type");
+    std::string recipient_type = body.get_string("recipient_type");
+    std::string recipient_param = body.get_string("recipient_parameter");
+
+    if (event_type.empty() || recipient_type.empty()) {
+        send_error(worker, header, "400 Bad Request", "event_type and recipient_type are required");
+        return;
+    }
+
+    db::sqlite_transaction tx(conn);
+    auto ins = conn.prepare("INSERT INTO notification_scheme_entries (scheme_id, event_type, recipient_type, recipient_parameter) VALUES (?, ?, ?, ?);");
+    ins.bind_int(1, scheme_id);
+    ins.bind_text(2, event_type);
+    ins.bind_text(3, recipient_type);
+    ins.bind_text(4, recipient_param);
+    ins.step_done();
+    int new_id = static_cast<int>(conn.last_insert_rowid());
+    tx.commit();
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", new_id);
+    res.add_int("scheme_id", scheme_id);
+    res.add_str("event_type", event_type);
+    res.add_str("recipient_type", recipient_type);
+    res.add_str("recipient_parameter", recipient_param);
+    send_json(worker, header, "201 Created", res);
+}
+
+// DELETE /api/notification-schemes/([0-9]+)/entries/([0-9]+)
+static void handle_notification_scheme_entry_detail(backend::wsworker *worker,
+                                                    const std::map<std::string, std::string> &header,
+                                                    const std::list<std::string> &uri_params) {
+    if (uri_params.size() < 2) {
+        send_error(worker, header, "400 Bad Request", "Missing scheme ID or entry ID");
+        return;
+    }
+    int entry_id = std::atoi(std::next(uri_params.begin())->c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Administrator privileges required");
+        return;
+    }
+
+    db::sqlite_transaction tx(conn);
+    auto del = conn.prepare("DELETE FROM notification_scheme_entries WHERE id = ?;");
+    del.bind_int(1, entry_id);
+    del.step_done();
+    tx.commit();
+
+    auto res = json::json_value::make_object();
+    res.add_bool("deleted", true);
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET /api/notifications
+static void handle_in_app_notifications(backend::wsworker *worker,
+                                        const std::map<std::string, std::string> &header,
+                                        const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+    bool unread_only = (args["unread"] == "1" || args["unread"] == "true" || args["unread_only"] == "1" || args["unread_only"] == "true");
+
+    std::string sql = R"SQL(
+        SELECT n.id, n.work_item_id, n.event_type, n.title, n.message, n.link, n.is_read, n.created_at,
+               COALESCE(w.key, '') AS item_key, COALESCE(w.title, '') AS item_title
+        FROM in_app_notifications n
+        LEFT JOIN work_items w ON w.id = n.work_item_id
+        WHERE n.user_id = ?
+    )SQL";
+    if (unread_only) {
+        sql += " AND n.is_read = 0";
+    }
+    sql += " ORDER BY n.id DESC LIMIT 100;";
+
+    auto stmt = conn.prepare(sql);
+    stmt.bind_int(1, u_auth.id);
+
+    auto list_arr = json::json_value::make_array();
+    while (stmt.step() == SQLITE_ROW) {
+        auto obj = json::json_value::make_object();
+        obj.add_int("id", stmt.column_int(0));
+        obj.add_nullable_int("work_item_id", stmt.column_int(1));
+        obj.add_str("event_type", stmt.column_str(2));
+        obj.add_str("title", stmt.column_str(3));
+        obj.add_str("message", stmt.column_str(4));
+        obj.add_str("link", stmt.column_str(5));
+        obj.add_bool("is_read", stmt.column_int(6) != 0);
+        obj.add_str("created_at", stmt.column_str(7));
+        obj.add_str("item_key", stmt.column_str(8));
+        obj.add_str("item_title", stmt.column_str(9));
+        list_arr.add(std::move(obj));
+    }
+
+    int unread_count = 0;
+    {
+        auto count_stmt = conn.prepare("SELECT COUNT(*) FROM in_app_notifications WHERE user_id = ? AND is_read = 0;");
+        count_stmt.bind_int(1, u_auth.id);
+        if (count_stmt.step() == SQLITE_ROW) {
+            unread_count = count_stmt.column_int(0);
+        }
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("unread_count", unread_count);
+    res.add("notifications", std::move(list_arr));
+    send_json(worker, header, "200 OK", res);
+}
+
+// POST /api/notifications/([0-9]+)/read
+static void handle_notification_mark_read(backend::wsworker *worker,
+                                         const std::map<std::string, std::string> &header,
+                                         const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing notification ID");
+        return;
+    }
+    int nid = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    db::sqlite_transaction tx(conn);
+    auto upd = conn.prepare("UPDATE in_app_notifications SET is_read = 1 WHERE id = ? AND user_id = ?;");
+    upd.bind_int(1, nid);
+    upd.bind_int(2, u_auth.id);
+    upd.step_done();
+    tx.commit();
+
+    auto res = json::json_value::make_object();
+    res.add_bool("ok", true);
+    send_json(worker, header, "200 OK", res);
+}
+
+// POST /api/notifications/read-all
+static void handle_notifications_mark_all_read(backend::wsworker *worker,
+                                              const std::map<std::string, std::string> &header,
+                                              const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    db::sqlite_transaction tx(conn);
+    auto upd = conn.prepare("UPDATE in_app_notifications SET is_read = 1 WHERE user_id = ?;");
+    upd.bind_int(1, u_auth.id);
+    upd.step_done();
+    tx.commit();
+
+    auto res = json::json_value::make_object();
+    res.add_bool("ok", true);
+    send_json(worker, header, "200 OK", res);
+}
+
+// DELETE /api/notifications/([0-9]+)
+static void handle_notification_delete(backend::wsworker *worker,
+                                       const std::map<std::string, std::string> &header,
+                                       const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing notification ID");
+        return;
+    }
+    int nid = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    db::sqlite_transaction tx(conn);
+    auto del = conn.prepare("DELETE FROM in_app_notifications WHERE id = ? AND user_id = ?;");
+    del.bind_int(1, nid);
+    del.bind_int(2, u_auth.id);
+    del.step_done();
+    tx.commit();
+
+    auto res = json::json_value::make_object();
+    res.add_bool("deleted", true);
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET | POST /api/webhooks
+static void handle_webhooks(backend::wsworker *worker,
+                            const std::map<std::string, std::string> &header,
+                            const std::list<std::string> &) {
+    std::string method = get_header(header, "REQUEST_METHOD");
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Administrator privileges required");
+        return;
+    }
+
+    if (method == "GET") {
+        auto stmt = conn.prepare(R"SQL(
+            SELECT w.id, w.name, w.url, w.secret, w.events, w.is_active, w.created_at, w.updated_at,
+                   (SELECT COUNT(*) FROM webhook_deliveries d WHERE d.webhook_id = w.id) AS deliveries_count,
+                   (SELECT d.status FROM webhook_deliveries d WHERE d.webhook_id = w.id ORDER BY d.id DESC LIMIT 1) AS last_status,
+                   (SELECT d.created_at FROM webhook_deliveries d WHERE d.webhook_id = w.id ORDER BY d.id DESC LIMIT 1) AS last_delivery_at
+            FROM webhooks w
+            ORDER BY w.id DESC;
+        )SQL");
+
+        auto arr = json::json_value::make_array();
+        while (stmt.step() == SQLITE_ROW) {
+            auto obj = json::json_value::make_object();
+            obj.add_int("id", stmt.column_int(0));
+            obj.add_str("name", stmt.column_str(1));
+            obj.add_str("url", stmt.column_str(2));
+            std::string sec = stmt.column_str(3);
+            obj.add_str("secret", sec);
+            obj.add_bool("has_secret", !sec.empty());
+            obj.add_str("events", stmt.column_str(4));
+            obj.add_bool("is_active", stmt.column_int(5) != 0);
+            obj.add_str("created_at", stmt.column_str(6));
+            obj.add_str("updated_at", stmt.column_str(7));
+            obj.add_int("deliveries_count", stmt.column_int(8));
+            obj.add_str("last_status", stmt.column_str(9));
+            obj.add_str("last_delivery_at", stmt.column_str(10));
+            arr.add(std::move(obj));
+        }
+        send_json(worker, header, "200 OK", arr);
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string name = body.get_string("name");
+    std::string url = body.get_string("url");
+    std::string secret = body.get_string("secret");
+    std::string events = body.get_string("events", "[\"issue_created\",\"issue_updated\",\"issue_commented\"]");
+    bool is_active = body.get_bool("is_active", true);
+
+    if (name.empty() || url.empty()) {
+        send_error(worker, header, "400 Bad Request", "Name and URL are required");
+        return;
+    }
+    if (secret.empty()) {
+        secret = utils::generate_random_hex(16);
+    }
+
+    db::sqlite_transaction tx(conn);
+    auto ins = conn.prepare("INSERT INTO webhooks (name, url, secret, events, is_active, created_by_id) VALUES (?, ?, ?, ?, ?, ?);");
+    ins.bind_text(1, name);
+    ins.bind_text(2, url);
+    ins.bind_text(3, secret);
+    ins.bind_text(4, events);
+    ins.bind_int(5, is_active ? 1 : 0);
+    ins.bind_int(6, u_auth.id);
+    ins.step_done();
+    int new_id = static_cast<int>(conn.last_insert_rowid());
+    tx.commit();
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", new_id);
+    res.add_str("name", name);
+    res.add_str("url", url);
+    res.add_str("secret", secret);
+    res.add_str("events", events);
+    res.add_bool("is_active", is_active);
+    send_json(worker, header, "201 Created", res);
+}
+
+// GET | PUT | DELETE /api/webhooks/([0-9]+)
+static void handle_webhook_detail(backend::wsworker *worker,
+                                  const std::map<std::string, std::string> &header,
+                                  const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing webhook ID");
+        return;
+    }
+    int wid = std::atoi(uri_params.front().c_str());
+    std::string method = get_header(header, "REQUEST_METHOD");
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Administrator privileges required");
+        return;
+    }
+
+    if (method == "GET") {
+        auto stmt = conn.prepare("SELECT id, name, url, secret, events, is_active, created_at, updated_at FROM webhooks WHERE id = ?;");
+        stmt.bind_int(1, wid);
+        if (stmt.step() != SQLITE_ROW) {
+            send_error(worker, header, "404 Not Found", "Webhook not found");
+            return;
+        }
+
+        auto obj = json::json_value::make_object();
+        obj.add_int("id", stmt.column_int(0));
+        obj.add_str("name", stmt.column_str(1));
+        obj.add_str("url", stmt.column_str(2));
+        obj.add_str("secret", stmt.column_str(3));
+        obj.add_str("events", stmt.column_str(4));
+        obj.add_bool("is_active", stmt.column_int(5) != 0);
+        obj.add_str("created_at", stmt.column_str(6));
+        obj.add_str("updated_at", stmt.column_str(7));
+        send_json(worker, header, "200 OK", obj);
+        return;
+    }
+
+    if (method == "DELETE") {
+        db::sqlite_transaction tx(conn);
+        auto del = conn.prepare("DELETE FROM webhooks WHERE id = ?;");
+        del.bind_int(1, wid);
+        del.step_done();
+        tx.commit();
+
+        auto res = json::json_value::make_object();
+        res.add_bool("deleted", true);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    if (method == "PUT") {
+        auto body = json::json_value::parse(worker->body());
+        if (!body) {
+            send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+            return;
+        }
+
+        std::string name = body.get_string("name");
+        std::string url = body.get_string("url");
+        std::string secret = body.get_string("secret");
+        std::string events = body.get_string("events");
+        bool is_active = body.get_bool("is_active", true);
+
+        db::sqlite_transaction tx(conn);
+        auto upd = conn.prepare("UPDATE webhooks SET name = ?, url = ?, secret = ?, events = ?, is_active = ?, updated_at = datetime('now') WHERE id = ?;");
+        upd.bind_text(1, name);
+        upd.bind_text(2, url);
+        upd.bind_text(3, secret);
+        upd.bind_text(4, events);
+        upd.bind_int(5, is_active ? 1 : 0);
+        upd.bind_int(6, wid);
+        upd.step_done();
+        tx.commit();
+
+        auto res = json::json_value::make_object();
+        res.add_bool("ok", true);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    send_error(worker, header, "405 Method Not Allowed", "Method not allowed");
+}
+
+// POST /api/webhooks/([0-9]+)/test
+static void handle_webhook_test(backend::wsworker *worker,
+                                const std::map<std::string, std::string> &header,
+                                const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing webhook ID");
+        return;
+    }
+    int wid = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Administrator privileges required");
+        return;
+    }
+
+    std::string name, url, secret;
+    {
+        auto stmt = conn.prepare("SELECT name, url, secret FROM webhooks WHERE id = ?;");
+        stmt.bind_int(1, wid);
+        if (stmt.step() != SQLITE_ROW) {
+            send_error(worker, header, "404 Not Found", "Webhook not found");
+            return;
+        }
+        name = stmt.column_str(0);
+        url = stmt.column_str(1);
+        secret = stmt.column_str(2);
+    }
+
+    auto payload = json::json_value::make_object();
+    payload.add_str("event", "ping");
+    payload.add_str("timestamp", notifications::get_current_iso8601());
+    payload.add_str("message", "Test ping from JiraLike Webhook Engine");
+    auto wh_obj = json::json_value::make_object();
+    wh_obj.add_int("id", wid);
+    wh_obj.add_str("name", name);
+    payload.add("webhook", std::move(wh_obj));
+
+    std::string payload_str = payload.to_string();
+    std::string sig = utils::hmac_sha256_hex(secret, payload_str);
+
+    std::vector<std::pair<std::string, std::string>> hdrs = {
+        {"X-Hub-Signature-256", "sha256=" + sig},
+        {"X-Event-Type", "ping"}
+    };
+
+    auto resp = notifications::http_post_json(url, payload_str, hdrs, 2);
+    std::string status = (resp.status_code >= 200 && resp.status_code < 300) ? "success" : "failed";
+
+    {
+        auto ins = conn.prepare(R"SQL(
+            INSERT INTO webhook_deliveries (webhook_id, event_type, payload, response_status, response_body, duration_ms, attempt, status, error_message)
+            VALUES (?, 'ping', ?, ?, ?, ?, 1, ?, ?);
+        )SQL");
+        ins.bind_int(1, wid);
+        ins.bind_text(2, payload_str);
+        ins.bind_int(3, resp.status_code);
+        ins.bind_text(4, resp.body.substr(0, 500));
+        ins.bind_double(5, resp.duration_ms);
+        ins.bind_text(6, status);
+        ins.bind_text(7, resp.error);
+        ins.step_done();
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_bool("ok", true);
+    res.add_str("status", status);
+    res.add_int("response_status", resp.status_code);
+    res.add_double("duration_ms", resp.duration_ms);
+    res.add_str("signature", "sha256=" + sig);
+    res.add_str("error", resp.error);
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET /api/webhooks/deliveries and GET /api/webhooks/([0-9]+)/deliveries
+static void handle_webhook_deliveries(backend::wsworker *worker,
+                                      const std::map<std::string, std::string> &header,
+                                      const std::list<std::string> &uri_params) {
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Administrator privileges required");
+        return;
+    }
+
+    int filter_wid = (!uri_params.empty()) ? std::atoi(uri_params.front().c_str()) : 0;
+
+    std::string sql = R"SQL(
+        SELECT d.id, d.webhook_id, w.name, d.event_type, d.payload, d.response_status,
+               d.response_body, d.duration_ms, d.attempt, d.status, d.error_message, d.created_at
+        FROM webhook_deliveries d
+        JOIN webhooks w ON w.id = d.webhook_id
+    )SQL";
+    if (filter_wid > 0) {
+        sql += " WHERE d.webhook_id = " + std::to_string(filter_wid);
+    }
+    sql += " ORDER BY d.id DESC LIMIT 100;";
+
+    auto stmt = conn.prepare(sql);
+    auto arr = json::json_value::make_array();
+    while (stmt.step() == SQLITE_ROW) {
+        auto obj = json::json_value::make_object();
+        obj.add_int("id", stmt.column_int(0));
+        obj.add_int("webhook_id", stmt.column_int(1));
+        obj.add_str("webhook_name", stmt.column_str(2));
+        obj.add_str("event_type", stmt.column_str(3));
+        obj.add_str("payload", stmt.column_str(4));
+        obj.add_int("response_status", stmt.column_int(5));
+        obj.add_str("response_body", stmt.column_str(6));
+        obj.add_double("duration_ms", stmt.column_double(7));
+        obj.add_int("attempt", stmt.column_int(8));
+        obj.add_str("status", stmt.column_str(9));
+        obj.add_str("error_message", stmt.column_str(10));
+        obj.add_str("created_at", stmt.column_str(11));
+        arr.add(std::move(obj));
+    }
+    send_json(worker, header, "200 OK", arr);
+}
+
+// POST /api/webhooks/deliveries/([0-9]+)/redeliver
+static void handle_webhook_redeliver(backend::wsworker *worker,
+                                     const std::map<std::string, std::string> &header,
+                                     const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing delivery ID");
+        return;
+    }
+    int did = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Administrator privileges required");
+        return;
+    }
+
+    int wid = 0;
+    std::string event_type, payload, url, secret;
+    {
+        auto stmt = conn.prepare(R"SQL(
+            SELECT d.webhook_id, d.event_type, d.payload, w.url, w.secret
+            FROM webhook_deliveries d
+            JOIN webhooks w ON w.id = d.webhook_id
+            WHERE d.id = ?;
+        )SQL");
+        stmt.bind_int(1, did);
+        if (stmt.step() != SQLITE_ROW) {
+            send_error(worker, header, "404 Not Found", "Delivery record not found");
+            return;
+        }
+        wid = stmt.column_int(0);
+        event_type = stmt.column_str(1);
+        payload = stmt.column_str(2);
+        url = stmt.column_str(3);
+        secret = stmt.column_str(4);
+    }
+
+    std::string sig = utils::hmac_sha256_hex(secret, payload);
+    std::vector<std::pair<std::string, std::string>> hdrs = {
+        {"X-Hub-Signature-256", "sha256=" + sig},
+        {"X-Event-Type", event_type}
+    };
+
+    auto resp = notifications::http_post_json(url, payload, hdrs, 2);
+    std::string status = (resp.status_code >= 200 && resp.status_code < 300) ? "success" : "failed";
+
+    {
+        auto ins = conn.prepare(R"SQL(
+            INSERT INTO webhook_deliveries (webhook_id, event_type, payload, response_status, response_body, duration_ms, attempt, status, error_message)
+            VALUES (?, ?, ?, ?, ?, ?, 2, ?, ?);
+        )SQL");
+        ins.bind_int(1, wid);
+        ins.bind_text(2, event_type);
+        ins.bind_text(3, payload);
+        ins.bind_int(4, resp.status_code);
+        ins.bind_text(5, resp.body.substr(0, 500));
+        ins.bind_double(6, resp.duration_ms);
+        ins.bind_text(7, status);
+        ins.bind_text(8, resp.error);
+        ins.step_done();
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_bool("ok", true);
+    res.add_str("status", status);
+    res.add_int("response_status", resp.status_code);
+    res.add_double("duration_ms", resp.duration_ms);
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET | PUT /api/smtp/config
+static void handle_smtp_config(backend::wsworker *worker,
+                               const std::map<std::string, std::string> &header,
+                               const std::list<std::string> &) {
+    std::string method = get_header(header, "REQUEST_METHOD");
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Administrator privileges required");
+        return;
+    }
+
+    if (method == "GET") {
+        auto stmt = conn.prepare("SELECT id, host, port, username, from_email, from_name, tls_mode, is_enabled FROM smtp_config WHERE id = 1;");
+        if (stmt.step() != SQLITE_ROW) {
+            send_error(worker, header, "404 Not Found", "SMTP config not found");
+            return;
+        }
+
+        auto obj = json::json_value::make_object();
+        obj.add_int("id", stmt.column_int(0));
+        obj.add_str("host", stmt.column_str(1));
+        obj.add_int("port", stmt.column_int(2));
+        obj.add_str("username", stmt.column_str(3));
+        obj.add_str("from_email", stmt.column_str(4));
+        obj.add_str("from_name", stmt.column_str(5));
+        obj.add_str("tls_mode", stmt.column_str(6));
+        obj.add_bool("is_enabled", stmt.column_int(7) != 0);
+        send_json(worker, header, "200 OK", obj);
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string host = body.get_string("host", "localhost");
+    int port = body.get_int("port", 25);
+    std::string username = body.get_string("username");
+    std::string password = body.get_string("password");
+    std::string from_email = body.get_string("from_email", "jira@example.com");
+    std::string from_name = body.get_string("from_name", "JiraLike Notifications");
+    std::string tls_mode = body.get_string("tls_mode", "none");
+    bool is_enabled = body.get_bool("is_enabled", false);
+
+    db::sqlite_transaction tx(conn);
+    auto upd = conn.prepare(R"SQL(
+        UPDATE smtp_config
+        SET host = ?, port = ?, username = ?, from_email = ?, from_name = ?, tls_mode = ?, is_enabled = ?, updated_at = datetime('now')
+        WHERE id = 1;
+    )SQL");
+    upd.bind_text(1, host);
+    upd.bind_int(2, port);
+    upd.bind_text(3, username);
+    upd.bind_text(4, from_email);
+    upd.bind_text(5, from_name);
+    upd.bind_text(6, tls_mode);
+    upd.bind_int(7, is_enabled ? 1 : 0);
+    upd.step_done();
+    tx.commit();
+
+    auto res = json::json_value::make_object();
+    res.add_bool("ok", true);
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET /api/smtp/queue
+static void handle_smtp_queue(backend::wsworker *worker,
+                              const std::map<std::string, std::string> &header,
+                              const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Administrator privileges required");
+        return;
+    }
+
+    auto stmt = conn.prepare(R"SQL(
+        SELECT id, to_email, to_name, subject, body_html, body_text, headers_json, status, error_message, sent_at, created_at
+        FROM outbound_emails
+        ORDER BY id DESC
+        LIMIT 100;
+    )SQL");
+
+    auto arr = json::json_value::make_array();
+    while (stmt.step() == SQLITE_ROW) {
+        auto obj = json::json_value::make_object();
+        obj.add_int("id", stmt.column_int(0));
+        obj.add_str("to_email", stmt.column_str(1));
+        obj.add_str("to_name", stmt.column_str(2));
+        obj.add_str("subject", stmt.column_str(3));
+        obj.add_str("body_html", stmt.column_str(4));
+        obj.add_str("body_text", stmt.column_str(5));
+        obj.add_str("headers_json", stmt.column_str(6));
+        obj.add_str("status", stmt.column_str(7));
+        obj.add_str("error_message", stmt.column_str(8));
+        obj.add_str("sent_at", stmt.column_str(9));
+        obj.add_str("created_at", stmt.column_str(10));
+        arr.add(std::move(obj));
+    }
+    send_json(worker, header, "200 OK", arr);
+}
+
+// POST /api/smtp/test
+static void handle_smtp_test(backend::wsworker *worker,
+                             const std::map<std::string, std::string> &header,
+                             const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Administrator privileges required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string to_email = body.get_string("to_email", u_auth.email);
+    std::string subject = body.get_string("subject", "[JIRALIKE] Test Email Notification");
+    std::string message = body.get_string("message", "This is a test notification from JiraLike Workspace SMTP Engine.");
+
+    auto h_obj = json::json_value::make_object();
+    h_obj.add_str("Message-ID", "<test." + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count()) + "@jiralike.local>");
+    h_obj.add_str("X-Jira-Event", "test_email");
+
+    db::sqlite_transaction tx(conn);
+    auto ins = conn.prepare(R"SQL(
+        INSERT INTO outbound_emails (to_email, to_name, subject, body_html, body_text, headers_json, status, sent_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'queued', datetime('now'));
+    )SQL");
+    ins.bind_text(1, to_email);
+    ins.bind_text(2, u_auth.display_name);
+    ins.bind_text(3, subject);
+    ins.bind_text(4, "<p>" + message + "</p>");
+    ins.bind_text(5, message);
+    ins.bind_text(6, h_obj.to_string());
+    ins.step_done();
+    int new_id = static_cast<int>(conn.last_insert_rowid());
+    tx.commit();
+
+    auto res = json::json_value::make_object();
+    res.add_bool("ok", true);
+    res.add_int("email_id", new_id);
+    res.add_str("status", "queued");
+    res.add_str("to_email", to_email);
+    send_json(worker, header, "200 OK", res);
+}
+
 static constexpr auto DEFAULT_SOCKET_NAME = ":9002";
 static constexpr auto DEFAULT_BACKLOG = 100;
 
@@ -13739,6 +14707,24 @@ int main(int argc, char *argv[]) {
         {"^/api/automation/logs$",                      backend::GET,                   handle_automation_logs      },
         {"^/api/automation/webhook/([A-Za-z0-9_-]+)$",  backend::POST,                  handle_automation_webhook   },
         {"^/api/automation/cron$",                      backend::POST,                  handle_automation_cron      },
+        {"^/api/projects/([0-9]+)/notification-scheme$",backend::PUT,                   handle_project_notification_scheme },
+        {"^/api/notification-schemes$",                 backend::GET | backend::POST,   handle_notification_schemes },
+        {"^/api/notification-schemes/([0-9]+)$",        backend::GET | backend::PUT | backend::DELETE, handle_notification_scheme_detail },
+        {"^/api/notification-schemes/([0-9]+)/entries$",backend::POST,                  handle_notification_scheme_entries },
+        {"^/api/notification-schemes/([0-9]+)/entries/([0-9]+)$", backend::DELETE,      handle_notification_scheme_entry_detail },
+        {"^/api/notifications$",                        backend::GET,                   handle_in_app_notifications },
+        {"^/api/notifications/([0-9]+)/read$",          backend::POST,                  handle_notification_mark_read },
+        {"^/api/notifications/read-all$",               backend::POST,                  handle_notifications_mark_all_read },
+        {"^/api/notifications/([0-9]+)$",               backend::DELETE,                handle_notification_delete  },
+        {"^/api/webhooks$",                             backend::GET | backend::POST,   handle_webhooks             },
+        {"^/api/webhooks/deliveries$",                  backend::GET,                   handle_webhook_deliveries   },
+        {"^/api/webhooks/([0-9]+)$",                    backend::GET | backend::PUT | backend::DELETE, handle_webhook_detail },
+        {"^/api/webhooks/([0-9]+)/test$",               backend::POST,                  handle_webhook_test         },
+        {"^/api/webhooks/([0-9]+)/deliveries$",         backend::GET,                   handle_webhook_deliveries   },
+        {"^/api/webhooks/deliveries/([0-9]+)/redeliver$", backend::POST,                handle_webhook_redeliver    },
+        {"^/api/smtp/config$",                          backend::GET | backend::PUT,    handle_smtp_config          },
+        {"^/api/smtp/queue$",                           backend::GET,                   handle_smtp_queue           },
+        {"^/api/smtp/test$",                            backend::POST,                  handle_smtp_test            },
     });
 
     server.init(socket_name.c_str(), backlog, worker_num);

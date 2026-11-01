@@ -4,6 +4,7 @@
 #include "raii_json.h"
 #include "jql_parser.h"
 #include "collaboration_engine.h"
+#include "notification_engine.h"
 
 #include <chrono>
 #include <ctime>
@@ -24,6 +25,7 @@ enum class EventType {
     StatusChanged,
     FieldValueChanged,
     CommentAdded,
+    WorklogAdded,
     ScheduledCron,
     IncomingWebhook,
     Manual
@@ -35,6 +37,7 @@ inline std::string event_type_to_string(EventType type) {
         case EventType::StatusChanged:    return "status_changed";
         case EventType::FieldValueChanged:return "field_value_changed";
         case EventType::CommentAdded:     return "comment_added";
+        case EventType::WorklogAdded:     return "worklog_added";
         case EventType::ScheduledCron:    return "scheduled_cron";
         case EventType::IncomingWebhook:  return "incoming_webhook";
         case EventType::Manual:           return "manual";
@@ -47,6 +50,7 @@ inline EventType string_to_event_type(const std::string &str) {
     if (str == "status_changed")     return EventType::StatusChanged;
     if (str == "field_value_changed" || str == "field_updated") return EventType::FieldValueChanged;
     if (str == "comment_added")      return EventType::CommentAdded;
+    if (str == "worklog_added")      return EventType::WorklogAdded;
     if (str == "scheduled_cron")     return EventType::ScheduledCron;
     if (str == "incoming_webhook")   return EventType::IncomingWebhook;
     return EventType::Manual;
@@ -721,6 +725,16 @@ inline bool execute_action(db::sqlite_db &conn,
         std::string raw_msg = action.get_string("message");
         std::string msg = evaluate_smart_values(conn, raw_msg, ev, eff_issue_id);
 
+        notifications::NotificationEvent nev;
+        nev.event_type = "generic_event";
+        nev.issue_id = eff_issue_id;
+        nev.project_id = ev.project_id;
+        nev.summary_text = "Automation Notification";
+        nev.snippet = msg;
+        nev.actor_id = ev.user_id;
+        nev.actor_name = ev.user_display_name;
+        notifications::route_notification(conn, nev);
+
         trace.push_back("[Action: send_notification] Notification queued for recipient '" + recipient + "': " + msg);
         return true;
     } else if (act_type == "branch") {
@@ -1000,6 +1014,35 @@ inline void dispatch_event(db::sqlite_db &conn, const AutomationEvent &ev) {
             } catch (const std::exception &ex) {
                 std::cerr << "[automation_engine] Error inserting audit log: " << ex.what() << std::endl;
             }
+        }
+
+        // Trigger Notifications & Webhooks for primary event
+        if (g_automation_depth == 1 && ev.issue_id > 0) {
+            notifications::NotificationEvent nev;
+            nev.event_type = ev_type_str;
+            nev.project_id = ev.project_id;
+            nev.issue_id = ev.issue_id;
+            nev.issue_key = ev.issue_key;
+            nev.actor_id = ev.user_id;
+            nev.actor_name = !ev.user_display_name.empty() ? ev.user_display_name : ev.user_username;
+            if (ev.type == EventType::IssueCreated) {
+                nev.summary_text = "Issue Created";
+                nev.snippet = "New issue " + ev.issue_key + " created";
+            } else if (ev.type == EventType::StatusChanged) {
+                nev.summary_text = "Status changed to " + ev.to_status;
+                nev.snippet = "Status transitioned from '" + ev.from_status + "' to '" + ev.to_status + "'";
+                nev.issue_status = ev.to_status;
+            } else if (ev.type == EventType::CommentAdded) {
+                nev.summary_text = "Comment added";
+                nev.snippet = ev.comment_body;
+            } else if (ev.type == EventType::FieldValueChanged) {
+                nev.summary_text = "Field " + ev.field_name + " updated";
+                nev.snippet = ev.field_name + " changed from '" + ev.old_value + "' to '" + ev.new_value + "'";
+            } else if (ev.type == EventType::WorklogAdded) {
+                nev.summary_text = "Worklog added";
+                nev.snippet = "Time logged on " + ev.issue_key;
+            }
+            notifications::handle_event(conn, nev);
         }
     } catch (const std::exception &ex) {
         std::cerr << "[automation_engine] Exception in dispatch_event: " << ex.what() << std::endl;

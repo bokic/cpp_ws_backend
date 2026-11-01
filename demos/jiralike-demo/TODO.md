@@ -476,15 +476,15 @@ This document provides a comprehensive gap analysis and exhaustive development r
 ## 12. Epic 11: Notifications, Webhooks & Email Integration
 
 ### 12.1 Notification Schemes
-- [ ] **Notification Schemes Table (`notification_schemes`, `notification_scheme_entries`)**:
+- [x] **Notification Schemes Table (`notification_schemes`, `notification_scheme_entries`)**:
   - Events: `Issue Created`, `Issue Updated`, `Issue Assigned`, `Issue Resolved`, `Issue Commented`, `Worklog Added`, `Generic Event`.
   - Configurable recipients: `Assignee`, `Reporter`, `Watchers`, `Project Lead`, `Specific Role`, `Specific User`.
 
 ### 12.2 In-App Notifications & Outbound Email
-- [ ] **In-App Notification Center**:
+- [x] **In-App Notification Center**:
   - Notification drawer / bell icon in top navigation.
   - Real-time unread badges, mark as read, and direct click-through to affected issues.
-- [ ] **Outbound SMTP Email Delivery**:
+- [x] **Outbound SMTP Email Delivery**:
   - Built-in SMTP client with TLS support.
   - HTML & plain-text email templates containing issue details and action links.
 - [ ] **Inbound Email-to-Issue Processing**:
@@ -492,7 +492,7 @@ This document provides a comprehensive gap analysis and exhaustive development r
   - Automatically create new issues or append comments based on incoming email threads.
 
 ### 12.3 Outbound Webhooks System
-- [ ] **Webhooks Table (`webhooks`, `webhook_deliveries`)**:
+- [x] **Webhooks Table (`webhooks`, `webhook_deliveries`)**:
   - Register webhook URLs listening for specific event types.
   - HMAC-SHA256 signature verification headers (`X-Hub-Signature-256`).
   - Asynchronous background delivery queue with exponential backoff retry.
@@ -874,16 +874,16 @@ flowchart TD
   - [x] Automation Audit Log: Inspect past rule execution traces, execution duration, and debug details with filtering.
 - **Verification**: Verified with 8/8 test suites passing in `verify_step12.py`: Rule "*When Issue transitions to Done $\rightarrow$ If Subtasks exist $\rightarrow$ Transition all Subtasks to Done*" executes cleanly in 0.32ms (well under the 50ms requirement); Smart Values, JQL matching, webhooks, and audit logs verified.
 
-#### Step 13: Notifications, SMTP Delivery & Outbound Webhooks
+#### Step 13: Notifications, SMTP Delivery & Outbound Webhooks *(Completed)*
 - **Why Next**: Built on top of the event bus established in Step 12 and permission checks from Step 11.
 - **Backend Deliverables**:
-  - Database Migration: Create `notification_schemes`, `in_app_notifications`, `webhooks`, `webhook_deliveries`.
-  - C++ SMTP Email Dispatcher: Asynchronous worker sending formatted HTML/plain-text notifications with thread headers.
-  - Webhook Dispatcher: Asynchronous delivery worker with exponential backoff and HMAC-SHA256 signature headers.
+  - [x] Database Migration: Create `notification_schemes`, `notification_scheme_entries`, `in_app_notifications`, `webhooks`, `webhook_deliveries`.
+  - [x] C++ SMTP Email Dispatcher: Asynchronous worker sending formatted HTML/plain-text notifications with thread headers.
+  - [x] Webhook Dispatcher: Asynchronous delivery worker with exponential backoff and HMAC-SHA256 signature headers.
 - **Frontend Deliverables**:
-  - In-App Notification Center: Top navigation bell icon with live unread counter and interactive notification list.
-  - Webhooks Configuration Page: Register target URLs, select event subscriptions, and inspect delivery logs.
-- **Verification**: Creating or commenting on an issue delivers in-app notifications to watchers and queues an outbound email and webhook payload.
+  - [x] In-App Notification Center: Top navigation bell icon with live unread counter and interactive notification list.
+  - [x] Webhooks Configuration Page: Register target URLs, select event subscriptions, and inspect delivery logs.
+- **Verification**: Verified with 8/8 test suites passing in `verify_step13.py`: Creating or commenting on an issue delivers in-app notifications to watchers and queues an outbound email with RFC threading headers (`Message-ID`, `In-Reply-To`, `References`) and HMAC-SHA256 signed webhook payload. Zero regressions across Steps 8-12.
 
 #### Step 14: Developer Tooling & Git Integration (Smart Commits & Dev Panel)
 - **Why Next**: Bridges code repositories with Jira work items using time tracking (Step 7) and transitions (Step 4).

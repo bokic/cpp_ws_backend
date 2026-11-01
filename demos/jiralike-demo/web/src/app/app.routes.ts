@@ -15,6 +15,7 @@ import { ReportsComponent } from './pages/reports/reports.component';
 import { DashboardsComponent } from './pages/dashboards/dashboards.component';
 import { PermissionsAdminComponent } from './pages/permissions-admin/permissions-admin.component';
 import { AutomationAdminComponent } from './pages/automation-admin/automation-admin.component';
+import { NotificationsAdminComponent } from './pages/notifications-admin/notifications-admin.component';
 
 export const routes: Routes = [
   { path: '', pathMatch: 'full', redirectTo: 'dashboards' },
@@ -36,6 +37,10 @@ export const routes: Routes = [
   { path: 'settings/permissions', component: PermissionsAdminComponent },
   { path: 'automation', component: AutomationAdminComponent },
   { path: 'settings/automation', component: AutomationAdminComponent },
+  { path: 'notifications', component: NotificationsAdminComponent },
+  { path: 'settings/notifications', component: NotificationsAdminComponent },
+  { path: 'webhooks', component: NotificationsAdminComponent },
+  { path: 'settings/webhooks', component: NotificationsAdminComponent },
   { path: 'items/:id', component: ItemDetailComponent },
   { path: ':id', component: ItemDetailComponent },
   { path: '**', redirectTo: 'board' },

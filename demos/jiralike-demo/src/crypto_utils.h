@@ -14,7 +14,7 @@
 namespace utils {
 
 // Standalone SHA-256 implementation (FIPS 180-4)
-inline std::string sha256_hex(const std::string &input) {
+inline std::array<uint8_t, 32> sha256_bytes(const uint8_t *data, size_t len) {
     static constexpr uint32_t k[64] = {
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
         0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
@@ -39,8 +39,8 @@ inline std::string sha256_hex(const std::string &input) {
     uint32_t h6 = 0x1f83d9ab;
     uint32_t h7 = 0x5be0cd19;
 
-    std::vector<uint8_t> msg(input.begin(), input.end());
-    uint64_t bit_len = static_cast<uint64_t>(msg.size()) * 8;
+    std::vector<uint8_t> msg(data, data + len);
+    uint64_t bit_len = static_cast<uint64_t>(len) * 8;
     msg.push_back(0x80);
     while ((msg.size() % 64) != 56) {
         msg.push_back(0x00);
@@ -87,13 +87,58 @@ inline std::string sha256_hex(const std::string &input) {
         h4 += e; h5 += f; h6 += g; h7 += h;
     }
 
+    std::array<uint8_t, 32> out{};
+    uint32_t hs[8] = { h0, h1, h2, h3, h4, h5, h6, h7 };
+    for (int i = 0; i < 8; ++i) {
+        out[i * 4 + 0] = static_cast<uint8_t>((hs[i] >> 24) & 0xFF);
+        out[i * 4 + 1] = static_cast<uint8_t>((hs[i] >> 16) & 0xFF);
+        out[i * 4 + 2] = static_cast<uint8_t>((hs[i] >> 8) & 0xFF);
+        out[i * 4 + 3] = static_cast<uint8_t>(hs[i] & 0xFF);
+    }
+    return out;
+}
+
+inline std::string to_hex_string(const uint8_t *data, size_t len) {
     std::ostringstream oss;
-    oss << std::hex << std::setfill('0')
-        << std::setw(8) << h0 << std::setw(8) << h1
-        << std::setw(8) << h2 << std::setw(8) << h3
-        << std::setw(8) << h4 << std::setw(8) << h5
-        << std::setw(8) << h6 << std::setw(8) << h7;
+    oss << std::hex << std::setfill('0');
+    for (size_t i = 0; i < len; ++i) {
+        oss << std::setw(2) << static_cast<int>(data[i]);
+    }
     return oss.str();
+}
+
+inline std::string sha256_hex(const std::string &input) {
+    auto digest = sha256_bytes(reinterpret_cast<const uint8_t*>(input.data()), input.size());
+    return to_hex_string(digest.data(), digest.size());
+}
+
+// HMAC-SHA256 implementation (RFC 2104)
+inline std::string hmac_sha256_hex(const std::string &key, const std::string &message) {
+    std::array<uint8_t, 64> k_pad{};
+    if (key.size() > 64) {
+        auto kh = sha256_bytes(reinterpret_cast<const uint8_t*>(key.data()), key.size());
+        std::memcpy(k_pad.data(), kh.data(), 32);
+    } else {
+        std::memcpy(k_pad.data(), key.data(), key.size());
+    }
+
+    // Inner hash: H( (K ^ ipad) || message )
+    std::vector<uint8_t> inner(64 + message.size());
+    for (size_t i = 0; i < 64; ++i) {
+        inner[i] = k_pad[i] ^ 0x36;
+    }
+    std::memcpy(inner.data() + 64, message.data(), message.size());
+    auto inner_digest = sha256_bytes(inner.data(), inner.size());
+
+    // Outer hash: H( (K ^ opad) || inner_digest )
+    std::array<uint8_t, 64 + 32> outer{};
+    for (size_t i = 0; i < 64; ++i) {
+        outer[i] = k_pad[i] ^ 0x5c;
+    }
+    std::memcpy(outer.data() + 64, inner_digest.data(), 32);
+    auto outer_digest = sha256_bytes(outer.data(), outer.size());
+
+    return to_hex_string(outer_digest.data(), outer_digest.size());
 }
 
 inline std::string generate_random_hex(size_t bytes = 24) {

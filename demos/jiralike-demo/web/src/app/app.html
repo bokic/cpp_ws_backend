@@ -20,6 +20,7 @@
           <a routerLink="/custom-fields" routerLinkActive="active">Custom Fields &amp; Screens</a>
           <a routerLink="/permissions" routerLinkActive="active">Permissions &amp; Security</a>
           <a routerLink="/automation" routerLinkActive="active">Automation</a>
+          <a routerLink="/notifications" routerLinkActive="active">Webhooks &amp; Notifications</a>
           @if (user.role === 'Admin') {
             <a routerLink="/sprints" routerLinkActive="active">Sprint Editor</a>
           }
@@ -37,75 +38,172 @@
           DB Schema v{{ api.setupStatus()?.schema_version || 5 }}
         </span>
 
-        <!-- In-App Mentions & Notifications Bell -->
+        <!-- In-App Notification Center & Activity Bell -->
         <div class="notifications-wrapper" style="position: relative;">
           <button
             type="button"
             class="nav-bell-btn"
-            [class.has-unread]="api.unreadMentionsCount() > 0"
-            (click)="toggleMentionsDropdown()"
-            title="Notifications & Mentions"
+            [class.has-unread]="api.totalUnreadActivityCount() > 0"
+            (click)="toggleNotificationsDropdown()"
+            title="Notification Center & Mentions"
           >
             🔔
-            @if (api.unreadMentionsCount() > 0) {
-              <span class="bell-badge">{{ api.unreadMentionsCount() }}</span>
+            @if (api.totalUnreadActivityCount() > 0) {
+              <span class="bell-badge">{{ api.totalUnreadActivityCount() }}</span>
             }
           </button>
 
-          @if (showMentionsDropdown()) {
+          @if (showNotificationsDropdown()) {
             <div class="mentions-dropdown-panel" (click)="$event.stopPropagation()">
               <div class="mentions-panel-header">
-                <div>
-                  <strong>Mentions &amp; Activity</strong>
-                  <span class="badge badge-info" style="margin-left: 6px;">{{ api.mentions().length }}</span>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                  <button
+                    type="button"
+                    class="btn btn-xs"
+                    [class.btn-primary]="activeActivityTab() === 'notifications'"
+                    [class.btn-ghost]="activeActivityTab() !== 'notifications'"
+                    (click)="activeActivityTab.set('notifications')"
+                  >
+                    Notifications
+                    @if (api.unreadNotificationsCount() > 0) {
+                      <span class="badge badge-info" style="margin-left: 4px;">{{ api.unreadNotificationsCount() }}</span>
+                    }
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn-xs"
+                    [class.btn-primary]="activeActivityTab() === 'mentions'"
+                    [class.btn-ghost]="activeActivityTab() !== 'mentions'"
+                    (click)="activeActivityTab.set('mentions')"
+                  >
+                    Mentions
+                    @if (api.unreadMentionsCount() > 0) {
+                      <span class="badge badge-info" style="margin-left: 4px;">{{ api.unreadMentionsCount() }}</span>
+                    }
+                  </button>
                 </div>
-                @if (api.unreadMentionsCount() > 0) {
-                  <button type="button" class="btn btn-ghost btn-xs" (click)="markAllRead()">
+                <div style="display: flex; gap: 4px;">
+                  @if (activeActivityTab() === 'notifications') {
+                    <button
+                      type="button"
+                      class="btn btn-ghost btn-xs"
+                      [style.font-weight]="notificationFilter() === 'unread' ? 'bold' : 'normal'"
+                      (click)="notificationFilter.set(notificationFilter() === 'unread' ? 'all' : 'unread')"
+                      title="Filter unread"
+                    >
+                      {{ notificationFilter() === 'unread' ? 'Show All' : 'Unread' }}
+                    </button>
+                  }
+                  <button type="button" class="btn btn-ghost btn-xs" (click)="markAllActivityRead()">
                     Mark all read
                   </button>
-                }
+                </div>
               </div>
 
               <div class="mentions-panel-body">
-                @for (m of api.mentions(); track m.id) {
-                  <div
-                    class="mention-item-card"
-                    [class.unread]="!m.is_read"
-                    (click)="openMention(m)"
-                  >
-                    <div class="mention-avatar-col">
-                      <span class="avatar-circle-sm" [style.background]="m.author_color">
-                        {{ m.author_name.slice(0, 2).toUpperCase() }}
-                      </span>
-                    </div>
-                    <div class="mention-info-col">
-                      <div class="mention-top-line">
-                        <strong>{{ m.author_name }}</strong>
-                        <span class="text-muted">mentioned you on</span>
-                        <strong class="item-key-tag">{{ m.item_key }}</strong>
+                @if (activeActivityTab() === 'notifications') {
+                  @for (n of getFilteredNotifications(); track n.id) {
+                    <div
+                      class="mention-item-card"
+                      [class.unread]="!n.is_read"
+                      (click)="openNotification(n)"
+                    >
+                      <div class="mention-avatar-col">
+                        <span class="event-badge-icon" [attr.data-event]="n.event_type">
+                          @if (n.event_type === 'issue_created') { ➕ }
+                          @else if (n.event_type === 'issue_commented' || n.event_type === 'comment_added') { 💬 }
+                          @else if (n.event_type === 'issue_resolved' || n.event_type === 'status_changed') { 🔄 }
+                          @else if (n.event_type === 'worklog_added') { ⏱️ }
+                          @else { 📢 }
+                        </span>
                       </div>
-                      <div class="mention-snippet-text">{{ m.snippet }}</div>
-                      <div class="mention-time-row">
-                        <span class="text-muted">{{ m.created_at }}</span>
-                        @if (!m.is_read) {
-                          <button
-                            type="button"
-                            class="mark-read-btn"
-                            (click)="markRead(m, $event)"
-                            title="Mark as read"
-                          >
-                            ✓
-                          </button>
+                      <div class="mention-info-col">
+                        <div class="mention-top-line">
+                          <strong class="item-key-tag">{{ n.item_key || 'Issue' }}</strong>
+                          <span class="notif-event-tag">{{ n.event_type }}</span>
+                        </div>
+                        <div style="font-size: 13px; font-weight: 500; color: #172B4D; margin: 2px 0;">{{ n.title }}</div>
+                        @if (n.message) {
+                          <div class="mention-snippet-text">{{ n.message }}</div>
                         }
+                        <div class="mention-time-row">
+                          <span class="text-muted">{{ n.created_at }}</span>
+                          <div style="display: flex; gap: 4px;">
+                            @if (!n.is_read) {
+                              <button
+                                type="button"
+                                class="mark-read-btn"
+                                (click)="markNotificationRead(n, $event)"
+                                title="Mark as read"
+                              >
+                                ✓
+                              </button>
+                            }
+                            <button
+                              type="button"
+                              class="mark-read-btn"
+                              style="opacity: 0.6;"
+                              (click)="deleteNotification(n, $event)"
+                              title="Delete notification"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                } @empty {
-                  <div style="padding: 24px; text-align: center; color: #6b778c;">
-                    <div style="font-size: 24px; margin-bottom: 6px;">🔕</div>
-                    <p style="margin: 0;">No mentions yet. Teammates can mention you with &#64;{{ user.username }}</p>
-                  </div>
+                  } @empty {
+                    <div style="padding: 24px; text-align: center; color: #6b778c;">
+                      <div style="font-size: 24px; margin-bottom: 6px;">🔕</div>
+                      <p style="margin: 0;">No notifications found</p>
+                    </div>
+                  }
+                } @else {
+                  @for (m of api.mentions(); track m.id) {
+                    <div
+                      class="mention-item-card"
+                      [class.unread]="!m.is_read"
+                      (click)="openMention(m)"
+                    >
+                      <div class="mention-avatar-col">
+                        <span class="avatar-circle-sm" [style.background]="m.author_color">
+                          {{ m.author_name.slice(0, 2).toUpperCase() }}
+                        </span>
+                      </div>
+                      <div class="mention-info-col">
+                        <div class="mention-top-line">
+                          <strong>{{ m.author_name }}</strong>
+                          <span class="text-muted">mentioned you on</span>
+                          <strong class="item-key-tag">{{ m.item_key }}</strong>
+                        </div>
+                        <div class="mention-snippet-text">{{ m.snippet }}</div>
+                        <div class="mention-time-row">
+                          <span class="text-muted">{{ m.created_at }}</span>
+                          @if (!m.is_read) {
+                            <button
+                              type="button"
+                              class="mark-read-btn"
+                              (click)="markMentionRead(m, $event)"
+                              title="Mark as read"
+                            >
+                              ✓
+                            </button>
+                          }
+                        </div>
+                      </div>
+                    </div>
+                  } @empty {
+                    <div style="padding: 24px; text-align: center; color: #6b778c;">
+                      <div style="font-size: 24px; margin-bottom: 6px;">🔕</div>
+                      <p style="margin: 0;">No mentions yet. Teammates can mention you with &#64;{{ user.username }}</p>
+                    </div>
+                  }
                 }
+              </div>
+              <div style="padding: 8px 16px; background: #F4F5F7; border-top: 1px solid #DFE1E6; display: flex; justify-content: space-between; align-items: center; font-size: 12px;">
+                <a routerLink="/notifications" (click)="showNotificationsDropdown.set(false)" style="color: #0052CC; text-decoration: none; font-weight: 500;">
+                  Manage Notification Schemes &amp; Webhooks →
+                </a>
               </div>
             </div>
           }

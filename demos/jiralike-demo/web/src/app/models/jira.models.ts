@@ -1324,6 +1324,97 @@ export interface AutomationLog {
   created_at: string;
 }
 
+// Step 13: Notifications, SMTP & Webhooks
+export interface InAppNotification {
+  id: number;
+  work_item_id: number | null;
+  event_type: string;
+  title: string;
+  message: string;
+  link: string;
+  is_read: boolean;
+  created_at: string;
+  item_key?: string;
+  item_title?: string;
+}
+
+export interface NotificationSchemeEntry {
+  id: number;
+  scheme_id: number;
+  event_type: string;
+  recipient_type: string;
+  recipient_parameter: string;
+  created_at?: string;
+}
+
+export interface NotificationScheme {
+  id: number;
+  name: string;
+  description: string;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+  entry_count?: number;
+  project_count?: number;
+  entries?: NotificationSchemeEntry[];
+}
+
+export interface Webhook {
+  id: number;
+  name: string;
+  url: string;
+  secret: string;
+  has_secret?: boolean;
+  events: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  deliveries_count?: number;
+  last_status?: string;
+  last_delivery_at?: string;
+}
+
+export interface WebhookDelivery {
+  id: number;
+  webhook_id: number;
+  webhook_name?: string;
+  event_type: string;
+  payload: string;
+  response_status: number;
+  response_body: string;
+  duration_ms: number;
+  attempt: number;
+  status: string;
+  error_message?: string;
+  created_at: string;
+}
+
+export interface SmtpConfig {
+  id: number;
+  host: string;
+  port: number;
+  username: string;
+  password?: string;
+  from_email: string;
+  from_name: string;
+  tls_mode: string;
+  is_enabled: boolean;
+}
+
+export interface OutboundEmail {
+  id: number;
+  to_email: string;
+  to_name: string;
+  subject: string;
+  body_html: string;
+  body_text: string;
+  headers_json: string;
+  status: string;
+  error_message?: string;
+  sent_at?: string;
+  created_at: string;
+}
+
 
 
 
