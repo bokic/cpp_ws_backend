@@ -810,4 +810,232 @@ export interface SavedFilter {
   subscriptions: FilterSubscription[];
 }
 
+export interface BurndownDayPoint {
+  date: string;
+  day_index: number;
+  is_weekend: boolean;
+  ideal_points: number;
+  ideal_hours: number;
+  remaining_points: number;
+  remaining_hours: number;
+  total_scope_points: number;
+  total_scope_hours: number;
+  completed_points: number;
+  completed_hours: number;
+}
+
+export interface ScopeChangeEvent {
+  date: string;
+  item_id: number;
+  item_key: string;
+  summary: string;
+  event_type: 'added' | 'removed' | 'points_changed' | string;
+  delta_points: number;
+}
+
+export interface BurndownReport {
+  sprint_id: number;
+  sprint_name: string;
+  goal: string;
+  status: string;
+  start_date: string;
+  end_date: string;
+  committed_points: number;
+  current_scope_points: number;
+  completed_points: number;
+  remaining_points: number;
+  scope_creep_points: number;
+  has_scope_creep: boolean;
+  completion_rate_percent: number;
+  points_burn_rate_per_day: number;
+  projected_completion_date: string;
+  committed_hours: number;
+  current_scope_hours: number;
+  completed_hours: number;
+  remaining_hours: number;
+  timeline: BurndownDayPoint[];
+  scope_changes: ScopeChangeEvent[];
+}
+
+export type BurnupReport = BurndownReport;
+
+export interface VelocitySprintEntry {
+  sprint_id: number;
+  name: string;
+  status: string;
+  start_date: string;
+  end_date: string;
+  completed_at: string;
+  committed_points: number;
+  completed_points: number;
+  committed_items: number;
+  completed_items: number;
+  predictability_percent: number;
+}
+
+export interface VelocityReport {
+  project_id: number;
+  project_name: string;
+  sprints_analyzed: number;
+  rolling_average_velocity: number;
+  last_3_sprints_average: number;
+  suggested_capacity: number;
+  max_velocity: number;
+  min_velocity: number;
+  velocity_std_dev: number;
+  sprints: VelocitySprintEntry[];
+}
+
+export interface CumulativeFlowReport {
+  board_id: number;
+  project_id: number;
+  days_analyzed: number;
+  start_date: string;
+  end_date: string;
+  statuses: string[];
+  dates: string[];
+  series: Record<string, number[]>;
+  current_wip: number;
+  average_wip: number;
+  bottleneck_status: string;
+  flow_trend: string;
+}
+
+export interface CycleTimeIssue {
+  id: number;
+  key: string;
+  summary: string;
+  type: string;
+  priority: string;
+  assignee: string;
+  created_at: string;
+  started_at: string;
+  resolved_at: string;
+  cycle_time_days: number;
+  lead_time_days: number;
+  rolling_avg_days: number;
+  is_outlier: boolean;
+}
+
+export interface CycleTimeReport {
+  project_id: number;
+  sample_size: number;
+  mean_cycle_time_days: number;
+  median_cycle_time_days: number;
+  p85_cycle_time_days: number;
+  p95_cycle_time_days: number;
+  std_dev_days: number;
+  upper_control_limit_1_sigma: number;
+  upper_control_limit_2_sigma: number;
+  lower_control_limit_1_sigma: number;
+  issues: CycleTimeIssue[];
+  outliers: { key: string; summary: string; cycle_time_days: number }[];
+}
+
+export interface CreatedVsResolvedBucket {
+  period: string;
+  created_count: number;
+  resolved_count: number;
+  net_change: number;
+  cumulative_created: number;
+  cumulative_resolved: number;
+  backlog_growth: number;
+}
+
+export interface CreatedVsResolvedReport {
+  project_id: number;
+  days_analyzed: number;
+  group_by: string;
+  total_created: number;
+  total_resolved: number;
+  net_backlog_delta: number;
+  resolution_rate_percent: number;
+  health_status: string;
+  buckets: CreatedVsResolvedBucket[];
+}
+
+export interface EpicChildIssue {
+  id: number;
+  key: string;
+  summary: string;
+  type: string;
+  status: string;
+  priority: string;
+  assignee: string;
+  points: number;
+  remaining_estimate_hours: number;
+  time_spent_hours: number;
+}
+
+export interface EpicReport {
+  epic_id: number;
+  key: string;
+  summary: string;
+  status: string;
+  total_points: number;
+  completed_points: number;
+  remaining_points: number;
+  progress_percent: number;
+  total_items: number;
+  completed_items: number;
+  in_progress_items: number;
+  unstarted_items: number;
+  unestimated_items_count: number;
+  completion_forecast: string;
+  original_estimate_hours: number;
+  remaining_estimate_hours: number;
+  time_spent_hours: number;
+  child_issues: EpicChildIssue[];
+}
+
+export interface EpicSummaryItem {
+  id: number;
+  key: string;
+  summary: string;
+  status: string;
+  child_count: number;
+  done_count: number;
+  total_points: number;
+  done_points: number;
+  progress_percent: number;
+}
+
+export interface ReleaseBurndownItem {
+  id: number;
+  key: string;
+  summary: string;
+  type: string;
+  status: string;
+  points: number;
+}
+
+export interface ReleaseBurndownReport {
+  version_id: number;
+  version_name: string;
+  release_date: string;
+  status: string;
+  total_items: number;
+  completed_items: number;
+  remaining_items: number;
+  total_points: number;
+  completed_points: number;
+  remaining_points: number;
+  completion_percent: number;
+  forecast_status: string;
+  items: ReleaseBurndownItem[];
+}
+
+export interface ReleaseSummaryItem {
+  id: number;
+  name: string;
+  release_date: string;
+  status: string;
+  item_count: number;
+  done_count: number;
+  total_points: number;
+  done_points: number;
+  completion_percent: number;
+}
+
+
 

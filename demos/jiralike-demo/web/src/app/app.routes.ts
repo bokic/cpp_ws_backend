@@ -11,6 +11,7 @@ import { SprintsComponent } from './pages/sprints/sprints.component';
 import { ProjectSettingsComponent } from './pages/project-settings/project-settings.component';
 import { CustomFieldsComponent } from './pages/custom-fields/custom-fields.component';
 import { SearchComponent } from './pages/search/search.component';
+import { ReportsComponent } from './pages/reports/reports.component';
 
 export const routes: Routes = [
   { path: '', pathMatch: 'full', redirectTo: 'board' },
@@ -19,6 +20,7 @@ export const routes: Routes = [
   { path: 'board', component: BoardComponent },
   { path: 'backlog', component: BoardComponent },
   { path: 'search', component: SearchComponent },
+  { path: 'reports', component: ReportsComponent },
   { path: 'gantt', component: GanttComponent },
   { path: 'states', component: StatesComponent },
   { path: 'create', component: CreateItemComponent },

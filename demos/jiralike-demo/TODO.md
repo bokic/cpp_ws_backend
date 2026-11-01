@@ -313,22 +313,22 @@ This document provides a comprehensive gap analysis and exhaustive development r
 ## 6. Epic 5: Agile Analytics & Reporting Suite
 
 ### 6.1 Core Agile Reports
-- [ ] **Sprint Burndown Chart**:
+- [x] **Sprint Burndown Chart**:
   - Track remaining work (Story Points or Hours) day-by-day against the ideal guideline slope.
   - Detect scope creep (items added after sprint start).
-- [ ] **Sprint Burnup Chart**:
+- [x] **Sprint Burnup Chart**:
   - Dual lines showing Total Scope vs Work Completed over sprint duration.
-- [ ] **Velocity Chart**:
+- [x] **Velocity Chart**:
   - Bar chart comparing *Estimated Story Points Committed* vs *Story Points Completed* across the last $N$ sprints.
   - Calculate rolling average velocity for future sprint capacity planning.
-- [ ] **Cumulative Flow Diagram (CFD)**:
+- [x] **Cumulative Flow Diagram (CFD)**:
   - Stacked area chart showing total work items in each state over time.
   - Identify bottlenecks (widening bands) and lead time inflation.
-- [ ] **Control Chart & Cycle Time Analysis**:
+- [x] **Control Chart & Cycle Time Analysis**:
   - Scatter plot of cycle time (time from *In Progress* to *Done*) per issue with rolling average and standard deviation bands ($\pm 1\sigma, \pm 2\sigma$).
-- [ ] **Epic Report & Release Burndown**:
+- [x] **Epic Report & Release Burndown**:
   - Progress tracker showing completion rate and forecasted completion dates for Epics and Releases.
-- [ ] **Created vs Resolved Issues Chart**:
+- [x] **Created vs Resolved Issues Chart**:
   - Comparative trend line identifying whether the team is resolving bugs faster than they are incoming.
 
 ---
@@ -797,19 +797,22 @@ flowchart TD
   - [x] Board & Backlog badges showing remaining estimates and T-Shirt size badges.
 - **Verification**: Logging 2 hours with "Auto-adjust" reduces remaining estimate by 2 hours and increments total time spent; verified all 4 adjustment modes, edit/delete, subtask rollup, timesheet API, and JQL queries end-to-end.
 
-#### Step 8: Agile Analytics & Reporting Engine
+#### Step 8: Agile Analytics & Reporting Engine *(Completed)*
 - **Why Next**: Sprints (Step 6), Workflows (Step 4), and Worklogs (Step 7) now provide all data points required for Agile metrics.
 - **Backend Deliverables**:
-  - Aggregation Endpoints:
-    - `/api/reports/burndown?sprint_id=...`: Day-by-day remaining story points and hours vs ideal slope.
+  - [x] Database Migration: Create `sprint_events` table and triggers on `work_items` to record scope changes (added, removed, points changed).
+  - [x] Aggregation Endpoints:
+    - `/api/reports/burndown?sprint_id=...`: Day-by-day remaining story points and hours vs ideal slope, detecting mid-sprint scope creep and supporting weekend flattening.
     - `/api/reports/burnup?sprint_id=...`: Scope line vs completed line.
-    - `/api/reports/velocity?project_id=...`: Committed vs completed points across the last 10 sprints.
-    - `/api/reports/cumulative-flow?board_id=...`: State distribution over time.
-    - `/api/reports/cycle-time?board_id=...`: Cycle time and lead time percentiles ($\text{p}50, \text{p}85, \text{p}95$).
+    - `/api/reports/velocity?project_id=...`: Committed vs completed points across historical sprints with rolling average, recent trend, and suggested capacity.
+    - `/api/reports/cumulative-flow?project_id=...`: State distribution over time, daily WIP, and bottleneck status detection.
+    - `/api/reports/cycle-time?project_id=...`: Cycle time and lead time percentiles ($\text{p}50, \text{p}85, \text{p}95$), control limit bands ($\pm 1\sigma, \pm 2\sigma$), and outliers.
+    - `/api/reports/created-vs-resolved?project_id=...`: Created vs resolved trend lines and net backlog delta.
+    - `/api/reports/epic-report` & `/api/reports/release-burndown`: Progress tracker with forecasts.
+    - RFC 4180 CSV export support (`?format=csv`) for all reporting endpoints.
 - **Frontend Deliverables**:
-  - Reports Hub (`/reports`): Interactive charts rendered with Chart.js / ngx-charts.
-  - Interactive tooltip inspections, date range selectors, and export to CSV/PNG.
-- **Verification**: Burndown chart accurately reflects mid-sprint scope changes (added/removed issues) and weekend flattening.
+  - [x] Reports Hub (`/reports`): Interactive charts rendered with responsive SVGs, hover tooltips, date range selectors, estimation unit toggles, and 1-click CSV download.
+- **Verification**: Burndown chart accurately reflects mid-sprint scope changes (added/removed issues) and weekend flattening; end-to-end verified with 12/12 passing tests in `verify_step8.py`.
 
 #### Step 9: Dashboards & Gadgets Framework
 - **Why Next**: Uses Saved Filters (Step 5), Agile Reports (Step 8), and Work Items to provide customizable executive and team overviews.

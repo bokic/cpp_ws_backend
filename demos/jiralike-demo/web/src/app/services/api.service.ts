@@ -6,11 +6,18 @@ import {
   BoardItemsPayload,
   BoardQuickFilter,
   BoardSwimlane,
+  BurndownReport,
+  BurnupReport,
   CommentItem,
   CompleteSprintResponse,
+  CreatedVsResolvedReport,
+  CumulativeFlowReport,
   CustomFieldDef,
   CustomFieldOption,
+  CycleTimeReport,
   DurationParseResponse,
+  EpicReport,
+  EpicSummaryItem,
   FieldConfiguration,
   IssueTypeDef,
   IssueTypeScheme,
@@ -21,7 +28,9 @@ import {
   Project,
   ProjectComponent,
   ProjectVersion,
+  ReleaseBurndownReport,
   ReleaseNotesResponse,
+  ReleaseSummaryItem,
   Resolution,
   SavedFilter,
   ScreenDef,
@@ -32,6 +41,7 @@ import {
   TimeRollup,
   TimesheetResponse,
   User,
+  VelocityReport,
   WorkItem,
   WorkItemDetail,
   WorkItemLink,
@@ -1328,5 +1338,114 @@ export class ApiService {
       method: 'POST',
       body: JSON.stringify(payload),
     });
+  }
+
+  // ============================================================================
+  // Epic 5 & Step 8: Agile Analytics & Reporting Suite APIs
+  // ============================================================================
+
+  async getBurndownReport(
+    sprintId?: number,
+    unit: 'points' | 'hours' = 'points',
+    weekendFlattening = true
+  ): Promise<BurndownReport> {
+    const params = new URLSearchParams();
+    if (sprintId) params.set('sprint_id', String(sprintId));
+    params.set('unit', unit);
+    params.set('weekend_flattening', String(weekendFlattening));
+    return this.request<BurndownReport>(`/api/reports/burndown?${params.toString()}`);
+  }
+
+  async getBurnupReport(
+    sprintId?: number,
+    unit: 'points' | 'hours' = 'points'
+  ): Promise<BurndownReport> {
+    const params = new URLSearchParams();
+    if (sprintId) params.set('sprint_id', String(sprintId));
+    params.set('unit', unit);
+    return this.request<BurndownReport>(`/api/reports/burnup?${params.toString()}`);
+  }
+
+  async getVelocityReport(projectId = 1, limit = 10): Promise<VelocityReport> {
+    return this.request<VelocityReport>(
+      `/api/reports/velocity?project_id=${projectId}&limit=${limit}`
+    );
+  }
+
+  async getCumulativeFlowReport(
+    projectId = 1,
+    days = 30,
+    boardId?: number
+  ): Promise<CumulativeFlowReport> {
+    const params = new URLSearchParams();
+    params.set('project_id', String(projectId));
+    params.set('days', String(days));
+    if (boardId) params.set('board_id', String(boardId));
+    return this.request<CumulativeFlowReport>(
+      `/api/reports/cumulative-flow?${params.toString()}`
+    );
+  }
+
+  async getCycleTimeReport(
+    projectId = 1,
+    days = 60,
+    boardId?: number
+  ): Promise<CycleTimeReport> {
+    const params = new URLSearchParams();
+    params.set('project_id', String(projectId));
+    params.set('days', String(days));
+    if (boardId) params.set('board_id', String(boardId));
+    return this.request<CycleTimeReport>(
+      `/api/reports/cycle-time?${params.toString()}`
+    );
+  }
+
+  async getCreatedVsResolvedReport(
+    projectId = 1,
+    days = 30,
+    groupBy: 'day' | 'week' = 'day'
+  ): Promise<CreatedVsResolvedReport> {
+    return this.request<CreatedVsResolvedReport>(
+      `/api/reports/created-vs-resolved?project_id=${projectId}&days=${days}&group_by=${groupBy}`
+    );
+  }
+
+  async getEpicReport(epicId?: number): Promise<EpicReport> {
+    const qs = epicId ? `?epic_id=${epicId}` : '';
+    return this.request<EpicReport>(`/api/reports/epic-report${qs}`);
+  }
+
+  async getEpicsList(projectId = 1): Promise<{ project_id: number; epics: EpicSummaryItem[] }> {
+    return this.request<{ project_id: number; epics: EpicSummaryItem[] }>(
+      `/api/reports/epics?project_id=${projectId}`
+    );
+  }
+
+  async getReleaseBurndownReport(versionId?: number): Promise<ReleaseBurndownReport> {
+    const qs = versionId ? `?version_id=${versionId}` : '';
+    return this.request<ReleaseBurndownReport>(`/api/reports/release-burndown${qs}`);
+  }
+
+  async getReleasesList(projectId = 1): Promise<{ project_id: number; releases: ReleaseSummaryItem[] }> {
+    return this.request<{ project_id: number; releases: ReleaseSummaryItem[] }>(
+      `/api/reports/releases?project_id=${projectId}`
+    );
+  }
+
+  downloadReportCsv(endpoint: string, params: Record<string, any>, defaultFilename: string): void {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== null && v !== '') {
+        q.set(k, String(v));
+      }
+    }
+    q.set('format', 'csv');
+    const url = `${endpoint}?${q.toString()}`;
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', defaultFilename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   }
 }

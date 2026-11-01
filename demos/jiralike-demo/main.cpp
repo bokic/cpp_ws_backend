@@ -8,6 +8,7 @@
 #include "src/crypto_utils.h"
 #include "src/db_migrator.h"
 #include "src/time_tracking.h"
+#include "src/analytics_engine.h"
 #include "src/jql_lexer.h"
 #include "src/jql_parser.h"
 
@@ -91,6 +92,24 @@ static void send_error(backend::wsworker *worker,
     auto err = json::json_value::make_object();
     err.add_str("error", message);
     send_json(worker, header, status, err);
+}
+
+static void send_csv(backend::wsworker *worker,
+                     const std::map<std::string, std::string> &header,
+                     const std::string &filename,
+                     const std::string &csv_content) {
+    std::string proto = get_header(header, "SERVER_PROTOCOL");
+    if (proto.empty()) proto = "HTTP/1.1";
+    int len = static_cast<int>(csv_content.size());
+    FCGX_FPrintF(worker->out(),
+                 "%s 200 OK\r\n"
+                 "Status: 200 OK\r\n"
+                 "Content-Type: text/csv; charset=utf-8\r\n"
+                 "Content-Disposition: attachment; filename=\"%s\"\r\n"
+                 "X-Content-Type-Options: nosniff\r\n"
+                 "Cache-Control: no-store\r\n"
+                 "Content-Length: %d\r\n\r\n%s",
+                 proto.c_str(), filename.c_str(), len, csv_content.c_str());
 }
 
 struct auth_user {
@@ -265,6 +284,22 @@ static void seed_demo_workspace(db::sqlite_db &conn, int admin_id, int project_i
         INSERT INTO sprints (project_id, name, goal, status, start_date, end_date, is_current)
         VALUES (?, ?, ?, ?, ?, ?, ?);
     )SQL");
+    ins_sprint.bind_int(1, project_id);
+    ins_sprint.bind_text(2, "Sprint 0 - Foundations & FastCGI Setup");
+    ins_sprint.bind_text(3, "Initial project setup, database migrations schema, and basic HTTP routing.");
+    ins_sprint.bind_text(4, "closed");
+    ins_sprint.bind_text(5, "2026-10-01");
+    ins_sprint.bind_text(6, "2026-10-14");
+    ins_sprint.bind_int(7, 0);
+    ins_sprint.step_done();
+    int sprint0_id = static_cast<int>(conn.last_insert_rowid());
+    {
+        auto upd_sp0 = conn.prepare("UPDATE sprints SET completed_at = '2026-10-14 17:30:00', committed_points = 24, completed_points = 21, completed_items_count = 5, incomplete_items_count = 1 WHERE id = ?;");
+        upd_sp0.bind_int(1, sprint0_id);
+        upd_sp0.step_done();
+    }
+
+    ins_sprint.clear_and_reset();
     ins_sprint.bind_int(1, project_id);
     ins_sprint.bind_text(2, "Sprint 1 - Core Architecture & Board");
     ins_sprint.bind_text(3, "Deliver FastCGI SQLite migrations, Kanban drag-and-drop, and Gantt timeline.");
@@ -655,10 +690,10 @@ static void seed_demo_workspace(db::sqlite_db &conn, int admin_id, int project_i
         FROM work_items w;
 
         UPDATE sprints
-        SET committed_points = COALESCE((SELECT SUM(w.story_points) FROM work_items w WHERE w.sprint_id = sprints.id), 0),
-            completed_points = COALESCE((SELECT SUM(w.story_points) FROM work_items w WHERE w.sprint_id = sprints.id AND w.status = 'Done'), 0),
-            completed_items_count = COALESCE((SELECT COUNT(*) FROM work_items w WHERE w.sprint_id = sprints.id AND w.status = 'Done'), 0),
-            incomplete_items_count = COALESCE((SELECT COUNT(*) FROM work_items w WHERE w.sprint_id = sprints.id AND w.status != 'Done'), 0);
+        SET committed_points = CASE WHEN status = 'closed' AND committed_points > 0 THEN committed_points ELSE COALESCE((SELECT SUM(w.story_points) FROM work_items w WHERE w.sprint_id = sprints.id), 0) END,
+            completed_points = CASE WHEN status = 'closed' AND completed_points > 0 THEN completed_points ELSE COALESCE((SELECT SUM(w.story_points) FROM work_items w WHERE w.sprint_id = sprints.id AND w.status = 'Done'), 0) END,
+            completed_items_count = CASE WHEN status = 'closed' AND completed_items_count > 0 THEN completed_items_count ELSE COALESCE((SELECT COUNT(*) FROM work_items w WHERE w.sprint_id = sprints.id AND w.status = 'Done'), 0) END,
+            incomplete_items_count = CASE WHEN status = 'closed' AND incomplete_items_count > 0 THEN incomplete_items_count ELSE COALESCE((SELECT COUNT(*) FROM work_items w WHERE w.sprint_id = sprints.id AND w.status != 'Done'), 0) END;
 
         UPDATE work_items
         SET original_estimate_seconds = CASE
@@ -9860,6 +9895,342 @@ static void handle_time_tracking_parse(backend::wsworker *worker,
     send_json(worker, header, "200 OK", out);
 }
 
+// ============================================================================
+// Epic 5 & Step 8: Agile Analytics & Reporting Handlers
+// ============================================================================
+
+// GET /api/reports/burndown
+static void handle_report_burndown(backend::wsworker *worker,
+                                   const std::map<std::string, std::string> &header,
+                                   const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+
+    int sprint_id = 0;
+    if (!args["sprint_id"].empty()) {
+        sprint_id = std::atoi(args["sprint_id"].c_str());
+    } else {
+        auto sq = conn.prepare("SELECT id FROM sprints WHERE is_current = 1 LIMIT 1;");
+        if (sq.step() == SQLITE_ROW) {
+            sprint_id = sq.column_int(0);
+        } else {
+            auto sq2 = conn.prepare("SELECT id FROM sprints WHERE status = 'active' ORDER BY id ASC LIMIT 1;");
+            if (sq2.step() == SQLITE_ROW) {
+                sprint_id = sq2.column_int(0);
+            } else {
+                auto sq3 = conn.prepare("SELECT id FROM sprints ORDER BY id DESC LIMIT 1;");
+                if (sq3.step() == SQLITE_ROW) {
+                    sprint_id = sq3.column_int(0);
+                }
+            }
+        }
+    }
+
+    if (sprint_id <= 0) {
+        send_error(worker, header, "404 Not Found", "No active or existing sprint found");
+        return;
+    }
+
+    bool weekend_flattening = (args["weekend_flattening"] != "false" && args["include_weekends"] != "false");
+    std::string format = args["format"];
+
+    auto report = analytics::calculate_sprint_burndown(conn, sprint_id, weekend_flattening);
+    if (format == "csv") {
+        send_csv(worker, header, "burndown-sprint-" + std::to_string(sprint_id) + ".csv", report.to_csv());
+    } else {
+        send_json(worker, header, "200 OK", report.to_json());
+    }
+}
+
+// GET /api/reports/burnup
+static void handle_report_burnup(backend::wsworker *worker,
+                                 const std::map<std::string, std::string> &header,
+                                 const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+
+    int sprint_id = 0;
+    if (!args["sprint_id"].empty()) {
+        sprint_id = std::atoi(args["sprint_id"].c_str());
+    } else {
+        auto sq = conn.prepare("SELECT id FROM sprints WHERE is_current = 1 LIMIT 1;");
+        if (sq.step() == SQLITE_ROW) {
+            sprint_id = sq.column_int(0);
+        } else {
+            auto sq2 = conn.prepare("SELECT id FROM sprints WHERE status = 'active' ORDER BY id ASC LIMIT 1;");
+            if (sq2.step() == SQLITE_ROW) {
+                sprint_id = sq2.column_int(0);
+            } else {
+                auto sq3 = conn.prepare("SELECT id FROM sprints ORDER BY id DESC LIMIT 1;");
+                if (sq3.step() == SQLITE_ROW) {
+                    sprint_id = sq3.column_int(0);
+                }
+            }
+        }
+    }
+
+    if (sprint_id <= 0) {
+        send_error(worker, header, "404 Not Found", "No active or existing sprint found");
+        return;
+    }
+
+    std::string format = args["format"];
+    auto report = analytics::calculate_sprint_burnup(conn, sprint_id);
+    if (format == "csv") {
+        send_csv(worker, header, "burnup-sprint-" + std::to_string(sprint_id) + ".csv", report.to_csv());
+    } else {
+        send_json(worker, header, "200 OK", report.to_json());
+    }
+}
+
+// GET /api/reports/velocity
+static void handle_report_velocity(backend::wsworker *worker,
+                                   const std::map<std::string, std::string> &header,
+                                   const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+
+    int project_id = args["project_id"].empty() ? 1 : std::atoi(args["project_id"].c_str());
+    int limit = args["limit"].empty() ? 10 : std::atoi(args["limit"].c_str());
+    std::string format = args["format"];
+
+    auto report = analytics::calculate_velocity(conn, project_id, limit);
+    if (format == "csv") {
+        send_csv(worker, header, "velocity-project-" + std::to_string(project_id) + ".csv", report.to_csv());
+    } else {
+        send_json(worker, header, "200 OK", report.to_json());
+    }
+}
+
+// GET /api/reports/cumulative-flow
+static void handle_report_cumulative_flow(backend::wsworker *worker,
+                                          const std::map<std::string, std::string> &header,
+                                          const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+
+    int project_id = 1;
+    if (!args["board_id"].empty()) {
+        int b_id = std::atoi(args["board_id"].c_str());
+        auto bq = conn.prepare("SELECT project_id FROM boards WHERE id = ?;");
+        bq.bind_int(1, b_id);
+        if (bq.step() == SQLITE_ROW) {
+            project_id = bq.column_int(0);
+        }
+    } else if (!args["project_id"].empty()) {
+        project_id = std::atoi(args["project_id"].c_str());
+    }
+
+    int days = args["days"].empty() ? 30 : std::atoi(args["days"].c_str());
+    std::string format = args["format"];
+
+    auto report = analytics::calculate_cfd(conn, project_id, days);
+    if (format == "csv") {
+        send_csv(worker, header, "cumulative-flow-p" + std::to_string(project_id) + ".csv", report.to_csv());
+    } else {
+        send_json(worker, header, "200 OK", report.to_json());
+    }
+}
+
+// GET /api/reports/cycle-time
+static void handle_report_cycle_time(backend::wsworker *worker,
+                                     const std::map<std::string, std::string> &header,
+                                     const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+
+    int project_id = 1;
+    if (!args["board_id"].empty()) {
+        int b_id = std::atoi(args["board_id"].c_str());
+        auto bq = conn.prepare("SELECT project_id FROM boards WHERE id = ?;");
+        bq.bind_int(1, b_id);
+        if (bq.step() == SQLITE_ROW) {
+            project_id = bq.column_int(0);
+        }
+    } else if (!args["project_id"].empty()) {
+        project_id = std::atoi(args["project_id"].c_str());
+    }
+
+    int days = args["days"].empty() ? 60 : std::atoi(args["days"].c_str());
+    std::string format = args["format"];
+
+    auto report = analytics::calculate_cycle_time(conn, project_id, days);
+    if (format == "csv") {
+        send_csv(worker, header, "cycle-time-p" + std::to_string(project_id) + ".csv", report.to_csv());
+    } else {
+        send_json(worker, header, "200 OK", report.to_json());
+    }
+}
+
+// GET /api/reports/created-vs-resolved
+static void handle_report_created_vs_resolved(backend::wsworker *worker,
+                                              const std::map<std::string, std::string> &header,
+                                              const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+
+    int project_id = args["project_id"].empty() ? 1 : std::atoi(args["project_id"].c_str());
+    int days = args["days"].empty() ? 30 : std::atoi(args["days"].c_str());
+    std::string format = args["format"];
+
+    auto report = analytics::calculate_created_vs_resolved(conn, project_id, days);
+    if (format == "csv") {
+        send_csv(worker, header, "created-vs-resolved-p" + std::to_string(project_id) + ".csv", report.to_csv());
+    } else {
+        send_json(worker, header, "200 OK", report.to_json());
+    }
+}
+
+// GET /api/reports/epic-report
+static void handle_report_epic(backend::wsworker *worker,
+                               const std::map<std::string, std::string> &header,
+                               const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+
+    int epic_id = 0;
+    if (!args["epic_id"].empty()) {
+        epic_id = std::atoi(args["epic_id"].c_str());
+    } else {
+        auto eq = conn.prepare("SELECT id FROM work_items WHERE type = 'Epic' ORDER BY id ASC LIMIT 1;");
+        if (eq.step() == SQLITE_ROW) {
+            epic_id = eq.column_int(0);
+        }
+    }
+
+    if (epic_id <= 0) {
+        send_error(worker, header, "404 Not Found", "No Epic found");
+        return;
+    }
+
+    std::string format = args["format"];
+    auto report = analytics::calculate_epic_report(conn, epic_id);
+    if (format == "csv") {
+        send_csv(worker, header, "epic-report-" + report.key + ".csv", report.to_csv());
+    } else {
+        send_json(worker, header, "200 OK", report.to_json());
+    }
+}
+
+// GET /api/reports/epics
+static void handle_report_epics_list(backend::wsworker *worker,
+                                     const std::map<std::string, std::string> &header,
+                                     const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+    int project_id = args["project_id"].empty() ? 1 : std::atoi(args["project_id"].c_str());
+
+    auto q = conn.prepare(R"SQL(
+        SELECT w.id, w.key, w.title, w.status,
+               (SELECT COUNT(*) FROM work_items c WHERE c.parent_id = w.id) AS child_count,
+               (SELECT COUNT(*) FROM work_items c WHERE c.parent_id = w.id AND c.status = 'Done') AS done_count,
+               (SELECT COALESCE(SUM(c.story_points), 0) FROM work_items c WHERE c.parent_id = w.id) AS total_points,
+               (SELECT COALESCE(SUM(c.story_points), 0) FROM work_items c WHERE c.parent_id = w.id AND c.status = 'Done') AS done_points
+        FROM work_items w
+        WHERE w.project_id = ? AND w.type = 'Epic'
+        ORDER BY w.id ASC;
+    )SQL");
+    q.bind_int(1, project_id);
+
+    auto arr = json::json_value::make_array();
+    while (q.step() == SQLITE_ROW) {
+        auto ep = json::json_value::make_object();
+        ep.add_int("id", q.column_int(0));
+        ep.add_str("key", q.column_str(1));
+        ep.add_str("summary", q.column_str(2));
+        ep.add_str("status", q.column_str(3));
+        ep.add_int("child_count", q.column_int(4));
+        ep.add_int("done_count", q.column_int(5));
+        int tot_pts = q.column_int(6);
+        int done_pts = q.column_int(7);
+        ep.add_int("total_points", tot_pts);
+        ep.add_int("done_points", done_pts);
+        double pct = tot_pts > 0 ? (static_cast<double>(done_pts) / tot_pts) * 100.0 : 0.0;
+        ep.add_double("progress_percent", std::round(pct * 10.0) / 10.0);
+        arr.add(std::move(ep));
+    }
+
+    auto out = json::json_value::make_object();
+    out.add_int("project_id", project_id);
+    out.add("epics", std::move(arr));
+    send_json(worker, header, "200 OK", out);
+}
+
+// GET /api/reports/release-burndown
+static void handle_report_release(backend::wsworker *worker,
+                                  const std::map<std::string, std::string> &header,
+                                  const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+
+    int version_id = 0;
+    if (!args["version_id"].empty()) {
+        version_id = std::atoi(args["version_id"].c_str());
+    } else {
+        auto vq = conn.prepare("SELECT id FROM versions ORDER BY id ASC LIMIT 1;");
+        if (vq.step() == SQLITE_ROW) {
+            version_id = vq.column_int(0);
+        }
+    }
+
+    if (version_id <= 0) {
+        send_error(worker, header, "404 Not Found", "No Fix Version found");
+        return;
+    }
+
+    std::string format = args["format"];
+    auto report = analytics::calculate_release_burndown(conn, version_id);
+    if (format == "csv") {
+        send_csv(worker, header, "release-burndown-v" + std::to_string(version_id) + ".csv", report.to_csv());
+    } else {
+        send_json(worker, header, "200 OK", report.to_json());
+    }
+}
+
+// GET /api/reports/releases
+static void handle_report_releases_list(backend::wsworker *worker,
+                                        const std::map<std::string, std::string> &header,
+                                        const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+    int project_id = args["project_id"].empty() ? 1 : std::atoi(args["project_id"].c_str());
+
+    auto q = conn.prepare(R"SQL(
+        SELECT v.id, v.name, v.release_date, v.status,
+               (SELECT COUNT(*) FROM work_item_versions wiv WHERE wiv.version_id = v.id) AS item_count,
+               (SELECT COUNT(*) FROM work_item_versions wiv JOIN work_items w ON w.id = wiv.work_item_id WHERE wiv.version_id = v.id AND w.status = 'Done') AS done_count,
+               (SELECT COALESCE(SUM(w.story_points), 0) FROM work_item_versions wiv JOIN work_items w ON w.id = wiv.work_item_id WHERE wiv.version_id = v.id) AS total_points,
+               (SELECT COALESCE(SUM(w.story_points), 0) FROM work_item_versions wiv JOIN work_items w ON w.id = wiv.work_item_id WHERE wiv.version_id = v.id AND w.status = 'Done') AS done_points
+        FROM versions v
+        WHERE v.project_id = ?
+        ORDER BY v.id ASC;
+    )SQL");
+    q.bind_int(1, project_id);
+
+    auto arr = json::json_value::make_array();
+    while (q.step() == SQLITE_ROW) {
+        auto vo = json::json_value::make_object();
+        vo.add_int("id", q.column_int(0));
+        vo.add_str("name", q.column_str(1));
+        vo.add_str("release_date", q.column_str(2));
+        vo.add_str("status", q.column_str(3));
+        vo.add_int("item_count", q.column_int(4));
+        vo.add_int("done_count", q.column_int(5));
+        int tot_pts = q.column_int(6);
+        int done_pts = q.column_int(7);
+        vo.add_int("total_points", tot_pts);
+        vo.add_int("done_points", done_pts);
+        double pct = tot_pts > 0 ? (static_cast<double>(done_pts) / tot_pts) * 100.0 : 0.0;
+        vo.add_double("completion_percent", std::round(pct * 10.0) / 10.0);
+        arr.add(std::move(vo));
+    }
+
+    auto out = json::json_value::make_object();
+    out.add_int("project_id", project_id);
+    out.add("releases", std::move(arr));
+    send_json(worker, header, "200 OK", out);
+}
+
 static constexpr auto DEFAULT_SOCKET_NAME = ":9002";
 static constexpr auto DEFAULT_BACKLOG = 100;
 
@@ -10001,6 +10372,16 @@ int main(int argc, char *argv[]) {
         {"^/api/worklogs$",                             backend::GET,                   handle_all_worklogs_timesheet},
         {"^/api/worklogs/([0-9]+)$",                    backend::PUT | backend::DELETE, handle_worklog_detail       },
         {"^/api/time-tracking/parse$",                  backend::GET | backend::POST,   handle_time_tracking_parse  },
+        {"^/api/reports/burndown$",                     backend::GET,                   handle_report_burndown      },
+        {"^/api/reports/burnup$",                       backend::GET,                   handle_report_burnup        },
+        {"^/api/reports/velocity$",                     backend::GET,                   handle_report_velocity      },
+        {"^/api/reports/cumulative-flow$",              backend::GET,                   handle_report_cumulative_flow},
+        {"^/api/reports/cycle-time$",                   backend::GET,                   handle_report_cycle_time    },
+        {"^/api/reports/created-vs-resolved$",          backend::GET,                   handle_report_created_vs_resolved},
+        {"^/api/reports/epic-report$",                  backend::GET,                   handle_report_epic          },
+        {"^/api/reports/epics$",                        backend::GET,                   handle_report_epics_list    },
+        {"^/api/reports/release-burndown$",             backend::GET,                   handle_report_release       },
+        {"^/api/reports/releases$",                     backend::GET,                   handle_report_releases_list },
         {"^/api/items/([A-Za-z0-9_-]+)/links$",         backend::POST,                  handle_item_links           },
         {"^/api/links$",                                backend::GET,                   handle_all_links            },
         {"^/api/links/([0-9]+)$",                       backend::DELETE,                handle_delete_link          },
