@@ -216,6 +216,7 @@ export interface WorkItem {
   subtask_count: number;
   comment_count: number;
   attachment_count: number;
+  bm25_score?: number;
 }
 
 export interface WorkItemLink {
@@ -522,4 +523,92 @@ export interface ItemTransitionsPayload {
   statuses: WorkflowStatusNode[];
   transitions: AvailableTransition[];
 }
+
+export interface JqlToken {
+  type: string;
+  text: string;
+  raw_text: string;
+  pos: number;
+  length: number;
+  line: number;
+  col: number;
+}
+
+export interface JqlValidateResponse {
+  valid: boolean;
+  jql: string;
+  where_sql?: string;
+  order_by_sql?: string;
+  compiled_sql?: string;
+  bind_params?: string[];
+  ast_summary?: string;
+  uses_fts5?: boolean;
+  execution_time_ms?: number;
+  tokens?: JqlToken[];
+  error?: string;
+  error_pos?: number;
+  error_length?: number;
+  error_line?: number;
+  error_col?: number;
+}
+
+export interface JqlSearchResponse extends JqlValidateResponse {
+  total: number;
+  limit: number;
+  offset: number;
+  items: WorkItem[];
+}
+
+export interface JqlFieldSuggestion {
+  name: string;
+  cf_syntax?: string;
+  label: string;
+  type: string;
+  description: string;
+}
+
+export interface JqlFunctionSuggestion {
+  signature: string;
+  description: string;
+}
+
+export interface JqlSuggestions {
+  fields: JqlFieldSuggestion[];
+  operators: string[];
+  functions: JqlFunctionSuggestion[];
+  keywords: string[];
+  values: Record<string, string[]>;
+}
+
+export interface FilterSubscription {
+  id: number;
+  filter_id: number;
+  user_id: number | null;
+  cron_schedule: string;
+  frequency_label: string;
+  recipient_scope: string;
+  email_empty: boolean;
+  is_active: boolean;
+  last_run_at: string;
+  created_at: string;
+}
+
+export interface SavedFilter {
+  id: number;
+  owner_id: number | null;
+  owner_name: string;
+  name: string;
+  description: string;
+  jql_query: string;
+  is_favorite: boolean;
+  is_system: boolean;
+  share_type: 'public' | 'private' | 'role' | 'project' | string;
+  share_target: string;
+  view_columns: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+  subscriptions: FilterSubscription[];
+}
+
 

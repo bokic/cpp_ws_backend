@@ -225,43 +225,43 @@ This document provides a comprehensive gap analysis and exhaustive development r
 ## 4. Epic 3: JQL (Jira Query Language), Advanced Search & Filtering
 
 ### 4.1 JQL Parser & AST Execution Engine
-- [ ] **Lexer & Parser Implementation in C++**:
+- [x] **Lexer & Parser Implementation in C++**:
   - Grammar supporting clauses: `<field> <operator> <operand>`.
   - Logical combinations with parentheses: `AND`, `OR`, `NOT`.
   - Sorting clause: `ORDER BY <field> [ASC | DESC]`.
-- [ ] **Operators**:
+- [x] **Operators**:
   - Equality / Relational: `=`, `!=`, `>`, `>=`, `<`, `<=`.
   - Set Membership: `IN (...)`, `NOT IN (...)`.
   - Pattern / Full-Text Search: `~` (contains), `!~` (does not contain).
   - Null Checks: `IS EMPTY`, `IS NOT EMPTY`, `IS NULL`, `IS NOT NULL`.
   - Historical / Changelog Operators: `WAS`, `WAS IN`, `CHANGED [FROM ...] [TO ...] [BY ...] [DURING ...]`.
-- [ ] **Built-in JQL Functions**:
+- [x] **Built-in JQL Functions**:
   - `currentUser()`: Resolves to the authenticated user ID.
   - `now()`, `startOfDay()`, `endOfDay()`, `startOfWeek()`, `endOfMonth()`, `startOfYear()`.
   - Date offsets: `now("-7d")`, `endOfWeek("+2w")`.
   - `membersOf("GroupName")`: Expands to user IDs within a group.
   - `subtaskIssueTypes()`, `linkedIssues("KEY-123")`, `openSprints()`, `closedSprints()`.
-- [ ] **AST to SQL Compiler**:
+- [x] **AST to SQL Compiler**:
   - Transform JQL Abstract Syntax Tree into safe, parameterized SQLite SQL statements joining `work_items`, `custom_field_values`, and `workflow_history`.
 
 ### 4.2 SQLite FTS5 Full-Text Search
-- [ ] **FTS5 Virtual Table (`work_items_fts`)**:
+- [x] **FTS5 Virtual Table (`work_items_fts`)**:
   - Full-text index on `title`, `description`, `steps_to_reproduce`, and `comments`.
   - BM25 ranking for relevance-based search results.
   - Triggers on `work_items` and `comments` to maintain index synchronization.
 
 ### 4.3 Saved Filters & Subscriptions
-- [ ] **Saved Filters Table (`saved_filters`)**:
+- [x] **Saved Filters Table (`saved_filters`)**:
   - Fields: `id`, `owner_id`, `name`, `description`, `jql_query`, `is_favorite`, `created_at`.
-- [ ] **Filter Sharing & Permissions (`filter_permissions`)**:
+- [x] **Filter Sharing & Permissions (`filter_permissions`)**:
   - Permissions: Private, Shared with specified Projects, Roles, Groups, or Public.
-- [ ] **Filter Subscriptions (`filter_subscriptions`)**:
+- [x] **Filter Subscriptions (`filter_subscriptions`)**:
   - Scheduled background runner (cron) executing the filter and emailing results digest to subscribers (e.g., daily bug digest).
 
 ### 4.4 Search Frontend & Export Capabilities
-- [ ] **Search UI**:
+- [x] **Search UI**:
   - Dual modes: **Basic Search** (dropdown filters for Project, Type, Status, Assignee) and **Advanced JQL Mode** with syntax highlighting, autocomplete suggestions, and inline error markers.
-- [ ] **Export Engine**:
+- [x] **Export Engine**:
   - Export query results to: CSV, Excel, JSON, and Printable HTML view.
 
 ---
@@ -753,19 +753,19 @@ flowchart TD
   - [x] Transition Screen Modal: Prompt for mandatory fields (e.g., Resolution, Comment, Remaining Estimate) upon transitioning.
 - **Verification**: Moving an item respects transition rules (e.g., cannot close without resolution; cannot advance if subtasks open).
 
-#### Step 5: JQL (Jira Query Language) Lexer, Parser & SQLite FTS5 Full-Text Search
+#### Step 5: JQL (Jira Query Language) Lexer, Parser & SQLite FTS5 Full-Text Search *(Completed)*
 - **Why Next**: Boards, backlog views, quick filters, and dashboards are fundamentally driven by JQL search queries.
 - **Backend Deliverables**:
-  - C++ Recursive Descent / Pratt Parser: Parse JQL syntax (`AND`, `OR`, `NOT`, `IN`, `~`, `WAS`, `CHANGED`, `ORDER BY`).
-  - AST-to-SQL Compiler: Translate parsed JQL AST into parameterized SQLite queries joining `work_items` and `custom_field_values`.
-  - JQL Built-in Functions: Implement `currentUser()`, `now()`, `startOfDay()`, `endOfWeek()`, `membersOf()`.
-  - Full-Text Search: SQLite FTS5 virtual table `work_items_fts` synchronized via triggers.
-  - REST Endpoints: `/api/search/jql` with query autocomplete endpoint `/api/search/suggestions`.
-  - Saved Filters: CRUD for `/api/filters` with sharing permissions.
+  - [x] C++ Recursive Descent / Pratt Parser: Parse JQL syntax (`AND`, `OR`, `NOT`, `IN`, `~`, `WAS`, `CHANGED`, `ORDER BY`).
+  - [x] AST-to-SQL Compiler: Translate parsed JQL AST into parameterized SQLite queries joining `work_items` and `custom_field_values`.
+  - [x] JQL Built-in Functions: Implement `currentUser()`, `now()`, `startOfDay()`, `endOfWeek()`, `membersOf()`.
+  - [x] Full-Text Search: SQLite FTS5 virtual table `work_items_fts` synchronized via triggers.
+  - [x] REST Endpoints: `/api/search/jql` with query autocomplete endpoint `/api/search/suggestions`.
+  - [x] Saved Filters: CRUD for `/api/filters` with sharing permissions.
 - **Frontend Deliverables**:
-  - Jira Search Page: Switch between Basic Filter Mode and Advanced JQL Mode.
-  - CodeMirror / Monaco JQL editor with syntax highlighting, autocomplete suggestions, and error tooltips.
-  - Saved Filters drawer: Star, share, and manage favorite filters.
+  - [x] Jira Search Page: Switch between Basic Filter Mode and Advanced JQL Mode.
+  - [x] CodeMirror / Monaco JQL editor with syntax highlighting, autocomplete suggestions, and error tooltips.
+  - [x] Saved Filters drawer: Star, share, and manage favorite filters.
 - **Verification**: Complex queries like `project = "PROJ" AND status in ("In Progress", "In Review") AND summary ~ "auth" ORDER BY priority DESC` return correct results with sub-10ms response times.
 
 #### Step 6: Scrum & Kanban Multi-Board Engine with Agile Backlog Planning

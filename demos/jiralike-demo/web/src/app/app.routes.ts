@@ -10,12 +10,14 @@ import { WorkflowsComponent } from './pages/workflows/workflows.component';
 import { SprintsComponent } from './pages/sprints/sprints.component';
 import { ProjectSettingsComponent } from './pages/project-settings/project-settings.component';
 import { CustomFieldsComponent } from './pages/custom-fields/custom-fields.component';
+import { SearchComponent } from './pages/search/search.component';
 
 export const routes: Routes = [
   { path: '', pathMatch: 'full', redirectTo: 'board' },
   { path: 'setup', component: SetupComponent },
   { path: 'login', component: LoginComponent },
   { path: 'board', component: BoardComponent },
+  { path: 'search', component: SearchComponent },
   { path: 'gantt', component: GanttComponent },
   { path: 'states', component: StatesComponent },
   { path: 'create', component: CreateItemComponent },

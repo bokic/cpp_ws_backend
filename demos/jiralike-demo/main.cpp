@@ -7,6 +7,8 @@
 #include "src/raii_json.h"
 #include "src/crypto_utils.h"
 #include "src/db_migrator.h"
+#include "src/jql_lexer.h"
+#include "src/jql_parser.h"
 
 #include <algorithm>
 #include <atomic>
@@ -5043,6 +5045,942 @@ static const char *BASE_WORK_ITEM_SELECT = R"SQL(
     LEFT JOIN resolutions res ON res.id = w.resolution_id
 )SQL";
 
+// ============================================================================
+// Epic 3 / Step 5: JQL Search Engine, Autocomplete Suggestions & Saved Filters
+// ============================================================================
+
+static std::string csv_escape(const std::string &val) {
+    bool needs_quotes = false;
+    for (char c : val) {
+        if (c == ',' || c == '"' || c == '\n' || c == '\r') {
+            needs_quotes = true;
+            break;
+        }
+    }
+    if (!needs_quotes) return val;
+    std::string out = "\"";
+    for (char c : val) {
+        if (c == '"') out += "\"\"";
+        else out.push_back(c);
+    }
+    out.push_back('"');
+    return out;
+}
+
+static json::json_value serialize_jql_tokens(std::string_view jql_str) {
+    auto arr = json::json_value::make_array();
+    try {
+        jql::JqlLexer lexer(jql_str);
+        auto tokens = lexer.tokenize();
+        for (const auto &t : tokens) {
+            if (t.type == jql::TokenType::EndOfInput) continue;
+            auto tobj = json::json_value::make_object();
+            tobj.add_str("type", jql::token_type_name(t.type));
+            tobj.add_str("text", t.text);
+            tobj.add_str("raw_text", t.raw_text);
+            tobj.add_int("pos", static_cast<int>(t.pos));
+            tobj.add_int("length", static_cast<int>(t.length));
+            tobj.add_int("line", t.line);
+            tobj.add_int("col", t.col);
+            arr.add(std::move(tobj));
+        }
+    } catch (...) {
+        // Ignore tokenization error during partial token serialization
+    }
+    return arr;
+}
+
+// GET | POST /api/search/jql
+static void handle_search_jql(backend::wsworker *worker,
+                              const std::map<std::string, std::string> &header,
+                              const std::list<std::string> &) {
+    auto t_start = std::chrono::steady_clock::now();
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    std::string method = get_header(header, "REQUEST_METHOD");
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+
+    std::string jql_str = args["jql"];
+    std::string format = args["format"].empty() ? "json" : jql::to_lower_ascii(args["format"]);
+    int limit = args["limit"].empty() ? 200 : std::clamp(std::atoi(args["limit"].c_str()), 1, 1000);
+    int offset = args["offset"].empty() ? 0 : std::max(0, std::atoi(args["offset"].c_str()));
+    bool validate_only = (args["validate_only"] == "1" || args["validate_only"] == "true");
+
+    if (method == "POST") {
+        auto body = json::json_value::parse(worker->body());
+        if (body) {
+            if (body.has_key("jql")) jql_str = body.get_string("jql");
+            if (body.has_key("format")) format = jql::to_lower_ascii(body.get_string("format", "json"));
+            if (body.has_key("limit")) limit = std::clamp(body.get_int("limit", 200), 1, 1000);
+            if (body.has_key("offset")) offset = std::max(0, body.get_int("offset", 0));
+            if (body.has_key("validate_only")) validate_only = body.get_bool("validate_only", false);
+        }
+    }
+
+    try {
+        jql::JqlLexer lexer(jql_str);
+        auto tokens = lexer.tokenize();
+        jql::JqlParser parser(tokens);
+        auto ast = parser.parse();
+
+        jql::SqlContext ctx(conn,
+                            u_auth.authenticated ? u_auth.id : 1,
+                            u_auth.authenticated ? u_auth.username : "admin",
+                            u_auth.authenticated ? u_auth.display_name : "System Administrator");
+
+        std::string where_sql = ast.to_where_sql(ctx);
+        std::string order_by_sql = ast.to_order_by_sql(ctx);
+
+        std::string full_sql = std::string(BASE_WORK_ITEM_SELECT) +
+                               " WHERE " + where_sql +
+                               " ORDER BY " + order_by_sql +
+                               " LIMIT " + std::to_string(limit) +
+                               " OFFSET " + std::to_string(offset) + ";";
+
+        auto params_arr = json::json_value::make_array();
+        for (const auto &p : ctx.params) {
+            params_arr.add(json::json_value::make_string(p));
+        }
+
+        auto tok_arr = json::json_value::make_array();
+        for (const auto &t : tokens) {
+            if (t.type == jql::TokenType::EndOfInput) continue;
+            auto tobj = json::json_value::make_object();
+            tobj.add_str("type", jql::token_type_name(t.type));
+            tobj.add_str("text", t.text);
+            tobj.add_str("raw_text", t.raw_text);
+            tobj.add_int("pos", static_cast<int>(t.pos));
+            tobj.add_int("length", static_cast<int>(t.length));
+            tobj.add_int("line", t.line);
+            tobj.add_int("col", t.col);
+            tok_arr.add(std::move(tobj));
+        }
+
+        std::string ast_debug = ast.where_root ? ast.where_root->to_debug_string() : "(ALL ISSUES)";
+        if (!ast.order_by.empty()) {
+            ast_debug += " ORDER BY ";
+            for (size_t i = 0; i < ast.order_by.size(); ++i) {
+                if (i > 0) ast_debug += ", ";
+                ast_debug += ast.order_by[i].field + (ast.order_by[i].descending ? " DESC" : " ASC");
+            }
+        }
+
+        if (validate_only) {
+            auto t_end = std::chrono::steady_clock::now();
+            double elapsed_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
+            auto res = json::json_value::make_object();
+            res.add_bool("valid", true);
+            res.add_str("jql", jql_str);
+            res.add_str("where_sql", where_sql);
+            res.add_str("order_by_sql", order_by_sql);
+            res.add_str("compiled_sql", full_sql);
+            res.add("bind_params", std::move(params_arr));
+            res.add_str("ast_summary", ast_debug);
+            res.add_bool("uses_fts5", ctx.uses_fts5);
+            res.add_double("execution_time_ms", elapsed_ms);
+            res.add("tokens", std::move(tok_arr));
+            send_json(worker, header, "200 OK", res);
+            return;
+        }
+
+        // Count total matching items
+        int total_count = 0;
+        {
+            std::string count_sql =
+                "SELECT COUNT(*) FROM work_items w "
+                "LEFT JOIN users ua ON ua.id = w.assignee_id "
+                "LEFT JOIN users ur ON ur.id = w.reporter_id "
+                "LEFT JOIN work_items wp ON wp.id = w.parent_id "
+                "LEFT JOIN sprints sp ON sp.id = w.sprint_id "
+                "LEFT JOIN resolutions res ON res.id = w.resolution_id "
+                "WHERE " + where_sql + ";";
+            auto cstmt = conn.prepare(count_sql);
+            for (size_t i = 0; i < ctx.params.size(); ++i) {
+                cstmt.bind_text(static_cast<int>(i + 1), ctx.params[i]);
+            }
+            if (cstmt.step() == SQLITE_ROW) {
+                total_count = cstmt.column_int(0);
+            }
+        }
+
+        // Compute BM25 scores map if FTS5 was used
+        std::unordered_map<int, double> bm25_scores;
+        if (ctx.uses_fts5 && !ctx.primary_fts_query.empty()) {
+            try {
+                auto fstmt = conn.prepare(
+                    "SELECT CAST(work_item_id AS INTEGER), bm25(work_items_fts, 0.0, 5.0, 4.0, 2.0, 1.5, 2.0, 1.0) "
+                    "FROM work_items_fts WHERE work_items_fts MATCH ?;");
+                fstmt.bind_text(1, ctx.primary_fts_query);
+                while (fstmt.step() == SQLITE_ROW) {
+                    bm25_scores[fstmt.column_int(0)] = -fstmt.column_double(1);
+                }
+            } catch (...) {
+                // Ignore if FTS match is column-scoped
+            }
+        }
+
+        auto stmt = conn.prepare(full_sql);
+        for (size_t i = 0; i < ctx.params.size(); ++i) {
+            stmt.bind_text(static_cast<int>(i + 1), ctx.params[i]);
+        }
+
+        // Export formats: CSV, Markdown, Printable HTML
+        if (format == "csv") {
+            std::ostringstream csv;
+            csv << "Key,Type,Category,Title,Status,Priority,Resolution,Assignee,Reporter,Sprint,Story Points,Progress,Due Date,Created,Updated,Labels\n";
+            while (stmt.step() == SQLITE_ROW) {
+                csv << csv_escape(stmt.column_str(2)) << ","
+                    << csv_escape(stmt.column_str(3)) << ","
+                    << csv_escape(stmt.column_str(31)) << ","
+                    << csv_escape(stmt.column_str(6)) << ","
+                    << csv_escape(stmt.column_str(4)) << ","
+                    << csv_escape(stmt.column_str(5)) << ","
+                    << csv_escape(stmt.column_str(33)) << ","
+                    << csv_escape(stmt.column_str(22)) << ","
+                    << csv_escape(stmt.column_str(24)) << ","
+                    << csv_escape(stmt.column_str(27)) << ","
+                    << stmt.column_int(12) << ","
+                    << stmt.column_int(13) << "%,"
+                    << csv_escape(stmt.column_str(15)) << ","
+                    << csv_escape(stmt.column_str(20)) << ","
+                    << csv_escape(stmt.column_str(21)) << ","
+                    << csv_escape(stmt.column_str(18)) << "\n";
+            }
+            std::string body_str = csv.str();
+            std::string proto = get_header(header, "SERVER_PROTOCOL");
+            if (proto.empty()) proto = "HTTP/1.1";
+            FCGX_FPrintF(worker->out(),
+                         "%s 200 OK\r\n"
+                         "Status: 200 OK\r\n"
+                         "Content-Type: text/csv; charset=utf-8\r\n"
+                         "Content-Disposition: attachment; filename=\"jira-jql-export.csv\"\r\n"
+                         "Content-Length: %d\r\n\r\n%s",
+                         proto.c_str(), static_cast<int>(body_str.size()), body_str.c_str());
+            return;
+        }
+
+        if (format == "markdown" || format == "md") {
+            std::ostringstream md;
+            md << "# JQL Search Export\n\n";
+            md << "- **Query**: `" << (jql_str.empty() ? "(All Issues)" : jql_str) << "`\n";
+            md << "- **Total Matches**: " << total_count << "\n\n";
+            md << "| Key | Type | Title | Status | Priority | Assignee | Sprint | Points |\n";
+            md << "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :---: |\n";
+            while (stmt.step() == SQLITE_ROW) {
+                md << "| **" << stmt.column_str(2) << "** | "
+                   << stmt.column_str(3) << " | "
+                   << stmt.column_str(6) << " | `"
+                   << stmt.column_str(4) << "` | "
+                   << stmt.column_str(5) << " | "
+                   << (stmt.column_str(22).empty() ? "Unassigned" : stmt.column_str(22)) << " | "
+                   << (stmt.column_str(27).empty() ? "-" : stmt.column_str(27)) << " | "
+                   << stmt.column_int(12) << " |\n";
+            }
+            std::string body_str = md.str();
+            std::string proto = get_header(header, "SERVER_PROTOCOL");
+            if (proto.empty()) proto = "HTTP/1.1";
+            FCGX_FPrintF(worker->out(),
+                         "%s 200 OK\r\n"
+                         "Status: 200 OK\r\n"
+                         "Content-Type: text/markdown; charset=utf-8\r\n"
+                         "Content-Length: %d\r\n\r\n%s",
+                         proto.c_str(), static_cast<int>(body_str.size()), body_str.c_str());
+            return;
+        }
+
+        if (format == "html") {
+            std::ostringstream html;
+            html << "<!DOCTYPE html><html><head><meta charset='utf-8'><title>JQL Export</title>"
+                 << "<style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:24px;color:#172B4D}"
+                 << "table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #DFE1E6;padding:8px 12px;text-align:left;font-size:13px}"
+                 << "th{background:#F4F5F7;font-weight:600}code{background:#F4F5F7;padding:2px 6px;border-radius:4px}</style></head><body>"
+                 << "<h2>JQL Search Results (" << total_count << " issues)</h2>"
+                 << "<p><strong>JQL:</strong> <code>" << (jql_str.empty() ? "(All Issues)" : jql_str) << "</code></p>"
+                 << "<table><thead><tr><th>Key</th><th>Type</th><th>Summary</th><th>Status</th><th>Priority</th><th>Assignee</th><th>Sprint</th><th>Points</th></tr></thead><tbody>";
+            while (stmt.step() == SQLITE_ROW) {
+                html << "<tr><td><strong>" << stmt.column_str(2) << "</strong></td><td>" << stmt.column_str(3)
+                     << "</td><td>" << stmt.column_str(6) << "</td><td>" << stmt.column_str(4)
+                     << "</td><td>" << stmt.column_str(5) << "</td><td>"
+                     << (stmt.column_str(22).empty() ? "Unassigned" : stmt.column_str(22))
+                     << "</td><td>" << stmt.column_str(27) << "</td><td>" << stmt.column_int(12) << "</td></tr>";
+            }
+            html << "</tbody></table></body></html>";
+            std::string body_str = html.str();
+            std::string proto = get_header(header, "SERVER_PROTOCOL");
+            if (proto.empty()) proto = "HTTP/1.1";
+            FCGX_FPrintF(worker->out(),
+                         "%s 200 OK\r\n"
+                         "Status: 200 OK\r\n"
+                         "Content-Type: text/html; charset=utf-8\r\n"
+                         "Content-Length: %d\r\n\r\n%s",
+                         proto.c_str(), static_cast<int>(body_str.size()), body_str.c_str());
+            return;
+        }
+
+        auto items_arr = json::json_value::make_array();
+        while (stmt.step() == SQLITE_ROW) {
+            int wid = stmt.column_int(0);
+            auto item_obj = row_to_work_item_json(conn, stmt);
+            auto it_bm = bm25_scores.find(wid);
+            if (it_bm != bm25_scores.end()) {
+                item_obj.add_double("bm25_score", it_bm->second);
+            }
+            items_arr.add(std::move(item_obj));
+        }
+
+        auto t_end = std::chrono::steady_clock::now();
+        double elapsed_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
+
+        auto res = json::json_value::make_object();
+        res.add_bool("valid", true);
+        res.add_str("jql", jql_str);
+        res.add_str("where_sql", where_sql);
+        res.add_str("order_by_sql", order_by_sql);
+        res.add_str("compiled_sql", full_sql);
+        res.add("bind_params", std::move(params_arr));
+        res.add_str("ast_summary", ast_debug);
+        res.add_bool("uses_fts5", ctx.uses_fts5);
+        res.add_int("total", total_count);
+        res.add_int("limit", limit);
+        res.add_int("offset", offset);
+        res.add_double("execution_time_ms", elapsed_ms);
+        res.add("tokens", std::move(tok_arr));
+        res.add("items", std::move(items_arr));
+
+        send_json(worker, header, "200 OK", res);
+    } catch (const jql::JqlSyntaxError &syn) {
+        auto err_obj = json::json_value::make_object();
+        err_obj.add_bool("valid", false);
+        err_obj.add_str("jql", jql_str);
+        err_obj.add_str("error", syn.what());
+        err_obj.add_int("error_pos", static_cast<int>(syn.pos));
+        err_obj.add_int("error_length", static_cast<int>(syn.length));
+        err_obj.add_int("error_line", syn.line);
+        err_obj.add_int("error_col", syn.col);
+        err_obj.add("tokens", serialize_jql_tokens(jql_str));
+        send_json(worker, header, validate_only ? "200 OK" : "400 Bad Request", err_obj);
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+    }
+}
+
+// POST /api/search/validate
+static void handle_search_validate(backend::wsworker *worker,
+                                   const std::map<std::string, std::string> &header,
+                                   const std::list<std::string> &uri_params) {
+    auto t_start = std::chrono::steady_clock::now();
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    auto body = json::json_value::parse(worker->body());
+    std::string jql_str = body ? body.get_string("jql") : "";
+    (void)uri_params;
+
+    try {
+        jql::JqlLexer lexer(jql_str);
+        auto tokens = lexer.tokenize();
+        jql::JqlParser parser(tokens);
+        auto ast = parser.parse();
+
+        jql::SqlContext ctx(conn,
+                            u_auth.authenticated ? u_auth.id : 1,
+                            u_auth.authenticated ? u_auth.username : "admin",
+                            u_auth.authenticated ? u_auth.display_name : "System Administrator");
+
+        std::string where_sql = ast.to_where_sql(ctx);
+        std::string order_by_sql = ast.to_order_by_sql(ctx);
+
+        auto params_arr = json::json_value::make_array();
+        for (const auto &p : ctx.params) {
+            params_arr.add(json::json_value::make_string(p));
+        }
+
+        auto tok_arr = json::json_value::make_array();
+        for (const auto &t : tokens) {
+            if (t.type == jql::TokenType::EndOfInput) continue;
+            auto tobj = json::json_value::make_object();
+            tobj.add_str("type", jql::token_type_name(t.type));
+            tobj.add_str("text", t.text);
+            tobj.add_str("raw_text", t.raw_text);
+            tobj.add_int("pos", static_cast<int>(t.pos));
+            tobj.add_int("length", static_cast<int>(t.length));
+            tobj.add_int("line", t.line);
+            tobj.add_int("col", t.col);
+            tok_arr.add(std::move(tobj));
+        }
+
+        std::string ast_debug = ast.where_root ? ast.where_root->to_debug_string() : "(ALL ISSUES)";
+        if (!ast.order_by.empty()) {
+            ast_debug += " ORDER BY ";
+            for (size_t i = 0; i < ast.order_by.size(); ++i) {
+                if (i > 0) ast_debug += ", ";
+                ast_debug += ast.order_by[i].field + (ast.order_by[i].descending ? " DESC" : " ASC");
+            }
+        }
+
+        auto t_end = std::chrono::steady_clock::now();
+        double elapsed_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
+
+        auto res = json::json_value::make_object();
+        res.add_bool("valid", true);
+        res.add_str("jql", jql_str);
+        res.add_str("where_sql", where_sql);
+        res.add_str("order_by_sql", order_by_sql);
+        res.add_str("ast_summary", ast_debug);
+        res.add_bool("uses_fts5", ctx.uses_fts5);
+        res.add_double("execution_time_ms", elapsed_ms);
+        res.add("bind_params", std::move(params_arr));
+        res.add("tokens", std::move(tok_arr));
+        send_json(worker, header, "200 OK", res);
+    } catch (const jql::JqlSyntaxError &syn) {
+        auto err_obj = json::json_value::make_object();
+        err_obj.add_bool("valid", false);
+        err_obj.add_str("jql", jql_str);
+        err_obj.add_str("error", syn.what());
+        err_obj.add_int("error_pos", static_cast<int>(syn.pos));
+        err_obj.add_int("error_length", static_cast<int>(syn.length));
+        err_obj.add_int("error_line", syn.line);
+        err_obj.add_int("error_col", syn.col);
+        err_obj.add("tokens", serialize_jql_tokens(jql_str));
+        send_json(worker, header, "200 OK", err_obj);
+    } catch (const std::exception &ex) {
+        auto err_obj = json::json_value::make_object();
+        err_obj.add_bool("valid", false);
+        err_obj.add_str("jql", jql_str);
+        err_obj.add_str("error", ex.what());
+        send_json(worker, header, "200 OK", err_obj);
+    }
+}
+
+// GET /api/search/suggestions
+static void handle_search_suggestions(backend::wsworker *worker,
+                                      const std::map<std::string, std::string> &header,
+                                      const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+
+    auto fields_arr = json::json_value::make_array();
+    auto add_field_meta = [&](const char *key, const char *label, const char *type, const char *desc) {
+        auto f = json::json_value::make_object();
+        f.add_str("name", key);
+        f.add_str("label", label);
+        f.add_str("type", type);
+        f.add_str("description", desc);
+        fields_arr.add(std::move(f));
+    };
+
+    add_field_meta("project", "Project", "select", "Project key, name, or ID (e.g., project = \"JIRA\")");
+    add_field_meta("key", "Issue Key", "string", "Unique work item key (e.g., key = \"JIRA-1\")");
+    add_field_meta("type", "Issue Type", "select", "Hierarchy type: Epic, Story, Task, Subtask, Issue");
+    add_field_meta("category", "Category", "select", "Work category: Bug, New Feature, Improvement");
+    add_field_meta("status", "Status", "status", "Workflow status (supports =, IN, WAS, CHANGED)");
+    add_field_meta("statusCategory", "Status Category", "select", "Workflow status category: To Do, In Progress, Done");
+    add_field_meta("priority", "Priority", "priority", "Issue priority (Critical, Highest, High, Medium, Low, Lowest)");
+    add_field_meta("resolution", "Resolution", "select", "Issue resolution (Fixed, Won't Fix, Duplicate, or IS EMPTY)");
+    add_field_meta("assignee", "Assignee", "user", "Assigned user or currentUser() / membersOf()");
+    add_field_meta("reporter", "Reporter", "user", "Reporting user or currentUser()");
+    add_field_meta("sprint", "Sprint", "sprint", "Sprint name, ID, or openSprints() / closedSprints()");
+    add_field_meta("parent", "Parent / Epic", "string", "Parent Epic or Story key/ID");
+    add_field_meta("component", "Component", "select", "Project component name or ID");
+    add_field_meta("fixVersion", "Fix Version", "select", "Target release / fix version name");
+    add_field_meta("affectedVersion", "Affects Version", "select", "Affected release version name");
+    add_field_meta("summary", "Summary / Title", "text", "Full-text or substring search on issue title (~)");
+    add_field_meta("description", "Description", "text", "Full-text or substring search on description (~)");
+    add_field_meta("text", "Full-Text Search (FTS5)", "text", "SQLite FTS5 BM25 search across title, description, labels, steps, and comments");
+    add_field_meta("comment", "Comments", "text", "Search inside issue discussion comments (~)");
+    add_field_meta("labels", "Labels", "string", "Search issue tags/labels");
+    add_field_meta("storyPoints", "Story Points", "number", "Numeric story points estimate (=, !=, >, >=, <, <=)");
+    add_field_meta("progress", "Progress %", "number", "Completion percentage (0 to 100)");
+    add_field_meta("created", "Created Date", "date", "Creation timestamp (supports now(), startOfDay(), startOfWeek())");
+    add_field_meta("updated", "Updated Date", "date", "Last updated timestamp");
+    add_field_meta("due", "Due Date", "date", "Target due date");
+    add_field_meta("startDate", "Start Date", "date", "Planned start date");
+    add_field_meta("resolved", "Resolution Date", "date", "Timestamp when the issue was resolved");
+
+    auto values_map = json::json_value::make_object();
+
+    // Dynamic custom fields
+    {
+        auto cfstmt = conn.prepare("SELECT id, field_key, name, field_type, description FROM custom_fields ORDER BY sort_order ASC, id ASC;");
+        while (cfstmt.step() == SQLITE_ROW) {
+            int cf_id = cfstmt.column_int(0);
+            std::string fkey = cfstmt.column_str(1);
+            std::string fname = cfstmt.column_str(2);
+            std::string ftype = cfstmt.column_str(3);
+            std::string fdesc = cfstmt.column_str(4);
+
+            auto f = json::json_value::make_object();
+            f.add_str("name", fkey);
+            f.add_str("cf_syntax", "cf[" + fkey + "]");
+            f.add_str("label", fname + " (Custom)");
+            f.add_str("type", ftype);
+            f.add_str("description", fdesc.empty() ? ("Custom field cf[" + std::to_string(cf_id) + "]") : fdesc);
+            fields_arr.add(std::move(f));
+
+            auto opt_stmt = conn.prepare("SELECT value FROM custom_field_options WHERE custom_field_id = ? AND is_active = 1 ORDER BY sort_order ASC;");
+            opt_stmt.bind_int(1, cf_id);
+            auto opt_arr = json::json_value::make_array();
+            while (opt_stmt.step() == SQLITE_ROW) {
+                opt_arr.add(json::json_value::make_string(opt_stmt.column_str(0)));
+            }
+            if (json_object_array_length(opt_arr.get()) > 0) {
+                values_map.add(fkey.c_str(), std::move(opt_arr));
+            }
+        }
+    }
+
+    // Populate live field values for autocomplete
+    auto query_str_list = [&](const char *sql) {
+        auto arr = json::json_value::make_array();
+        auto st = conn.prepare(sql);
+        while (st.step() == SQLITE_ROW) {
+            std::string v = st.column_str(0);
+            if (!v.empty()) arr.add(json::json_value::make_string(v));
+        }
+        return arr;
+    };
+
+    values_map.add("project", query_str_list("SELECT key FROM projects ORDER BY id ASC;"));
+    values_map.add("status", query_str_list("SELECT DISTINCT name FROM workflow_statuses ORDER BY sort_order ASC, id ASC;"));
+    values_map.add("statusCategory", query_str_list("SELECT DISTINCT category FROM workflow_statuses ORDER BY id ASC;"));
+    values_map.add("type", query_str_list("SELECT name FROM issue_types ORDER BY hierarchy_level DESC, id ASC;"));
+    values_map.add("resolution", query_str_list("SELECT name FROM resolutions ORDER BY sort_order ASC, id ASC;"));
+    values_map.add("assignee", query_str_list("SELECT username FROM users ORDER BY id ASC;"));
+    values_map.add("reporter", query_str_list("SELECT username FROM users ORDER BY id ASC;"));
+    values_map.add("sprint", query_str_list("SELECT name FROM sprints ORDER BY id ASC;"));
+    values_map.add("component", query_str_list("SELECT DISTINCT name FROM components ORDER BY name ASC;"));
+    values_map.add("fixVersion", query_str_list("SELECT DISTINCT name FROM versions ORDER BY id ASC;"));
+    values_map.add("affectedVersion", query_str_list("SELECT DISTINCT name FROM versions ORDER BY id ASC;"));
+
+    auto prio_arr = json::json_value::make_array();
+    for (const char *p : {"Critical", "Highest", "High", "Medium", "Low", "Lowest"}) {
+        prio_arr.add(json::json_value::make_string(p));
+    }
+    values_map.add("priority", std::move(prio_arr));
+
+    auto cat_arr = json::json_value::make_array();
+    for (const char *c : {"Bug", "New Feature", "Improvement"}) {
+        cat_arr.add(json::json_value::make_string(c));
+    }
+    values_map.add("category", std::move(cat_arr));
+
+    auto ops_arr = json::json_value::make_array();
+    for (const char *op : {"=", "!=", "~", "!~", "IN", "NOT IN", "IS EMPTY", "IS NOT EMPTY", ">", ">=", "<", "<=", "WAS", "WAS IN", "WAS NOT", "CHANGED"}) {
+        ops_arr.add(json::json_value::make_string(op));
+    }
+
+    auto funcs_arr = json::json_value::make_array();
+    auto add_func = [&](const char *sig, const char *desc) {
+        auto fn = json::json_value::make_object();
+        fn.add_str("signature", sig);
+        fn.add_str("description", desc);
+        funcs_arr.add(std::move(fn));
+    };
+    add_func("currentUser()", "Matches the currently authenticated user");
+    add_func("openSprints()", "Matches all currently active sprints");
+    add_func("closedSprints()", "Matches all completed / closed sprints");
+    add_func("futureSprints()", "Matches planned future sprints");
+    add_func("now()", "Current date and time");
+    add_func("now(\"-7d\")", "Relative timestamp offset (supports d, w, h, m, y)");
+    add_func("startOfDay()", "Start of the current day (00:00:00)");
+    add_func("endOfDay()", "End of the current day (23:59:59)");
+    add_func("startOfWeek()", "Start of the current 7-day week window");
+    add_func("endOfWeek()", "End of the current week");
+    add_func("startOfMonth()", "First day of the current month");
+    add_func("endOfMonth()", "Last day of the current month");
+    add_func("membersOf(\"Developer\")", "All users belonging to the specified role or group");
+    add_func("linkedIssues(\"JIRA-1\")", "All issues linked to the specified issue key");
+    add_func("subtaskIssueTypes()", "All subtask hierarchy issue types");
+    add_func("standardIssueTypes()", "All standard level-0 issue types");
+
+    auto kw_arr = json::json_value::make_array();
+    for (const char *k : {"AND", "OR", "NOT", "ORDER BY", "ASC", "DESC", "EMPTY", "NULL", "FROM", "TO", "BY", "AFTER", "BEFORE", "DURING"}) {
+        kw_arr.add(json::json_value::make_string(k));
+    }
+
+    auto res = json::json_value::make_object();
+    res.add("fields", std::move(fields_arr));
+    res.add("operators", std::move(ops_arr));
+    res.add("functions", std::move(funcs_arr));
+    res.add("keywords", std::move(kw_arr));
+    res.add("values", std::move(values_map));
+    send_json(worker, header, "200 OK", res);
+}
+
+static json::json_value build_saved_filter_json(db::sqlite_db &conn, int filter_id, int current_user_id) {
+    auto stmt = conn.prepare(R"SQL(
+        SELECT sf.id, sf.owner_id, COALESCE(u.display_name, 'System'),
+               sf.name, sf.description, sf.jql_query,
+               sf.is_favorite, sf.is_system, sf.share_type, sf.share_target,
+               sf.view_columns, sf.sort_order, sf.created_at, sf.updated_at,
+               EXISTS (SELECT 1 FROM filter_stars fs WHERE fs.filter_id = sf.id AND fs.user_id = ?)
+        FROM saved_filters sf
+        LEFT JOIN users u ON u.id = sf.owner_id
+        WHERE sf.id = ?;
+    )SQL");
+    stmt.bind_int(1, current_user_id);
+    stmt.bind_int(2, filter_id);
+    if (stmt.step() != SQLITE_ROW) {
+        return json::json_value();
+    }
+
+    auto obj = json::json_value::make_object();
+    obj.add_int("id", stmt.column_int(0));
+    obj.add_nullable_int("owner_id", stmt.column_int(1));
+    obj.add_str("owner_name", stmt.column_str(2));
+    obj.add_str("name", stmt.column_str(3));
+    obj.add_str("description", stmt.column_str(4));
+    obj.add_str("jql_query", stmt.column_str(5));
+    bool starred = (stmt.column_int(6) != 0) || (stmt.column_int(14) != 0);
+    obj.add_bool("is_favorite", starred);
+    obj.add_bool("is_system", stmt.column_int(7) != 0);
+    obj.add_str("share_type", stmt.column_str(8));
+    obj.add_str("share_target", stmt.column_str(9));
+    obj.add_str("view_columns", stmt.column_str(10));
+    obj.add_int("sort_order", stmt.column_int(11));
+    obj.add_str("created_at", stmt.column_str(12));
+    obj.add_str("updated_at", stmt.column_str(13));
+
+    auto sub_stmt = conn.prepare(R"SQL(
+        SELECT id, filter_id, user_id, cron_schedule, frequency_label, recipient_scope, email_empty, is_active, last_run_at, created_at
+        FROM filter_subscriptions
+        WHERE filter_id = ?
+        ORDER BY id ASC;
+    )SQL");
+    sub_stmt.bind_int(1, filter_id);
+    auto subs = json::json_value::make_array();
+    while (sub_stmt.step() == SQLITE_ROW) {
+        auto s = json::json_value::make_object();
+        s.add_int("id", sub_stmt.column_int(0));
+        s.add_int("filter_id", sub_stmt.column_int(1));
+        s.add_nullable_int("user_id", sub_stmt.column_int(2));
+        s.add_str("cron_schedule", sub_stmt.column_str(3));
+        s.add_str("frequency_label", sub_stmt.column_str(4));
+        s.add_str("recipient_scope", sub_stmt.column_str(5));
+        s.add_bool("email_empty", sub_stmt.column_int(6) != 0);
+        s.add_bool("is_active", sub_stmt.column_int(7) != 0);
+        s.add_str("last_run_at", sub_stmt.column_str(8));
+        s.add_str("created_at", sub_stmt.column_str(9));
+        subs.add(std::move(s));
+    }
+    obj.add("subscriptions", std::move(subs));
+    return obj;
+}
+
+// GET | POST /api/filters
+static void handle_saved_filters(backend::wsworker *worker,
+                                 const std::map<std::string, std::string> &header,
+                                 const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    int uid = u_auth.authenticated ? u_auth.id : 1;
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto stmt = conn.prepare(R"SQL(
+            SELECT id FROM saved_filters
+            WHERE share_type = 'public'
+               OR owner_id IS NULL
+               OR owner_id = ?
+               OR (share_type = 'role' AND lower(share_target) = lower(?))
+            ORDER BY is_favorite DESC, sort_order ASC, id ASC;
+        )SQL");
+        stmt.bind_int(1, uid);
+        stmt.bind_text(2, u_auth.authenticated ? u_auth.role : "Admin");
+        auto arr = json::json_value::make_array();
+        while (stmt.step() == SQLITE_ROW) {
+            auto f = build_saved_filter_json(conn, stmt.column_int(0), uid);
+            if (f) arr.add(std::move(f));
+        }
+        send_json(worker, header, "200 OK", arr);
+        return;
+    }
+
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string name = body.get_string("name");
+    std::string description = body.get_string("description");
+    std::string jql_query = body.get_string("jql_query");
+    if (jql_query.empty()) jql_query = body.get_string("jql");
+    bool is_favorite = body.get_bool("is_favorite", true);
+    std::string share_type = body.get_string("share_type", "public");
+    std::string share_target = body.get_string("share_target", "*");
+    std::string view_columns = body.get_string("view_columns", "key,type,title,status,priority,assignee,sprint,story_points,updated_at");
+
+    if (name.empty()) {
+        send_error(worker, header, "400 Bad Request", "Filter name is required");
+        return;
+    }
+
+    // Validate JQL syntax before saving
+    try {
+        (void)jql::JqlParser::parse_query(jql_query);
+    } catch (const jql::JqlSyntaxError &syn) {
+        send_error(worker, header, "400 Bad Request", std::string("Invalid JQL syntax: ") + syn.what());
+        return;
+    }
+
+    int new_id = 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare(R"SQL(
+            INSERT INTO saved_filters (owner_id, name, description, jql_query, is_favorite, is_system, share_type, share_target, view_columns)
+            VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?);
+        )SQL");
+        ins.bind_int(1, u_auth.id);
+        ins.bind_text(2, name);
+        ins.bind_text(3, description);
+        ins.bind_text(4, jql_query);
+        ins.bind_int(5, is_favorite ? 1 : 0);
+        ins.bind_text(6, share_type);
+        ins.bind_text(7, share_target);
+        ins.bind_text(8, view_columns);
+        ins.step_done();
+        new_id = static_cast<int>(conn.last_insert_rowid());
+
+        if (is_favorite) {
+            auto st = conn.prepare("INSERT OR IGNORE INTO filter_stars (filter_id, user_id) VALUES (?, ?);");
+            st.bind_int(1, new_id);
+            st.bind_int(2, u_auth.id);
+            st.step_done();
+        }
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    send_json(worker, header, "201 Created", build_saved_filter_json(conn, new_id, u_auth.id));
+}
+
+// GET | PUT | DELETE /api/filters/([0-9]+)
+static void handle_saved_filter_detail(backend::wsworker *worker,
+                                       const std::map<std::string, std::string> &header,
+                                       const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing filter ID");
+        return;
+    }
+    int filter_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    int uid = u_auth.authenticated ? u_auth.id : 1;
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto f = build_saved_filter_json(conn, filter_id, uid);
+        if (!f) {
+            send_error(worker, header, "404 Not Found", "Saved filter not found");
+            return;
+        }
+        send_json(worker, header, "200 OK", f);
+        return;
+    }
+
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    if (method == "DELETE") {
+        auto chk = conn.prepare("SELECT is_system FROM saved_filters WHERE id = ?;");
+        chk.bind_int(1, filter_id);
+        if (chk.step() == SQLITE_ROW && chk.column_int(0) != 0) {
+            send_error(worker, header, "400 Bad Request", "Cannot delete a built-in system filter");
+            return;
+        }
+        db::sqlite_transaction tx(conn);
+        auto del = conn.prepare("DELETE FROM saved_filters WHERE id = ?;");
+        del.bind_int(1, filter_id);
+        del.step_done();
+        tx.commit();
+        auto res = json::json_value::make_object();
+        res.add_bool("deleted", true);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string name = body.get_string("name");
+    std::string description = body.get_string("description");
+    std::string jql_query = body.get_string("jql_query", body.get_string("jql"));
+    bool is_favorite = body.get_bool("is_favorite", false);
+    std::string share_type = body.get_string("share_type", "public");
+    std::string share_target = body.get_string("share_target", "*");
+    std::string view_columns = body.get_string("view_columns", "key,type,title,status,priority,assignee,sprint,story_points,updated_at");
+
+    try {
+        (void)jql::JqlParser::parse_query(jql_query);
+        db::sqlite_transaction tx(conn);
+        auto upd = conn.prepare(R"SQL(
+            UPDATE saved_filters
+            SET name = COALESCE(NULLIF(?, ''), name),
+                description = ?,
+                jql_query = ?,
+                is_favorite = ?,
+                share_type = ?,
+                share_target = ?,
+                view_columns = ?,
+                updated_at = datetime('now')
+            WHERE id = ?;
+        )SQL");
+        upd.bind_text(1, name);
+        upd.bind_text(2, description);
+        upd.bind_text(3, jql_query);
+        upd.bind_int(4, is_favorite ? 1 : 0);
+        upd.bind_text(5, share_type);
+        upd.bind_text(6, share_target);
+        upd.bind_text(7, view_columns);
+        upd.bind_int(8, filter_id);
+        upd.step_done();
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    send_json(worker, header, "200 OK", build_saved_filter_json(conn, filter_id, u_auth.id));
+}
+
+// POST /api/filters/([0-9]+)/star
+static void handle_saved_filter_star(backend::wsworker *worker,
+                                     const std::map<std::string, std::string> &header,
+                                     const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing filter ID");
+        return;
+    }
+    int filter_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    int uid = u_auth.authenticated ? u_auth.id : 1;
+
+    try {
+        db::sqlite_transaction tx(conn);
+        auto chk = conn.prepare("SELECT is_favorite FROM saved_filters WHERE id = ?;");
+        chk.bind_int(1, filter_id);
+        if (chk.step() != SQLITE_ROW) {
+            send_error(worker, header, "404 Not Found", "Saved filter not found");
+            return;
+        }
+        bool cur_fav = chk.column_int(0) != 0;
+        bool next_fav = !cur_fav;
+
+        auto upd = conn.prepare("UPDATE saved_filters SET is_favorite = ?, updated_at = datetime('now') WHERE id = ?;");
+        upd.bind_int(1, next_fav ? 1 : 0);
+        upd.bind_int(2, filter_id);
+        upd.step_done();
+
+        if (next_fav) {
+            auto ins = conn.prepare("INSERT OR IGNORE INTO filter_stars (filter_id, user_id) VALUES (?, ?);");
+            ins.bind_int(1, filter_id);
+            ins.bind_int(2, uid);
+            ins.step_done();
+        } else {
+            auto del = conn.prepare("DELETE FROM filter_stars WHERE filter_id = ? AND user_id = ?;");
+            del.bind_int(1, filter_id);
+            del.bind_int(2, uid);
+            del.step_done();
+        }
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    send_json(worker, header, "200 OK", build_saved_filter_json(conn, filter_id, uid));
+}
+
+// GET | POST /api/filters/([0-9]+)/subscriptions
+static void handle_filter_subscriptions(backend::wsworker *worker,
+                                        const std::map<std::string, std::string> &header,
+                                        const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing filter ID");
+        return;
+    }
+    int filter_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    int uid = u_auth.authenticated ? u_auth.id : 1;
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto f = build_saved_filter_json(conn, filter_id, uid);
+        if (!f) {
+            send_error(worker, header, "404 Not Found", "Saved filter not found");
+            return;
+        }
+        send_json(worker, header, "200 OK", f);
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string cron_schedule = body.get_string("cron_schedule", "0 8 * * 1-5");
+    std::string frequency_label = body.get_string("frequency_label", "Daily (Weekdays 08:00)");
+    std::string recipient_scope = body.get_string("recipient_scope", "self");
+    bool email_empty = body.get_bool("email_empty", false);
+
+    try {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare(R"SQL(
+            INSERT INTO filter_subscriptions (filter_id, user_id, cron_schedule, frequency_label, recipient_scope, email_empty, is_active, last_run_at)
+            VALUES (?, ?, ?, ?, ?, ?, 1, datetime('now'));
+        )SQL");
+        ins.bind_int(1, filter_id);
+        ins.bind_int(2, uid);
+        ins.bind_text(3, cron_schedule);
+        ins.bind_text(4, frequency_label);
+        ins.bind_text(5, recipient_scope);
+        ins.bind_int(6, email_empty ? 1 : 0);
+        ins.step_done();
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    send_json(worker, header, "201 Created", build_saved_filter_json(conn, filter_id, uid));
+}
+
+// DELETE /api/filter-subscriptions/([0-9]+)
+static void handle_delete_filter_subscription(backend::wsworker *worker,
+                                              const std::map<std::string, std::string> &header,
+                                              const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing subscription ID");
+        return;
+    }
+    int sub_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    db::sqlite_transaction tx(conn);
+    auto del = conn.prepare("DELETE FROM filter_subscriptions WHERE id = ?;");
+    del.bind_int(1, sub_id);
+    del.step_done();
+    tx.commit();
+
+    auto res = json::json_value::make_object();
+    res.add_bool("deleted", true);
+    send_json(worker, header, "200 OK", res);
+}
+
 // GET /api/items & POST /api/items
 static void handle_items(backend::wsworker *worker,
                          const std::map<std::string, std::string> &header,
@@ -5108,7 +6046,29 @@ static void handle_items(backend::wsworker *worker,
             bind_vals.push_back(pattern);
         }
 
-        sql += " ORDER BY w.board_order ASC, w.id ASC;";
+        std::string order_by_clause = "w.board_order ASC, w.id ASC";
+        if (!args["jql"].empty()) {
+            try {
+                auto u_auth = get_authenticated_user(conn, worker, header);
+                auto ast = jql::JqlParser::parse_query(args["jql"]);
+                jql::SqlContext ctx(conn,
+                                    u_auth.authenticated ? u_auth.id : 1,
+                                    u_auth.authenticated ? u_auth.username : "admin",
+                                    u_auth.authenticated ? u_auth.display_name : "System Administrator");
+                sql += " AND (" + ast.to_where_sql(ctx) + ") ";
+                for (const auto &p : ctx.params) {
+                    bind_vals.push_back(p);
+                }
+                if (!ast.order_by.empty()) {
+                    order_by_clause = ast.to_order_by_sql(ctx);
+                }
+            } catch (const std::exception &ex) {
+                send_error(worker, header, "400 Bad Request", ex.what());
+                return;
+            }
+        }
+
+        sql += " ORDER BY " + order_by_clause + ";";
         auto stmt = conn.prepare(sql);
         for (size_t i = 0; i < bind_vals.size(); ++i) {
             stmt.bind_text(static_cast<int>(i + 1), bind_vals[i]);
@@ -6505,6 +7465,14 @@ int main(int argc, char *argv[]) {
         {"^/api/workflow-transition-rules/([0-9]+)$", backend::DELETE,              handle_delete_workflow_transition_rule},
         {"^/api/workflow-schemes$",                 backend::GET | backend::POST,   handle_workflow_schemes     },
         {"^/api/workflow-schemes/([0-9]+)$",        backend::DELETE,                handle_delete_workflow_scheme},
+        {"^/api/search/jql$",                       backend::GET | backend::POST,   handle_search_jql           },
+        {"^/api/search/validate$",                  backend::POST,                  handle_search_validate      },
+        {"^/api/search/suggestions$",               backend::GET,                   handle_search_suggestions   },
+        {"^/api/filters$",                          backend::GET | backend::POST,   handle_saved_filters        },
+        {"^/api/filters/([0-9]+)$",                 backend::GET | backend::PUT | backend::DELETE, handle_saved_filter_detail},
+        {"^/api/filters/([0-9]+)/star$",            backend::POST,                  handle_saved_filter_star    },
+        {"^/api/filters/([0-9]+)/subscriptions$",   backend::GET | backend::POST,   handle_filter_subscriptions },
+        {"^/api/filter-subscriptions/([0-9]+)$",    backend::DELETE,                handle_delete_filter_subscription},
         {"^/api/sprints$",                          backend::GET | backend::POST,   handle_sprints              },
         {"^/api/sprints/([0-9]+)$",                 backend::PUT | backend::DELETE, handle_sprint_detail        },
         {"^/api/sprints/([0-9]+)/current$",         backend::POST,                  handle_sprint_set_current   },

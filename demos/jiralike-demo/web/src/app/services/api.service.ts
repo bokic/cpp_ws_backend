@@ -8,11 +8,15 @@ import {
   IssueTypeDef,
   IssueTypeScheme,
   ItemTransitionsPayload,
+  JqlSearchResponse,
+  JqlSuggestions,
+  JqlValidateResponse,
   Project,
   ProjectComponent,
   ProjectVersion,
   ReleaseNotesResponse,
   Resolution,
+  SavedFilter,
   ScreenDef,
   ScreenScheme,
   ScreenTab,
@@ -55,6 +59,7 @@ export class ApiService {
   readonly screenSchemes = signal<ScreenScheme[]>([]);
   readonly workflows = signal<WorkflowDef[]>([]);
   readonly workflowSchemes = signal<WorkflowSchemeBinding[]>([]);
+  readonly savedFilters = signal<SavedFilter[]>([]);
   readonly currentSprint = computed<Sprint | null>(() => {
     const list = this.sprints();
     return (
@@ -192,6 +197,7 @@ export class ApiService {
       ssList,
       wfList,
       wfsList,
+      sfList,
     ] = await Promise.all([
       this.getProjects(),
       this.getUsers(),
@@ -207,6 +213,7 @@ export class ApiService {
       this.getScreenSchemes().catch(() => [] as ScreenScheme[]),
       this.getWorkflows().catch(() => [] as WorkflowDef[]),
       this.getWorkflowSchemes().catch(() => [] as WorkflowSchemeBinding[]),
+      this.getSavedFilters().catch(() => [] as SavedFilter[]),
     ]);
     this.projects.set(projs);
     if (projs.length > 0 && !this.activeProject()) {
@@ -225,6 +232,7 @@ export class ApiService {
     this.screenSchemes.set(ssList);
     this.workflows.set(wfList);
     this.workflowSchemes.set(wfsList);
+    this.savedFilters.set(sfList);
   }
 
   async getResolutions(): Promise<Resolution[]> {
@@ -939,5 +947,111 @@ export class ApiService {
 
   async deleteAttachment(attachmentId: number): Promise<void> {
     await this.request(`/api/attachments/${attachmentId}`, { method: 'DELETE' });
+  }
+
+  // JQL Search & Saved Filters API
+  async searchJql(jql: string, limit = 200, offset = 0): Promise<JqlSearchResponse> {
+    return this.request<JqlSearchResponse>('/api/search/jql', {
+      method: 'POST',
+      body: JSON.stringify({ jql, limit, offset }),
+    });
+  }
+
+  async validateJql(jql: string): Promise<JqlValidateResponse> {
+    return this.request<JqlValidateResponse>('/api/search/validate', {
+      method: 'POST',
+      body: JSON.stringify({ jql }),
+    });
+  }
+
+  async getJqlSuggestions(): Promise<JqlSuggestions> {
+    return this.request<JqlSuggestions>('/api/search/suggestions');
+  }
+
+  getJqlExportUrl(jql: string, format: 'csv' | 'markdown' | 'html'): string {
+    const params = new URLSearchParams();
+    params.set('jql', jql);
+    params.set('format', format);
+    if (this.token()) {
+      params.set('token', this.token());
+    }
+    return `/api/search/jql?${params.toString()}`;
+  }
+
+  async getSavedFilters(): Promise<SavedFilter[]> {
+    return this.request<SavedFilter[]>('/api/filters');
+  }
+
+  async createSavedFilter(payload: {
+    name: string;
+    description: string;
+    jql_query: string;
+    is_favorite?: boolean;
+    share_type?: string;
+    share_target?: string;
+    view_columns?: string;
+  }): Promise<SavedFilter> {
+    const f = await this.request<SavedFilter>('/api/filters', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    this.savedFilters.set(await this.getSavedFilters());
+    return f;
+  }
+
+  async updateSavedFilter(
+    filterId: number,
+    payload: {
+      name: string;
+      description: string;
+      jql_query: string;
+      is_favorite?: boolean;
+      share_type?: string;
+      share_target?: string;
+      view_columns?: string;
+    }
+  ): Promise<SavedFilter> {
+    const f = await this.request<SavedFilter>(`/api/filters/${filterId}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    this.savedFilters.set(await this.getSavedFilters());
+    return f;
+  }
+
+  async deleteSavedFilter(filterId: number): Promise<void> {
+    await this.request(`/api/filters/${filterId}`, { method: 'DELETE' });
+    this.savedFilters.set(await this.getSavedFilters());
+  }
+
+  async toggleSavedFilterStar(filterId: number): Promise<SavedFilter> {
+    const f = await this.request<SavedFilter>(`/api/filters/${filterId}/star`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    this.savedFilters.set(await this.getSavedFilters());
+    return f;
+  }
+
+  async createFilterSubscription(
+    filterId: number,
+    payload: {
+      cron_schedule: string;
+      frequency_label: string;
+      recipient_scope: string;
+      email_empty?: boolean;
+    }
+  ): Promise<SavedFilter> {
+    const f = await this.request<SavedFilter>(`/api/filters/${filterId}/subscriptions`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    this.savedFilters.set(await this.getSavedFilters());
+    return f;
+  }
+
+  async deleteFilterSubscription(subId: number): Promise<void> {
+    await this.request(`/api/filter-subscriptions/${subId}`, { method: 'DELETE' });
+    this.savedFilters.set(await this.getSavedFilters());
   }
 }
