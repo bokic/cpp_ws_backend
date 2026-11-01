@@ -182,7 +182,6 @@ demos/jiralike-demo/
 ├── dev-gateway.js              # Node.js HTTP gateway (serves SPA + proxies /api to FastCGI)
 ├── CMakeLists.txt              # CMake build configuration for C++ backend
 ├── README.md                   # This documentation
-├── TODO.md                     # Roadmap and completed 20-step execution plan
 ├── main.cpp                    # FastCGI entry point, middleware & route definitions
 ├── db/
 │   ├── schema.sql              # Base schema definition
