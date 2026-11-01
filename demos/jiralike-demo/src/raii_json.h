@@ -163,6 +163,10 @@ public:
         val.release();
     }
 
+    void add_string(const std::string &val) {
+        add(make_string(val));
+    }
+
     bool has_key(const char *key) const noexcept {
         if (!m_obj || !json_object_is_type(m_obj, json_type_object)) return false;
         json_object *field = nullptr;

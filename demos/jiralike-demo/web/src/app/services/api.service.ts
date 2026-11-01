@@ -22,11 +22,13 @@ import {
   CycleTimeReport,
   Dashboard,
   DashboardGadget,
+  DevelopmentInfo,
   DurationParseResponse,
   EpicReport,
   EpicSummaryItem,
   FieldConfiguration,
   GadgetCatalogItem,
+  GitRepository,
   InAppNotification,
   IssueSecurityGrant,
   IssueSecurityLevel,
@@ -56,6 +58,7 @@ import {
   ScreenScheme,
   ScreenTab,
   SetupStatus,
+  SmartCommitSimulationResult,
   SmtpConfig,
   Sprint,
   TimeRollup,
@@ -119,6 +122,7 @@ export class ApiService {
   readonly totalUnreadActivityCount = computed<number>(() => {
     return this.unreadMentionsCount() + this.unreadNotificationsCount();
   });
+  readonly vcsRepositories = signal<GitRepository[]>([]);
   readonly currentSprint = computed<Sprint | null>(() => {
     const list = this.sprints();
     return (
@@ -2232,6 +2236,97 @@ export class ApiService {
     return this.request<{ ok: boolean; email_id: number; status: string }>('/api/smtp/test', {
       method: 'POST',
       body: JSON.stringify({ to_email: toEmail, subject, message }),
+    });
+  }
+
+  // ============================================================================
+  // Step 14: Developer Tooling & Git Integration (Smart Commits & Dev Panel)
+  // ============================================================================
+
+  async getItemDevelopment(itemRef: string | number): Promise<DevelopmentInfo> {
+    return this.request<DevelopmentInfo>(`/api/items/${itemRef}/development`);
+  }
+
+  async linkItemDevelopment(itemRef: string | number, payload: any): Promise<DevelopmentInfo> {
+    return this.request<DevelopmentInfo>(`/api/items/${itemRef}/development/link`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async unlinkItemDevelopment(
+    itemRef: string | number,
+    type: 'commits' | 'branches' | 'pull-requests' | 'builds' | string,
+    devId: number
+  ): Promise<{ deleted: boolean }> {
+    return this.request<{ deleted: boolean }>(`/api/items/${itemRef}/development/${type}/${devId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getVcsRepositories(): Promise<GitRepository[]> {
+    const repos = await this.request<GitRepository[]>('/api/vcs/repositories');
+    this.vcsRepositories.set(repos);
+    return repos;
+  }
+
+  async createVcsRepository(payload: {
+    name: string;
+    provider?: string;
+    repo_url?: string;
+    webhook_secret?: string;
+    is_active?: boolean;
+  }): Promise<GitRepository> {
+    const r = await this.request<GitRepository>('/api/vcs/repositories', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    await this.getVcsRepositories();
+    return r;
+  }
+
+  async updateVcsRepository(id: number, payload: Partial<GitRepository>): Promise<GitRepository> {
+    const r = await this.request<GitRepository>(`/api/vcs/repositories/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    await this.getVcsRepositories();
+    return r;
+  }
+
+  async deleteVcsRepository(id: number): Promise<void> {
+    await this.request(`/api/vcs/repositories/${id}`, { method: 'DELETE' });
+    await this.getVcsRepositories();
+  }
+
+  async simulateSmartCommit(payload: {
+    message: string;
+    author_email?: string;
+    author_name?: string;
+    repository_name?: string;
+    execute?: boolean;
+  }): Promise<SmartCommitSimulationResult> {
+    return this.request<SmartCommitSimulationResult>('/api/vcs/smart-commits/simulate', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async sendDirectVcsCommits(payload: {
+    repository: string;
+    commits: Array<{
+      hash?: string;
+      id?: string;
+      message: string;
+      author_name?: string;
+      author_email?: string;
+      url?: string;
+      timestamp?: string;
+    }>;
+  }): Promise<{ success: boolean; commits_processed: number; actions: string[] }> {
+    return this.request<{ success: boolean; commits_processed: number; actions: string[] }>('/api/vcs/commits', {
+      method: 'POST',
+      body: JSON.stringify(payload),
     });
   }
 }

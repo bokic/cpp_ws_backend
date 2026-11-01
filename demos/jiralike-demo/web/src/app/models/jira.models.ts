@@ -537,6 +537,7 @@ export interface WorkItemDetail extends WorkItem {
   changelog?: WorkItemChangelog[];
   watchers_info?: WatchersPayload;
   votes_info?: VotesPayload;
+  development?: DevelopmentInfo;
 }
 
 export type CustomFieldType =
@@ -1414,6 +1415,120 @@ export interface OutboundEmail {
   sent_at?: string;
   created_at: string;
 }
+
+// Step 14: Developer Tooling & Git Integration Models
+export interface GitBranchItem {
+  id: number;
+  work_item_id: number;
+  repository_id?: number;
+  repository_name: string;
+  branch_name: string;
+  branch_url?: string;
+  last_commit_hash?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GitCommitItem {
+  id: number;
+  work_item_id: number;
+  repository_id?: number;
+  repository_name: string;
+  commit_hash: string;
+  short_hash: string;
+  message: string;
+  author_name: string;
+  author_email: string;
+  commit_url?: string;
+  committed_at: string;
+  created_at: string;
+}
+
+export interface GitPullRequestItem {
+  id: number;
+  work_item_id: number;
+  repository_id?: number;
+  repository_name: string;
+  pr_number: number;
+  title: string;
+  source_branch: string;
+  target_branch: string;
+  status: 'OPEN' | 'MERGED' | 'DECLINED' | 'CLOSED';
+  author_name: string;
+  author_email: string;
+  pr_url?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GitBuildItem {
+  id: number;
+  work_item_id: number;
+  repository_id?: number;
+  repository_name: string;
+  pipeline_id: string;
+  build_number: string;
+  status: 'SUCCESS' | 'FAILED' | 'IN_PROGRESS' | 'CANCELLED';
+  commit_hash?: string;
+  branch_name?: string;
+  build_url?: string;
+  duration_seconds: number;
+  started_at: string;
+  finished_at?: string;
+  created_at: string;
+}
+
+export interface DevelopmentInfo {
+  work_item_id: number;
+  branches_count: number;
+  commits_count: number;
+  pull_requests_count: number;
+  builds_count: number;
+  branches: GitBranchItem[];
+  commits: GitCommitItem[];
+  pull_requests: GitPullRequestItem[];
+  builds: GitBuildItem[];
+}
+
+export interface GitRepository {
+  id: number;
+  name: string;
+  provider: 'github' | 'gitlab' | 'bitbucket' | 'gitea' | 'custom';
+  repo_url: string;
+  webhook_secret: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  branches_count?: number;
+  commits_count?: number;
+  prs_count?: number;
+  builds_count?: number;
+}
+
+export interface SmartCommitParsedCommand {
+  raw_command: string;
+  type: 'comment' | 'time' | 'transition';
+  comment_body?: string;
+  time_seconds?: number;
+  formatted_duration?: string;
+  time_comment?: string;
+  target_status?: string;
+}
+
+export interface SmartCommitSimulationResult {
+  commit_hash: string;
+  short_hash: string;
+  author_name: string;
+  author_email: string;
+  resolved_user_id: number;
+  resolved_user_name: string;
+  matched_keys: string[];
+  parsed_commands: SmartCommitParsedCommand[];
+  applied_actions?: string[];
+  errors?: string[];
+  executed: boolean;
+}
+
 
 
 

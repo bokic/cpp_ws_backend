@@ -3121,6 +3121,297 @@ input:focus, select:focus, textarea:focus {
   border: 1px solid #dfe1e6;
 }
 
+/* ============================================================================
+   Step 14: Developer Tooling & Git Integration (Smart Commits & Dev Panel)
+   ============================================================================ */
+.dev-sidebar-panel {
+  background: #ffffff;
+  border: 1px solid #dfe1e6;
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+
+.dev-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.dev-header h3 {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #172b4d;
+}
+
+.dev-quick-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.btn-subtle {
+  background: #f4f5f7;
+  border: 1px solid #dfe1e6;
+  color: #42526e;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-subtle:hover {
+  background: #ebecf0;
+  color: #091e42;
+}
+
+.dev-rollup-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.dev-stat-box {
+  background: #f4f5f7;
+  border: 1px solid #ebecf0;
+  border-radius: 6px;
+  padding: 8px 4px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.dev-stat-box:hover {
+  background: #ebecf0;
+  border-color: #c1c7d0;
+}
+
+.dev-stat-val {
+  font-size: 16px;
+  font-weight: 700;
+  color: #0052cc;
+  line-height: 1.1;
+}
+
+.dev-stat-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: #6b778c;
+  text-transform: uppercase;
+  margin-top: 2px;
+}
+
+.dev-recent-mini {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid #ebecf0;
+}
+
+.dev-mini-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.dev-mini-link {
+  color: #0052cc;
+  text-decoration: none;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dev-mini-link:hover {
+  text-decoration: underline;
+}
+
+.dev-empty-hint {
+  padding: 8px 0;
+  font-size: 11.5px;
+  color: #6b778c;
+  text-align: center;
+}
+
+/* VCS Pills & Badges */
+.commit-hash-pill {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  background: #f4f5f7;
+  border: 1px solid #dfe1e6;
+  border-radius: 3px;
+  padding: 1px 6px;
+  color: #091e42;
+  text-decoration: none;
+}
+
+.commit-hash-pill:hover {
+  background: #ebecf0;
+  color: #0052cc;
+}
+
+.pr-pill {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.pr-pill.open {
+  background: #deebff;
+  color: #0747a6;
+}
+
+.pr-pill.merged {
+  background: #eae6ff;
+  color: #5243aa;
+}
+
+.pr-pill.declined,
+.pr-pill.closed {
+  background: #ffebe6;
+  color: #bf2600;
+}
+
+.build-badge {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.build-badge.success {
+  background: #e3fcef;
+  color: #006644;
+}
+
+.build-badge.failed {
+  background: #ffebe6;
+  color: #bf2600;
+}
+
+.build-badge.in_progress {
+  background: #deebff;
+  color: #0052cc;
+}
+
+.build-badge.cancelled {
+  background: #f4f5f7;
+  color: #505f79;
+}
+
+/* Development Tab Full View */
+.dev-tab-container {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.dev-section-card {
+  background: #ffffff;
+  border: 1px solid #dfe1e6;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.dev-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #f8fafc;
+  padding: 10px 14px;
+  border-bottom: 1px solid #dfe1e6;
+}
+
+.dev-section-header h4 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #172b4d;
+}
+
+.dev-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.dev-table th {
+  text-align: left;
+  padding: 8px 12px;
+  background: #fafbfc;
+  color: #5e6c84;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  border-bottom: 1px solid #ebecf0;
+}
+
+.dev-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #ebecf0;
+  color: #172b4d;
+  vertical-align: middle;
+}
+
+.dev-table tr:last-child td {
+  border-bottom: none;
+}
+
+.dev-table tr:hover td {
+  background: #f4f5f7;
+}
+
+.dev-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.btn-unlink {
+  background: transparent;
+  border: none;
+  color: #a5b2c6;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 3px;
+  transition: all 0.15s;
+}
+
+.btn-unlink:hover {
+  background: #ffebe6;
+  color: #de350b;
+}
+
+.smart-cmd-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  background: #e6fcff;
+  color: #008da6;
+  border: 1px solid #b3f5ff;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  margin: 0 2px;
+}
+
+
 
 
 

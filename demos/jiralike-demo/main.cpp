@@ -15,6 +15,7 @@
 #include "src/collaboration_engine.h"
 #include "src/security_engine.h"
 #include "src/automation_engine.h"
+#include "src/vcs_engine.h"
 
 #include <algorithm>
 #include <atomic>
@@ -8439,6 +8440,9 @@ static void handle_item_detail(backend::wsworker *worker,
         item.add_bool("has_voted", votes_obj.get_bool("has_voted"));
         item.add("votes_info", std::move(votes_obj));
 
+        // Step 14: Developer tooling & git integration
+        item.add("development", vcs::get_item_development_summary(conn, item_id));
+
         send_json(worker, header, "200 OK", item);
         return;
     }
@@ -14502,6 +14506,899 @@ static void handle_smtp_test(backend::wsworker *worker,
     send_json(worker, header, "200 OK", res);
 }
 
+// ============================================================================
+// Step 14: Developer Tooling & Git Integration (Smart Commits & Dev Panel)
+// ============================================================================
+
+// GET /api/items/([A-Za-z0-9_-]+)/development
+static void handle_item_development(backend::wsworker *worker,
+                                    const std::map<std::string, std::string> &header,
+                                    const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing item ID or key");
+        return;
+    }
+    auto conn = acquire_db_connection();
+    int item_id = resolve_work_item_id(conn, uri_params.front());
+    if (item_id <= 0) {
+        send_error(worker, header, "404 Not Found", "Work item not found");
+        return;
+    }
+
+    auto u_viewer = get_authenticated_user(conn, worker, header);
+    int proj_id = 0, sec_id = 0, rep_id = 0, ass_id = 0;
+    {
+        auto info_stmt = conn.prepare("SELECT project_id, COALESCE(security_level_id, 0), COALESCE(reporter_id, 0), COALESCE(assignee_id, 0) FROM work_items WHERE id = ?;");
+        info_stmt.bind_int(1, item_id);
+        if (info_stmt.step() == SQLITE_ROW) {
+            proj_id = info_stmt.column_int(0);
+            sec_id = info_stmt.column_int(1);
+            rep_id = info_stmt.column_int(2);
+            ass_id = info_stmt.column_int(3);
+        }
+    }
+    if (sec_id > 0 && !security::can_access_security_level(conn, u_viewer.id, proj_id, sec_id, rep_id, ass_id)) {
+        send_error(worker, header, "403 Forbidden", "You do not have permission to access this secured issue");
+        return;
+    }
+    if (u_viewer.authenticated && !security::has_permission(conn, u_viewer.id, proj_id, "BROWSE_PROJECT", rep_id, ass_id)) {
+        send_error(worker, header, "403 Forbidden", "You do not have BROWSE_PROJECT permission for this project");
+        return;
+    }
+
+    auto dev_summary = vcs::get_item_development_summary(conn, item_id);
+    send_json(worker, header, "200 OK", dev_summary);
+}
+
+// POST /api/items/([A-Za-z0-9_-]+)/development/link
+static void handle_item_development_link(backend::wsworker *worker,
+                                         const std::map<std::string, std::string> &header,
+                                         const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing item ID or key");
+        return;
+    }
+    auto conn = acquire_db_connection();
+    int item_id = resolve_work_item_id(conn, uri_params.front());
+    if (item_id <= 0) {
+        send_error(worker, header, "404 Not Found", "Work item not found");
+        return;
+    }
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON payload");
+        return;
+    }
+
+    std::string type = body.get_string("type");
+    std::string repo_name = body.get_string("repository_name", "main-repo");
+    int repo_id = body.get_int("repository_id", 0);
+
+    if (type == "commit") {
+        std::string commit_hash = body.get_string("commit_hash");
+        if (commit_hash.empty()) {
+            send_error(worker, header, "400 Bad Request", "Commit hash is required");
+            return;
+        }
+        std::string msg = body.get_string("message");
+        std::string author_name = body.get_string("author_name", u_auth.display_name);
+        std::string author_email = body.get_string("author_email", u_auth.email);
+        std::string commit_url = body.get_string("commit_url");
+        std::string committed_at = body.get_string("committed_at");
+        bool exec_smart = body.get_bool("execute_smart_commits", true);
+
+        std::string short_hash = commit_hash.size() > 7 ? commit_hash.substr(0, 7) : commit_hash;
+        vcs::record_commit(conn, item_id, repo_id, repo_name, commit_hash, short_hash, msg, author_name, author_email, commit_url, committed_at);
+
+        if (exec_smart) {
+            std::string item_key;
+            {
+                auto kq = conn.prepare("SELECT key FROM work_items WHERE id = ?;");
+                kq.bind_int(1, item_id);
+                if (kq.step() == SQLITE_ROW) item_key = kq.column_str(0);
+            }
+            auto cmds = vcs::parse_smart_commands(msg);
+            std::vector<std::string> applied, errs;
+            vcs::apply_smart_commit(conn, item_id, item_key, u_auth.id, short_hash, cmds, applied, errs);
+        }
+    } else if (type == "branch") {
+        std::string branch_name = body.get_string("branch_name", body.get_string("name"));
+        if (branch_name.empty()) {
+            send_error(worker, header, "400 Bad Request", "Branch name is required");
+            return;
+        }
+        std::string branch_url = body.get_string("branch_url", body.get_string("url"));
+        std::string last_commit = body.get_string("last_commit_hash");
+        vcs::record_branch(conn, item_id, repo_id, repo_name, branch_name, branch_url, last_commit);
+    } else if (type == "pull_request" || type == "pr") {
+        int pr_number = body.get_int("pr_number", 1);
+        std::string title = body.get_string("title");
+        std::string src = body.get_string("source_branch");
+        std::string tgt = body.get_string("target_branch", "main");
+        std::string status = body.get_string("status", "OPEN");
+        std::string author_name = body.get_string("author_name", u_auth.display_name);
+        std::string author_email = body.get_string("author_email", u_auth.email);
+        std::string pr_url = body.get_string("pr_url", body.get_string("url"));
+        vcs::record_pull_request(conn, item_id, repo_id, repo_name, pr_number, title, src, tgt, status, author_name, author_email, pr_url);
+    } else if (type == "build") {
+        std::string pipeline_id = body.get_string("pipeline_id", "CI");
+        std::string build_number = body.get_string("build_number", "1");
+        std::string status = body.get_string("status", "SUCCESS");
+        std::string commit_hash = body.get_string("commit_hash");
+        std::string branch_name = body.get_string("branch_name");
+        std::string build_url = body.get_string("build_url", body.get_string("url"));
+        int dur = body.get_int("duration_seconds", 0);
+        vcs::record_build(conn, item_id, repo_id, repo_name, pipeline_id, build_number, status, commit_hash, branch_name, build_url, dur);
+    } else {
+        send_error(worker, header, "400 Bad Request", "Invalid development entity type. Expected commit, branch, pull_request, or build.");
+        return;
+    }
+
+    send_json(worker, header, "201 Created", vcs::get_item_development_summary(conn, item_id));
+}
+
+// DELETE /api/items/([A-Za-z0-9_-]+)/development/([a-zA-Z_-]+)/([0-9]+)
+static void handle_item_development_unlink(backend::wsworker *worker,
+                                           const std::map<std::string, std::string> &header,
+                                           const std::list<std::string> &uri_params) {
+    if (uri_params.size() < 3) {
+        send_error(worker, header, "400 Bad Request", "Missing parameters");
+        return;
+    }
+    auto it = uri_params.begin();
+    std::string item_ref = *it++;
+    std::string entity_type = *it++;
+    int entity_id = std::atoi((*it).c_str());
+
+    auto conn = acquire_db_connection();
+    int item_id = resolve_work_item_id(conn, item_ref);
+    if (item_id <= 0) {
+        send_error(worker, header, "404 Not Found", "Work item not found");
+        return;
+    }
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    db::sqlite_transaction tx(conn);
+    if (entity_type == "commits" || entity_type == "commit") {
+        auto d = conn.prepare("DELETE FROM git_commits WHERE id = ? AND work_item_id = ?;");
+        d.bind_int(1, entity_id);
+        d.bind_int(2, item_id);
+        d.step_done();
+    } else if (entity_type == "branches" || entity_type == "branch") {
+        auto d = conn.prepare("DELETE FROM git_branches WHERE id = ? AND work_item_id = ?;");
+        d.bind_int(1, entity_id);
+        d.bind_int(2, item_id);
+        d.step_done();
+    } else if (entity_type == "pull-requests" || entity_type == "pull_requests" || entity_type == "prs" || entity_type == "pr") {
+        auto d = conn.prepare("DELETE FROM git_pull_requests WHERE id = ? AND work_item_id = ?;");
+        d.bind_int(1, entity_id);
+        d.bind_int(2, item_id);
+        d.step_done();
+    } else if (entity_type == "builds" || entity_type == "build") {
+        auto d = conn.prepare("DELETE FROM git_builds WHERE id = ? AND work_item_id = ?;");
+        d.bind_int(1, entity_id);
+        d.bind_int(2, item_id);
+        d.step_done();
+    } else {
+        send_error(worker, header, "400 Bad Request", "Unknown entity type for unlinking");
+        return;
+    }
+    tx.commit();
+
+    auto res = json::json_value::make_object();
+    res.add_bool("deleted", true);
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET | POST /api/vcs/repositories
+static void handle_vcs_repositories(backend::wsworker *worker,
+                                    const std::map<std::string, std::string> &header,
+                                    const std::list<std::string> &) {
+    std::string method = get_header(header, "REQUEST_METHOD");
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+
+    if (method == "GET") {
+        auto stmt = conn.prepare(R"SQL(
+            SELECT r.id, r.name, r.provider, r.repo_url, r.webhook_secret, r.is_active, r.created_at, r.updated_at,
+                   (SELECT COUNT(*) FROM git_branches b WHERE b.repository_id = r.id OR b.repository_name = r.name) AS branches_count,
+                   (SELECT COUNT(*) FROM git_commits c WHERE c.repository_id = r.id OR c.repository_name = r.name) AS commits_count,
+                   (SELECT COUNT(*) FROM git_pull_requests p WHERE p.repository_id = r.id OR p.repository_name = r.name) AS prs_count,
+                   (SELECT COUNT(*) FROM git_builds bd WHERE bd.repository_id = r.id OR bd.repository_name = r.name) AS builds_count
+            FROM git_repositories r
+            ORDER BY r.id DESC;
+        )SQL");
+
+        auto arr = json::json_value::make_array();
+        while (stmt.step() == SQLITE_ROW) {
+            auto obj = json::json_value::make_object();
+            obj.add_int("id", stmt.column_int(0));
+            obj.add_str("name", stmt.column_str(1));
+            obj.add_str("provider", stmt.column_str(2));
+            obj.add_str("repo_url", stmt.column_str(3));
+            obj.add_str("webhook_secret", stmt.column_str(4));
+            obj.add_bool("is_active", stmt.column_int(5) != 0);
+            obj.add_str("created_at", stmt.column_str(6));
+            obj.add_str("updated_at", stmt.column_str(7));
+            obj.add_int("branches_count", stmt.column_int(8));
+            obj.add_int("commits_count", stmt.column_int(9));
+            obj.add_int("prs_count", stmt.column_int(10));
+            obj.add_int("builds_count", stmt.column_int(11));
+            arr.add(std::move(obj));
+        }
+        send_json(worker, header, "200 OK", arr);
+        return;
+    }
+
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Administrator privileges required to register repositories");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string name = body.get_string("name");
+    std::string provider = body.get_string("provider", "github");
+    std::string repo_url = body.get_string("repo_url");
+    std::string secret = body.get_string("webhook_secret");
+    bool is_active = body.get_bool("is_active", true);
+
+    if (name.empty()) {
+        send_error(worker, header, "400 Bad Request", "Repository name is required");
+        return;
+    }
+    if (secret.empty()) {
+        secret = utils::generate_random_hex(16);
+    }
+
+    db::sqlite_transaction tx(conn);
+    auto ins = conn.prepare("INSERT INTO git_repositories (name, provider, repo_url, webhook_secret, is_active) VALUES (?, ?, ?, ?, ?);");
+    ins.bind_text(1, name);
+    ins.bind_text(2, provider);
+    ins.bind_text(3, repo_url);
+    ins.bind_text(4, secret);
+    ins.bind_int(5, is_active ? 1 : 0);
+    ins.step_done();
+    int new_id = static_cast<int>(conn.last_insert_rowid());
+    tx.commit();
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", new_id);
+    res.add_str("name", name);
+    res.add_str("provider", provider);
+    res.add_str("repo_url", repo_url);
+    res.add_str("webhook_secret", secret);
+    res.add_bool("is_active", is_active);
+    send_json(worker, header, "201 Created", res);
+}
+
+// GET | PUT | DELETE /api/vcs/repositories/([0-9]+)
+static void handle_vcs_repository_detail(backend::wsworker *worker,
+                                         const std::map<std::string, std::string> &header,
+                                         const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing repository ID");
+        return;
+    }
+    int rid = std::atoi(uri_params.front().c_str());
+    std::string method = get_header(header, "REQUEST_METHOD");
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+
+    if (method == "GET") {
+        auto stmt = conn.prepare("SELECT id, name, provider, repo_url, webhook_secret, is_active, created_at, updated_at FROM git_repositories WHERE id = ?;");
+        stmt.bind_int(1, rid);
+        if (stmt.step() != SQLITE_ROW) {
+            send_error(worker, header, "404 Not Found", "Repository not found");
+            return;
+        }
+        auto obj = json::json_value::make_object();
+        obj.add_int("id", stmt.column_int(0));
+        obj.add_str("name", stmt.column_str(1));
+        obj.add_str("provider", stmt.column_str(2));
+        obj.add_str("repo_url", stmt.column_str(3));
+        obj.add_str("webhook_secret", stmt.column_str(4));
+        obj.add_bool("is_active", stmt.column_int(5) != 0);
+        obj.add_str("created_at", stmt.column_str(6));
+        obj.add_str("updated_at", stmt.column_str(7));
+        send_json(worker, header, "200 OK", obj);
+        return;
+    }
+
+    if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+        send_error(worker, header, "403 Forbidden", "Administrator privileges required");
+        return;
+    }
+
+    if (method == "DELETE") {
+        db::sqlite_transaction tx(conn);
+        auto del = conn.prepare("DELETE FROM git_repositories WHERE id = ?;");
+        del.bind_int(1, rid);
+        del.step_done();
+        tx.commit();
+
+        auto res = json::json_value::make_object();
+        res.add_bool("deleted", true);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    if (method == "PUT") {
+        auto body = json::json_value::parse(worker->body());
+        if (!body) {
+            send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+            return;
+        }
+        std::string name = body.get_string("name");
+        std::string provider = body.get_string("provider", "github");
+        std::string repo_url = body.get_string("repo_url");
+        std::string secret = body.get_string("webhook_secret");
+        bool is_active = body.get_bool("is_active", true);
+
+        db::sqlite_transaction tx(conn);
+        auto upd = conn.prepare("UPDATE git_repositories SET name = ?, provider = ?, repo_url = ?, webhook_secret = ?, is_active = ?, updated_at = datetime('now') WHERE id = ?;");
+        upd.bind_text(1, name);
+        upd.bind_text(2, provider);
+        upd.bind_text(3, repo_url);
+        upd.bind_text(4, secret);
+        upd.bind_int(5, is_active ? 1 : 0);
+        upd.bind_int(6, rid);
+        upd.step_done();
+        tx.commit();
+
+        auto res = json::json_value::make_object();
+        res.add_int("id", rid);
+        res.add_str("name", name);
+        res.add_str("provider", provider);
+        res.add_str("repo_url", repo_url);
+        res.add_str("webhook_secret", secret);
+        res.add_bool("is_active", is_active);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+}
+
+// POST /api/vcs/smart-commits/simulate
+static void handle_vcs_smart_commits_simulate(backend::wsworker *worker,
+                                              const std::map<std::string, std::string> &header,
+                                              const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string msg = body.get_string("message");
+    std::string author_email = body.get_string("author_email");
+    std::string author_name = body.get_string("author_name");
+    std::string repo_name = body.get_string("repository_name", "simulated-repo");
+    bool execute = body.get_bool("execute", false);
+
+    if (msg.empty()) {
+        send_error(worker, header, "400 Bad Request", "Message is required");
+        return;
+    }
+
+    std::string commit_hash = body.get_string("commit_hash");
+    if (commit_hash.empty()) {
+        commit_hash = utils::generate_random_hex(20);
+    }
+    std::string short_hash = commit_hash.size() > 7 ? commit_hash.substr(0, 7) : commit_hash;
+
+    auto keys = vcs::extract_issue_keys(msg);
+    auto cmds = vcs::parse_smart_commands(msg);
+    int uid = vcs::find_user_by_author(conn, author_email, author_name);
+
+    std::string user_name;
+    {
+        auto uq = conn.prepare("SELECT display_name FROM users WHERE id = ?;");
+        uq.bind_int(1, uid);
+        if (uq.step() == SQLITE_ROW) user_name = uq.column_str(0);
+    }
+
+    auto out = json::json_value::make_object();
+    out.add_str("commit_hash", commit_hash);
+    out.add_str("short_hash", short_hash);
+    out.add_str("author_name", author_name);
+    out.add_str("author_email", author_email);
+    out.add_int("resolved_user_id", uid);
+    out.add_str("resolved_user_name", user_name);
+
+    auto k_arr = json::json_value::make_array();
+    for (const auto &k : keys) k_arr.add_string(k);
+    out.add("matched_keys", std::move(k_arr));
+
+    auto c_arr = json::json_value::make_array();
+    for (const auto &c : cmds) {
+        auto co = json::json_value::make_object();
+        co.add_str("raw_command", c.raw_command);
+        if (c.type == vcs::CommandType::Comment) {
+            co.add_str("type", "comment");
+            co.add_str("comment_body", c.comment_body);
+        } else if (c.type == vcs::CommandType::Time) {
+            co.add_str("type", "time");
+            co.add_int("time_seconds", static_cast<int>(c.time_seconds));
+            co.add_str("formatted_duration", time_tracking::format_seconds_to_duration(c.time_seconds));
+            co.add_str("time_comment", c.time_comment);
+        } else if (c.type == vcs::CommandType::Transition) {
+            co.add_str("type", "transition");
+            co.add_str("target_status", c.target_status);
+        }
+        c_arr.add(std::move(co));
+    }
+    out.add("parsed_commands", std::move(c_arr));
+
+    if (execute) {
+        auto exec_res = vcs::process_commit_event(conn, repo_name, 0, commit_hash, msg, author_name, author_email, "", "");
+        auto act_arr = json::json_value::make_array();
+        for (const auto &a : exec_res.applied_actions) act_arr.add_string(a);
+        out.add("applied_actions", std::move(act_arr));
+
+        auto err_arr = json::json_value::make_array();
+        for (const auto &e : exec_res.errors) err_arr.add_string(e);
+        out.add("errors", std::move(err_arr));
+        out.add_bool("executed", true);
+    } else {
+        out.add_bool("executed", false);
+    }
+
+    send_json(worker, header, "200 OK", out);
+}
+
+// POST /api/vcs/commits (Direct generic commit receiver)
+static void handle_vcs_commits_direct(backend::wsworker *worker,
+                                      const std::map<std::string, std::string> &header,
+                                      const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string repo_name = body.get_string("repository", body.get_string("repository_name", "generic-repo"));
+    int repo_id = body.get_int("repository_id", 0);
+
+    auto commits = body.get_child("commits");
+    int processed = 0;
+    auto actions = json::json_value::make_array();
+
+    if (commits.is_array()) {
+        for (size_t i = 0; i < commits.array_length(); ++i) {
+            auto c = commits.array_get(i);
+            std::string hash = c.get_string("hash", c.get_string("id", c.get_string("commit_hash")));
+            if (hash.empty()) hash = utils::generate_random_hex(20);
+            std::string msg = c.get_string("message");
+            std::string a_name = c.get_string("author_name");
+            std::string a_email = c.get_string("author_email");
+            if (c.has_key("author") && c.get_child("author").is_object()) {
+                auto author_obj = c.get_child("author");
+                if (a_name.empty()) a_name = author_obj.get_string("name");
+                if (a_email.empty()) a_email = author_obj.get_string("email");
+            }
+            std::string url = c.get_string("url", c.get_string("commit_url"));
+            std::string ts = c.get_string("timestamp", c.get_string("committed_at"));
+
+            auto res = vcs::process_commit_event(conn, repo_name, repo_id, hash, msg, a_name, a_email, url, ts);
+            processed++;
+            for (const auto &act : res.applied_actions) {
+                actions.add_string(act);
+            }
+        }
+    } else if (body.has_key("message") || body.has_key("commit_hash") || body.has_key("hash")) {
+        std::string hash = body.get_string("hash", body.get_string("id", body.get_string("commit_hash")));
+        if (hash.empty()) hash = utils::generate_random_hex(20);
+        std::string msg = body.get_string("message");
+        std::string a_name = body.get_string("author_name");
+        std::string a_email = body.get_string("author_email");
+        if (body.has_key("author") && body.get_child("author").is_object()) {
+            auto author_obj = body.get_child("author");
+            if (a_name.empty()) a_name = author_obj.get_string("name");
+            if (a_email.empty()) a_email = author_obj.get_string("email");
+        }
+        std::string url = body.get_string("url", body.get_string("commit_url"));
+        std::string ts = body.get_string("timestamp", body.get_string("committed_at"));
+
+        auto res = vcs::process_commit_event(conn, repo_name, repo_id, hash, msg, a_name, a_email, url, ts);
+        processed++;
+        for (const auto &act : res.applied_actions) {
+            actions.add_string(act);
+        }
+    }
+
+    auto out = json::json_value::make_object();
+    out.add_bool("success", true);
+    out.add_int("commits_processed", processed);
+    out.add("actions", std::move(actions));
+    send_json(worker, header, "200 OK", out);
+}
+
+// POST /api/vcs/github (Inbound GitHub Webhook Handler)
+static void handle_vcs_github_webhook(backend::wsworker *worker,
+                                      const std::map<std::string, std::string> &header,
+                                      const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    std::string event = get_header(header, "HTTP_X_GITHUB_EVENT");
+    if (event.empty()) event = get_header(header, "X_GITHUB_EVENT");
+    if (event.empty()) event = get_header(header, "X-GitHub-Event");
+    if (event.empty()) event = "push";
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string repo_name = "github-repo";
+    if (body.has_key("repository") && body.get_child("repository").is_object()) {
+        const auto &r = body.get_child("repository");
+        repo_name = r.get_string("full_name", r.get_string("name", "github-repo"));
+    }
+
+    int repo_id = 0;
+    {
+        auto rq = conn.prepare("SELECT id FROM git_repositories WHERE LOWER(name) = LOWER(?) LIMIT 1;");
+        rq.bind_text(1, repo_name);
+        if (rq.step() == SQLITE_ROW) repo_id = rq.column_int(0);
+    }
+
+    auto actions = json::json_value::make_array();
+    int commits_count = 0;
+    int branches_count = 0;
+    int prs_count = 0;
+    int builds_count = 0;
+
+    if (event == "push") {
+        std::string ref = body.get_string("ref");
+        std::string branch_name = ref;
+        if (ref.starts_with("refs/heads/")) {
+            branch_name = ref.substr(11);
+        }
+        std::string head_commit = body.get_string("after");
+
+        auto branch_keys = vcs::extract_issue_keys(branch_name);
+        for (const auto &k : branch_keys) {
+            int item_id = resolve_work_item_id(conn, k);
+            if (item_id > 0) {
+                vcs::record_branch(conn, item_id, repo_id, repo_name, branch_name, "", head_commit);
+                branches_count++;
+                actions.add_string("Linked branch " + branch_name + " to " + k);
+            }
+        }
+
+        auto commits = body.get_child("commits");
+        if (commits.is_array()) {
+            for (size_t i = 0; i < commits.array_length(); ++i) {
+                auto c = commits.array_get(i);
+                std::string hash = c.get_string("id");
+                std::string msg = c.get_string("message");
+                std::string a_name, a_email;
+                if (c.has_key("author") && c.get_child("author").is_object()) {
+                    auto a = c.get_child("author");
+                    a_name = a.get_string("name");
+                    a_email = a.get_string("email");
+                }
+                std::string url = c.get_string("url");
+                std::string ts = c.get_string("timestamp");
+
+                auto res = vcs::process_commit_event(conn, repo_name, repo_id, hash, msg, a_name, a_email, url, ts);
+                commits_count++;
+                for (const auto &act : res.applied_actions) actions.add_string(act);
+            }
+        }
+    } else if (event == "pull_request") {
+        if (body.has_key("pull_request") && body.get_child("pull_request").is_object()) {
+            auto pr = body.get_child("pull_request");
+            int pr_number = pr.get_int("number", 1);
+            std::string title = pr.get_string("title");
+            std::string pr_url = pr.get_string("html_url");
+            std::string src_branch, tgt_branch;
+            if (pr.has_key("head") && pr.get_child("head").is_object()) {
+                src_branch = pr.get_child("head").get_string("ref");
+            }
+            if (pr.has_key("base") && pr.get_child("base").is_object()) {
+                tgt_branch = pr.get_child("base").get_string("ref");
+            }
+            bool merged = pr.get_bool("merged", false);
+            std::string state = pr.get_string("state", "open");
+            std::string status = "OPEN";
+            if (merged) status = "MERGED";
+            else if (state == "closed") status = "DECLINED";
+
+            std::string author_name;
+            if (pr.has_key("user") && pr.get_child("user").is_object()) {
+                author_name = pr.get_child("user").get_string("login");
+            }
+
+            auto pr_keys = vcs::extract_issue_keys(title + " " + src_branch);
+            for (const auto &k : pr_keys) {
+                int item_id = resolve_work_item_id(conn, k);
+                if (item_id > 0) {
+                    vcs::record_pull_request(conn, item_id, repo_id, repo_name, pr_number, title, src_branch, tgt_branch, status, author_name, "", pr_url);
+                    prs_count++;
+                    actions.add_string("Linked PR #" + std::to_string(pr_number) + " to " + k);
+                }
+            }
+        }
+    } else if (event == "workflow_run" || event == "check_run") {
+        std::string status = "SUCCESS";
+        std::string head_branch, head_sha, url, pipeline_id = "GitHub Actions";
+        if (body.has_key("workflow_run") && body.get_child("workflow_run").is_object()) {
+            auto wr = body.get_child("workflow_run");
+            pipeline_id = wr.get_string("name", "GitHub Actions");
+            head_branch = wr.get_string("head_branch");
+            head_sha = wr.get_string("head_sha");
+            url = wr.get_string("html_url");
+            std::string conclusion = wr.get_string("conclusion");
+            if (conclusion == "failure") status = "FAILED";
+            else if (conclusion == "cancelled") status = "CANCELLED";
+            else if (conclusion != "success") status = "IN_PROGRESS";
+        }
+        auto b_keys = vcs::extract_issue_keys(head_branch);
+        for (const auto &k : b_keys) {
+            int item_id = resolve_work_item_id(conn, k);
+            if (item_id > 0) {
+                vcs::record_build(conn, item_id, repo_id, repo_name, pipeline_id, "run", status, head_sha, head_branch, url, 120);
+                builds_count++;
+                actions.add_string("Linked build " + status + " to " + k);
+            }
+        }
+    }
+
+    auto out = json::json_value::make_object();
+    out.add_bool("success", true);
+    out.add_str("event", event);
+    out.add_str("repository", repo_name);
+    out.add_int("commits_processed", commits_count);
+    out.add_int("branches_processed", branches_count);
+    out.add_int("pull_requests_processed", prs_count);
+    out.add_int("builds_processed", builds_count);
+    out.add("actions", std::move(actions));
+    send_json(worker, header, "200 OK", out);
+}
+
+// POST /api/vcs/gitlab (Inbound GitLab Webhook Handler)
+static void handle_vcs_gitlab_webhook(backend::wsworker *worker,
+                                      const std::map<std::string, std::string> &header,
+                                      const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    std::string event = get_header(header, "HTTP_X_GITLAB_EVENT");
+    if (event.empty()) event = get_header(header, "X_GITLAB_EVENT");
+    if (event.empty()) event = get_header(header, "X-Gitlab-Event");
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string repo_name = "gitlab-repo";
+    if (body.has_key("project") && body.get_child("project").is_object()) {
+        const auto &p = body.get_child("project");
+        repo_name = p.get_string("path_with_namespace", p.get_string("name", "gitlab-repo"));
+    }
+
+    int repo_id = 0;
+    {
+        auto rq = conn.prepare("SELECT id FROM git_repositories WHERE LOWER(name) = LOWER(?) LIMIT 1;");
+        rq.bind_text(1, repo_name);
+        if (rq.step() == SQLITE_ROW) repo_id = rq.column_int(0);
+    }
+
+    auto actions = json::json_value::make_array();
+    int commits_count = 0;
+    int branches_count = 0;
+    int prs_count = 0;
+    int builds_count = 0;
+
+    std::string obj_kind = body.get_string("object_kind", event);
+    if (obj_kind == "push" || event.find("Push") != std::string::npos) {
+        std::string ref = body.get_string("ref");
+        std::string branch = ref.starts_with("refs/heads/") ? ref.substr(11) : ref;
+        auto b_keys = vcs::extract_issue_keys(branch);
+        for (const auto &k : b_keys) {
+            int item_id = resolve_work_item_id(conn, k);
+            if (item_id > 0) {
+                vcs::record_branch(conn, item_id, repo_id, repo_name, branch, "", body.get_string("after"));
+                branches_count++;
+                actions.add_string("Linked branch " + branch + " to " + k);
+            }
+        }
+
+        auto commits = body.get_child("commits");
+        if (commits.is_array()) {
+            for (size_t i = 0; i < commits.array_length(); ++i) {
+                auto c = commits.array_get(i);
+                std::string hash = c.get_string("id");
+                std::string msg = c.get_string("message");
+                std::string a_name, a_email;
+                if (c.has_key("author") && c.get_child("author").is_object()) {
+                    a_name = c.get_child("author").get_string("name");
+                    a_email = c.get_child("author").get_string("email");
+                }
+                std::string url = c.get_string("url");
+                std::string ts = c.get_string("timestamp");
+
+                auto res = vcs::process_commit_event(conn, repo_name, repo_id, hash, msg, a_name, a_email, url, ts);
+                commits_count++;
+                for (const auto &act : res.applied_actions) actions.add_string(act);
+            }
+        }
+    } else if (obj_kind == "merge_request" || event.find("Merge Request") != std::string::npos) {
+        if (body.has_key("object_attributes") && body.get_child("object_attributes").is_object()) {
+            const auto &mr = body.get_child("object_attributes");
+            int mr_id = mr.get_int("iid", 1);
+            std::string title = mr.get_string("title");
+            std::string src = mr.get_string("source_branch");
+            std::string tgt = mr.get_string("target_branch", "main");
+            std::string state = mr.get_string("state");
+            std::string status = "OPEN";
+            if (state == "merged") status = "MERGED";
+            else if (state == "closed") status = "DECLINED";
+            std::string url = mr.get_string("url");
+
+            auto mr_keys = vcs::extract_issue_keys(title + " " + src);
+            for (const auto &k : mr_keys) {
+                int item_id = resolve_work_item_id(conn, k);
+                if (item_id > 0) {
+                    vcs::record_pull_request(conn, item_id, repo_id, repo_name, mr_id, title, src, tgt, status, "", "", url);
+                    prs_count++;
+                    actions.add_string("Linked MR !" + std::to_string(mr_id) + " to " + k);
+                }
+            }
+        }
+    } else if (obj_kind == "pipeline" || obj_kind == "build" || event.find("Pipeline") != std::string::npos || event.find("Job") != std::string::npos) {
+        if (body.has_key("object_attributes") && body.get_child("object_attributes").is_object()) {
+            const auto &pl = body.get_child("object_attributes");
+            int pl_id = pl.get_int("id", 1);
+            std::string ref = pl.get_string("ref");
+            std::string status = pl.get_string("status", "SUCCESS");
+            if (status == "success") status = "SUCCESS";
+            else if (status == "failed") status = "FAILED";
+            else if (status == "running") status = "IN_PROGRESS";
+            std::string sha = pl.get_string("sha");
+            std::string name = pl.get_string("name", "GitLab CI");
+            int duration = pl.get_int("duration", 0);
+            std::string url = pl.get_string("url");
+
+            std::string c_msg = body.has_key("commit") && body.get_child("commit").is_object() ? body.get_child("commit").get_string("message") : "";
+            auto pl_keys = vcs::extract_issue_keys(ref + " " + c_msg);
+            for (const auto &k : pl_keys) {
+                int item_id = resolve_work_item_id(conn, k);
+                if (item_id > 0) {
+                    vcs::record_build(conn, item_id, repo_id, repo_name, name, std::to_string(pl_id), status, sha, ref, url, duration);
+                    builds_count++;
+                    actions.add_string("Linked pipeline #" + std::to_string(pl_id) + " to " + k);
+                }
+            }
+        }
+    }
+
+    auto out = json::json_value::make_object();
+    out.add_bool("success", true);
+    out.add_str("provider", "gitlab");
+    out.add_str("repository", repo_name);
+    out.add_int("commits_processed", commits_count);
+    out.add_int("branches_processed", branches_count);
+    out.add_int("pull_requests_processed", prs_count);
+    out.add_int("builds_processed", builds_count);
+    out.add("actions", std::move(actions));
+    send_json(worker, header, "200 OK", out);
+}
+
+// POST /api/vcs/bitbucket (Inbound Bitbucket Webhook Handler)
+static void handle_vcs_bitbucket_webhook(backend::wsworker *worker,
+                                         const std::map<std::string, std::string> &header,
+                                         const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    std::string event = get_header(header, "X_EVENT_KEY");
+    if (event.empty()) event = get_header(header, "X-Event-Key");
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string repo_name = "bitbucket-repo";
+    if (body.has_key("repository") && body.get_child("repository").is_object()) {
+        const auto &r = body.get_child("repository");
+        repo_name = r.get_string("full_name", r.get_string("name", "bitbucket-repo"));
+    }
+
+    int repo_id = 0;
+    {
+        auto rq = conn.prepare("SELECT id FROM git_repositories WHERE LOWER(name) = LOWER(?) LIMIT 1;");
+        rq.bind_text(1, repo_name);
+        if (rq.step() == SQLITE_ROW) repo_id = rq.column_int(0);
+    }
+
+    auto actions = json::json_value::make_array();
+    int commits_count = 0;
+    int prs_count = 0;
+
+    if (body.has_key("push") && body.get_child("push").is_object()) {
+        auto p = body.get_child("push");
+        auto changes = p.get_child("changes");
+        if (changes.is_array()) {
+            for (size_t i = 0; i < changes.array_length(); ++i) {
+                auto ch = changes.array_get(i);
+                auto commits = ch.get_child("commits");
+                if (commits.is_array()) {
+                    for (size_t j = 0; j < commits.array_length(); ++j) {
+                        auto c = commits.array_get(j);
+                        std::string hash = c.get_string("hash");
+                        std::string msg = c.get_string("message");
+                        std::string a_name, a_email;
+                        if (c.has_key("author") && c.get_child("author").is_object()) {
+                            a_name = c.get_child("author").get_string("raw");
+                        }
+                        auto res = vcs::process_commit_event(conn, repo_name, repo_id, hash, msg, a_name, a_email, "", "");
+                        commits_count++;
+                        for (const auto &act : res.applied_actions) actions.add_string(act);
+                    }
+                }
+            }
+        }
+    } else if (body.has_key("pullrequest") && body.get_child("pullrequest").is_object()) {
+        auto pr = body.get_child("pullrequest");
+        int pr_id = pr.get_int("id", 1);
+        std::string title = pr.get_string("title");
+        std::string state = pr.get_string("state", "OPEN");
+        std::string src_branch, tgt_branch;
+        if (pr.has_key("source") && pr.get_child("source").is_object() &&
+            pr.get_child("source").has_key("branch") && pr.get_child("source").get_child("branch").is_object()) {
+            src_branch = pr.get_child("source").get_child("branch").get_string("name");
+        }
+        if (pr.has_key("destination") && pr.get_child("destination").is_object() &&
+            pr.get_child("destination").has_key("branch") && pr.get_child("destination").get_child("branch").is_object()) {
+            tgt_branch = pr.get_child("destination").get_child("branch").get_string("name");
+        }
+        auto pr_keys = vcs::extract_issue_keys(title + " " + src_branch);
+        for (const auto &k : pr_keys) {
+            int item_id = resolve_work_item_id(conn, k);
+            if (item_id > 0) {
+                vcs::record_pull_request(conn, item_id, repo_id, repo_name, pr_id, title, src_branch, tgt_branch, state, "", "", "");
+                prs_count++;
+                actions.add_string("Linked PR #" + std::to_string(pr_id) + " to " + k);
+            }
+        }
+    }
+
+    auto out = json::json_value::make_object();
+    out.add_bool("success", true);
+    out.add_str("provider", "bitbucket");
+    out.add_str("repository", repo_name);
+    out.add_int("commits_processed", commits_count);
+    out.add_int("pull_requests_processed", prs_count);
+    out.add("actions", std::move(actions));
+    send_json(worker, header, "200 OK", out);
+}
+
+// POST /api/vcs/gitea (Inbound Gitea Webhook Handler)
+static void handle_vcs_gitea_webhook(backend::wsworker *worker,
+                                     const std::map<std::string, std::string> &header,
+                                     const std::list<std::string> &uri_params) {
+    handle_vcs_github_webhook(worker, header, uri_params);
+}
+
 static constexpr auto DEFAULT_SOCKET_NAME = ":9002";
 static constexpr auto DEFAULT_BACKLOG = 100;
 
@@ -14725,6 +15622,17 @@ int main(int argc, char *argv[]) {
         {"^/api/smtp/config$",                          backend::GET | backend::PUT,    handle_smtp_config          },
         {"^/api/smtp/queue$",                           backend::GET,                   handle_smtp_queue           },
         {"^/api/smtp/test$",                            backend::POST,                  handle_smtp_test            },
+        {"^/api/items/([A-Za-z0-9_-]+)/development$",   backend::GET,                   handle_item_development     },
+        {"^/api/items/([A-Za-z0-9_-]+)/development/link$", backend::POST,               handle_item_development_link},
+        {"^/api/items/([A-Za-z0-9_-]+)/development/([a-zA-Z_-]+)/([0-9]+)$", backend::DELETE, handle_item_development_unlink},
+        {"^/api/vcs/repositories$",                     backend::GET | backend::POST,   handle_vcs_repositories     },
+        {"^/api/vcs/repositories/([0-9]+)$",            backend::GET | backend::PUT | backend::DELETE, handle_vcs_repository_detail},
+        {"^/api/vcs/smart-commits/simulate$",           backend::POST,                  handle_vcs_smart_commits_simulate},
+        {"^/api/vcs/commits$",                          backend::POST,                  handle_vcs_commits_direct   },
+        {"^/api/vcs/github$",                           backend::POST,                  handle_vcs_github_webhook   },
+        {"^/api/vcs/gitlab$",                           backend::POST,                  handle_vcs_gitlab_webhook   },
+        {"^/api/vcs/bitbucket$",                        backend::POST,                  handle_vcs_bitbucket_webhook},
+        {"^/api/vcs/gitea$",                            backend::POST,                  handle_vcs_gitea_webhook    },
     });
 
     server.init(socket_name.c_str(), backlog, worker_num);

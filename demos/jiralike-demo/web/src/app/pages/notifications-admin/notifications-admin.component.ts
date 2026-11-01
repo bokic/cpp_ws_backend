@@ -15,7 +15,7 @@ import {
 @Component({
   selector: 'app-notifications-admin',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink],
+  imports: [CommonModule, FormsModule],
   templateUrl: './notifications-admin.component.html',
   styleUrl: './notifications-admin.component.css',
 })

@@ -18,7 +18,7 @@ This document provides a comprehensive gap analysis and exhaustive development r
 - [10. Epic 9: Rich Text, WYSIWYG Editing & Collaboration](#10-epic-9-rich-text-wysiwyg-editing--collaboration)
 - [11. Epic 10: Security, Granular Permissions & Directory Management](#11-epic-10-security-granular-permissions--directory-management)
 - [12. Epic 11: Notifications, Webhooks & Email Integration](#12-epic-11-notifications-webhooks--email-integration)
-- [13. Epic 12: Developer Tooling & Git Integration (Smart Commits)](#13-epic-12-developer-tooling--git-integration-smart-commits)
+- [13. Epic 12: Developer Tooling & Git Integration (Smart Commits) *(Completed)*](#13-epic-12-developer-tooling--git-integration-smart-commits-completed)
 - [14. Epic 13: Service Management & ITSM Capabilities](#14-epic-13-service-management--itsm-capabilities)
 - [15. Epic 14: User Experience, Theming & Accessibility](#15-epic-14-user-experience-theming--accessibility)
 - [16. Epic 15: C++ Backend Architecture & Infrastructure Enhancements](#16-epic-15-c-backend-architecture--infrastructure-enhancements)
@@ -58,7 +58,7 @@ This document provides a comprehensive gap analysis and exhaustive development r
 | **Rich Text & Mentions** | ADF / Markdown WYSIWYG, `@mentions`, paste images | Plain text strings | **Medium** (WYSIWYG & mentions missing) |
 | **Permission Schemes** | Granular permission schemes, issue security levels | 4 hardcoded role strings | **High** (Granular RBAC missing) |
 | **Notifications & Webhooks** | Notification matrix, outbound webhooks, SMTP | None | **Medium** (Notification engine missing) |
-| **Git / Smart Commits** | Dev panel, commits, PRs, smart commit syntax | None | **Medium** (VCS integration missing) |
+| **Git / Smart Commits** | Dev panel, commits, PRs, smart commit syntax | Full VCS webhooks, dev panel, and smart commit engine | **Complete** (Full Git integration & smart commits) |
 | **Bulk Operations & Admin** | Bulk edit/move/delete, CSV import/export, audit log | Single-item CRUD only | **Medium** (Bulk operations & import missing) |
 
 ---
@@ -500,25 +500,29 @@ This document provides a comprehensive gap analysis and exhaustive development r
 
 ---
 
-## 13. Epic 12: Developer Tooling & Git Integration (Smart Commits)
+## 13. Epic 12: Developer Tooling & Git Integration (Smart Commits) *(Completed)*
 
 ### 13.1 Development Panel in Issue Detail View
-- [ ] **Development Panel Data Model (`git_branches`, `git_commits`, `git_pull_requests`, `git_builds`)**:
+- [x] **Development Panel Data Model (`git_repositories`, `git_branches`, `git_commits`, `git_pull_requests`, `git_builds`)**:
   - Associated Git commits, branch names, pull requests, and CI/CD pipeline statuses.
-  - Status indicators: `OPEN`, `MERGED`, `DECLINED`, `BUILD SUCCESS`, `BUILD FAILED`.
+  - Status indicators: `OPEN`, `MERGED`, `DECLINED`, `SUCCESS`, `FAILED`, `CANCELLED`, `IN_PROGRESS`.
+  - Development summary rollup widget in issue details sidebar and dedicated Development activity tab.
+  - Interactive modal dialogs for manual asset linking and unlinking with real-time counters.
 
 ### 13.2 VCS Webhook Listeners
-- [ ] **Git Provider Webhook Handlers**:
-  - Inbound webhook endpoints for GitHub, GitLab, Bitbucket, and Gitea.
-  - Automatically scan commit messages and pull request titles for issue keys (e.g., `PROJ-101`).
+- [x] **Git Provider Webhook Handlers**:
+  - Inbound webhook endpoints for GitHub (`/api/vcs/github`), GitLab (`/api/vcs/gitlab`), Bitbucket (`/api/vcs/bitbucket`), Gitea (`/api/vcs/gitea`), and direct commits (`/api/vcs/commits`).
+  - Automatically scan commit messages, branch names, and pull request titles for issue keys (e.g., `DEV-101`).
+  - Automatic recording of branches, commits, PR status updates, and CI/CD builds into development schema.
 
 ### 13.3 Smart Commits Engine
-- [ ] **Smart Commit Command Parser**:
-  - Parse commit syntax: `<Issue-Key> #<command> [arguments]`.
+- [x] **Smart Commit Command Parser (`vcs_engine.h`)**:
+  - Parse commit syntax: `<Issue-Key> #<command> [arguments]` with compound command support.
   - Commands:
-    - `#comment <text>`: Append comment to issue.
-    - `#time <duration> [comment]`: Log work directly (e.g. `#time 1h 30m implemented auth check`).
-    - `#<transition-name>`: Transition issue (e.g. `#resolve`, `#close`, `#in-progress`).
+    - `#comment <text>`: Append comment to issue attributed to committer.
+    - `#time <duration> [comment]`: Log work directly (e.g. `#time 1h 30m implemented auth check`) adjusting worklogs and estimation remaining.
+    - `#<transition-name>`: Transition issue (e.g. `#resolve`, `#done`, `#close`, `#in-progress`).
+  - Smart Commit Simulator & Runner modal (`/api/vcs/smart-commits/simulate`) for dry-run preview and direct execution.
 
 ---
 
@@ -885,15 +889,19 @@ flowchart TD
   - [x] Webhooks Configuration Page: Register target URLs, select event subscriptions, and inspect delivery logs.
 - **Verification**: Verified with 8/8 test suites passing in `verify_step13.py`: Creating or commenting on an issue delivers in-app notifications to watchers and queues an outbound email with RFC threading headers (`Message-ID`, `In-Reply-To`, `References`) and HMAC-SHA256 signed webhook payload. Zero regressions across Steps 8-12.
 
-#### Step 14: Developer Tooling & Git Integration (Smart Commits & Dev Panel)
+#### Step 14: Developer Tooling & Git Integration (Smart Commits & Dev Panel) *(Completed)*
 - **Why Next**: Bridges code repositories with Jira work items using time tracking (Step 7) and transitions (Step 4).
 - **Backend Deliverables**:
-  - Database Migration: Create `git_commits`, `git_branches`, `git_pull_requests`.
-  - Inbound Webhook Handlers: Endpoints for GitHub, GitLab, and Bitbucket push/PR events.
-  - Smart Commits Engine: Parse commit commands (e.g., `PROJ-101 #resolve #time 1h 30m #comment Fixed race condition`).
+  - [x] Database Migration: Create `git_repositories`, `git_branches`, `git_commits`, `git_pull_requests`, `git_builds` (v19).
+  - [x] Inbound Webhook Handlers: Endpoints for GitHub (`/api/vcs/github`), GitLab (`/api/vcs/gitlab`), Bitbucket (`/api/vcs/bitbucket`), Gitea (`/api/vcs/gitea`), and direct commits (`/api/vcs/commits`).
+  - [x] Smart Commits Engine: Parse compound commit commands (e.g., `PROJ-101 #resolve #time 1h 30m #comment Fixed race condition`), auto-logging worklogs, transition state, and dispatching event bus.
+  - [x] Smart Commit Simulator: Interactive simulation runner endpoint (`/api/vcs/smart-commits/simulate`) for live dry-run parsing and execution.
+  - [x] Manual Dev Asset Linking & Management: CRUD API endpoints (`/api/items/:id/development`, `/api/items/:id/development/link`, `/api/items/:id/development/:type/:id`).
 - **Frontend Deliverables**:
-  - Development Panel in Work Item Details: Collapsible widget displaying linked branches, commit log, pull requests, and build status badges.
-- **Verification**: Pushing a commit with `#time 45m #comment done` logs work, appends the comment, and links the commit to the issue.
+  - [x] Development Panel in Work Item Details: Collapsible sidebar widget displaying rollup counts (Branches, Commits, Pull Requests, Builds), pill badges, and quick actions.
+  - [x] Dedicated Development Tab in Activity Section: Comprehensive tables listing linked branches, commits, PRs with merge status, and CI/CD builds with build status badges and unlink capabilities.
+  - [x] Interactive Modals: "Link Development Asset" dialog and "⚡ Smart Commit Simulator & Runner" with live preview and direct execution.
+- **Verification**: Verified with 9/9 test suites in `verify_step14.py`: Simulating and executing commits with `#time 45m #comment Fixed edge cases` logs 45m worklog, appends the comment, transitions state via `#done`, processes GitHub/GitLab webhooks linking branches, PRs, and CI/CD builds, and supports manual asset link/unlink. Zero regressions across Steps 10-13.
 
 #### Step 15: ITSM & Service Desk Capabilities (Customer Portal & SLA Engine)
 - **Why Next**: Expands Jira Software into Jira Service Management without altering core engine logic.

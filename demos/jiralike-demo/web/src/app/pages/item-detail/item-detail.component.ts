@@ -11,6 +11,7 @@ import {
   PRIORITIES,
   ScreenDef,
   ScreenTab,
+  SmartCommitSimulationResult,
   TimeRollup,
   WORKFLOW_STATES,
   WORK_ITEM_CATEGORIES,
@@ -966,6 +967,14 @@ import {
                 >
                   📜 History & Changelog ({{ it.changelog?.length || 0 }})
                 </button>
+                <button
+                  type="button"
+                  class="tab-btn"
+                  [class.active]="activeTab() === 'development'"
+                  (click)="activeTab.set('development')"
+                >
+                  🛠 Development ({{ getDevCount(it) }})
+                </button>
               </div>
 
               @if (activeTab() === 'comments') {
@@ -1110,6 +1119,218 @@ import {
                       <p>No audit changelog entries yet. Any updates to this issue will appear here.</p>
                     </div>
                   }
+                </div>
+              } @else if (activeTab() === 'development') {
+                <div class="dev-tab-container">
+                  <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #ebecf0;">
+                    <div>
+                      <span style="font-size: 13px; color: #5e6c84;">Linked Development Assets:</span>
+                      <strong style="margin-left: 6px; color: #0052cc; font-size: 14px;">{{ getDevCount(it) }} items</strong>
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                      <button type="button" class="btn btn-primary btn-sm" (click)="openLinkDevModal()">
+                        + Link VCS Entity
+                      </button>
+                      <button type="button" class="btn btn-secondary btn-sm" (click)="openSmartCommitModal()">
+                        ⚡ Simulate Smart Commit
+                      </button>
+                      <button type="button" class="btn btn-ghost btn-sm" (click)="reloadDevOnly(it.key)">
+                        ↻ Refresh
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Branches -->
+                  <div class="dev-section-card">
+                    <div class="dev-section-header">
+                      <h4>🌿 Branches ({{ it.development?.branches_count || 0 }})</h4>
+                      <small class="text-muted">Linked Git branches for this issue</small>
+                    </div>
+                    @if (it.development?.branches && it.development!.branches.length > 0) {
+                      <table class="dev-table">
+                        <thead>
+                          <tr>
+                            <th>Repository</th>
+                            <th>Branch Name</th>
+                            <th>Last Commit</th>
+                            <th>Updated</th>
+                            <th style="text-align: right;">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          @for (b of it.development!.branches; track b.id) {
+                            <tr>
+                              <td><strong>{{ b.repository_name || 'main' }}</strong></td>
+                              <td>
+                                @if (b.branch_url) {
+                                  <a [href]="b.branch_url" target="_blank" class="dev-mini-link">{{ b.branch_name }}</a>
+                                } @else {
+                                  <code>{{ b.branch_name }}</code>
+                                }
+                              </td>
+                              <td>
+                                @if (b.last_commit_hash) {
+                                  <span class="commit-hash-pill">{{ b.last_commit_hash.slice(0, 7) }}</span>
+                                } @else {
+                                  <span class="text-muted">—</span>
+                                }
+                              </td>
+                              <td class="text-muted">{{ b.updated_at }}</td>
+                              <td style="text-align: right;">
+                                <button type="button" class="btn-unlink" (click)="unlinkDev('branches', b.id)" title="Unlink branch">✕</button>
+                              </td>
+                            </tr>
+                          }
+                        </tbody>
+                      </table>
+                    } @else {
+                      <div class="dev-empty-hint">No branches linked yet. Branches containing issue key (e.g. <code>feature/{{ it.key }}-login</code>) link automatically.</div>
+                    }
+                  </div>
+
+                  <!-- Commits -->
+                  <div class="dev-section-card">
+                    <div class="dev-section-header">
+                      <h4>📦 Commits ({{ it.development?.commits_count || 0 }})</h4>
+                      <small class="text-muted">Commits referencing {{ it.key }}</small>
+                    </div>
+                    @if (it.development?.commits && it.development!.commits.length > 0) {
+                      <table class="dev-table">
+                        <thead>
+                          <tr>
+                            <th>Hash</th>
+                            <th>Commit Message</th>
+                            <th>Author</th>
+                            <th>Committed</th>
+                            <th style="text-align: right;">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          @for (c of it.development!.commits; track c.id) {
+                            <tr>
+                              <td>
+                                @if (c.commit_url) {
+                                  <a [href]="c.commit_url" target="_blank" class="commit-hash-pill">{{ c.short_hash || c.commit_hash.slice(0, 7) }}</a>
+                                } @else {
+                                  <span class="commit-hash-pill">{{ c.short_hash || c.commit_hash.slice(0, 7) }}</span>
+                                }
+                              </td>
+                              <td>
+                                <div>{{ c.message }}</div>
+                                <small class="text-muted">{{ c.repository_name }}</small>
+                              </td>
+                              <td>
+                                <div><strong>{{ c.author_name }}</strong></div>
+                                <small class="text-muted">{{ c.author_email }}</small>
+                              </td>
+                              <td class="text-muted">{{ c.committed_at }}</td>
+                              <td style="text-align: right;">
+                                <button type="button" class="btn-unlink" (click)="unlinkDev('commits', c.id)" title="Unlink commit">✕</button>
+                              </td>
+                            </tr>
+                          }
+                        </tbody>
+                      </table>
+                    } @else {
+                      <div class="dev-empty-hint">No commits linked yet. Mention <code>{{ it.key }}</code> in commit messages to link them.</div>
+                    }
+                  </div>
+
+                  <!-- Pull Requests -->
+                  <div class="dev-section-card">
+                    <div class="dev-section-header">
+                      <h4>🔀 Pull Requests ({{ it.development?.pull_requests_count || 0 }})</h4>
+                      <small class="text-muted">PRs / Merge Requests linked to this issue</small>
+                    </div>
+                    @if (it.development?.pull_requests && it.development!.pull_requests.length > 0) {
+                      <table class="dev-table">
+                        <thead>
+                          <tr>
+                            <th>PR</th>
+                            <th>Title &amp; Branches</th>
+                            <th>Status</th>
+                            <th>Author</th>
+                            <th style="text-align: right;">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          @for (pr of it.development!.pull_requests; track pr.id) {
+                            <tr>
+                              <td><strong>#{{ pr.pr_number }}</strong></td>
+                              <td>
+                                <div>
+                                  @if (pr.pr_url) {
+                                    <a [href]="pr.pr_url" target="_blank" class="dev-mini-link">{{ pr.title }}</a>
+                                  } @else {
+                                    <span>{{ pr.title }}</span>
+                                  }
+                                </div>
+                                <small class="text-muted"><code>{{ pr.source_branch }}</code> → <code>{{ pr.target_branch }}</code></small>
+                              </td>
+                              <td>
+                                <span class="pr-pill" [class]="pr.status.toLowerCase()">{{ pr.status }}</span>
+                              </td>
+                              <td>{{ pr.author_name || 'Git User' }}</td>
+                              <td style="text-align: right;">
+                                <button type="button" class="btn-unlink" (click)="unlinkDev('pull-requests', pr.id)" title="Unlink PR">✕</button>
+                              </td>
+                            </tr>
+                          }
+                        </tbody>
+                      </table>
+                    } @else {
+                      <div class="dev-empty-hint">No pull requests linked yet. Mention <code>{{ it.key }}</code> in PR titles or source branch names.</div>
+                    }
+                  </div>
+
+                  <!-- Builds -->
+                  <div class="dev-section-card">
+                    <div class="dev-section-header">
+                      <h4>⚡ CI/CD Builds ({{ it.development?.builds_count || 0 }})</h4>
+                      <small class="text-muted">Automated test &amp; pipeline builds</small>
+                    </div>
+                    @if (it.development?.builds && it.development!.builds.length > 0) {
+                      <table class="dev-table">
+                        <thead>
+                          <tr>
+                            <th>Pipeline</th>
+                            <th>Build #</th>
+                            <th>Status</th>
+                            <th>Commit / Branch</th>
+                            <th>Duration</th>
+                            <th style="text-align: right;">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          @for (bd of it.development!.builds; track bd.id) {
+                            <tr>
+                              <td><strong>{{ bd.pipeline_id }}</strong></td>
+                              <td>#{{ bd.build_number }}</td>
+                              <td>
+                                <span class="build-badge" [class]="bd.status.toLowerCase()">
+                                  {{ bd.status === 'SUCCESS' ? '✓ Passed' : bd.status === 'FAILED' ? '✗ Failed' : bd.status }}
+                                </span>
+                              </td>
+                              <td>
+                                @if (bd.commit_hash) {
+                                  <span class="commit-hash-pill">{{ bd.commit_hash.slice(0, 7) }}</span>
+                                }
+                                @if (bd.branch_name) {
+                                  <small class="text-muted" style="margin-left: 6px;">{{ bd.branch_name }}</small>
+                                }
+                              </td>
+                              <td>{{ bd.duration_seconds }}s</td>
+                              <td style="text-align: right;">
+                                <button type="button" class="btn-unlink" (click)="unlinkDev('builds', bd.id)" title="Unlink build">✕</button>
+                              </td>
+                            </tr>
+                          }
+                        </tbody>
+                      </table>
+                    } @else {
+                      <div class="dev-empty-hint">No build runs recorded yet.</div>
+                    }
+                  </div>
                 </div>
               }
             </div>
@@ -1268,6 +1489,57 @@ import {
                   </select>
                 </div>
               </div>
+            </div>
+
+            <!-- Development Panel in Sidebar (Step 14) -->
+            <div class="card-panel dev-sidebar-panel">
+              <div class="dev-header">
+                <h3>🛠 Development</h3>
+                <div class="dev-quick-actions">
+                  <button type="button" class="btn-subtle" (click)="openLinkDevModal()" title="Link Branch, Commit, PR, or Build">+ Link</button>
+                  <button type="button" class="btn-subtle" (click)="openSmartCommitModal()" title="Simulate / Run Smart Commit">⚡ Commit</button>
+                </div>
+              </div>
+
+              <div class="dev-rollup-grid">
+                <div class="dev-stat-box" (click)="activeTab.set('development')" title="View Branches">
+                  <div class="dev-stat-val">{{ it.development?.branches_count || 0 }}</div>
+                  <div class="dev-stat-label">Branches</div>
+                </div>
+                <div class="dev-stat-box" (click)="activeTab.set('development')" title="View Commits">
+                  <div class="dev-stat-val">{{ it.development?.commits_count || 0 }}</div>
+                  <div class="dev-stat-label">Commits</div>
+                </div>
+                <div class="dev-stat-box" (click)="activeTab.set('development')" title="View Pull Requests">
+                  <div class="dev-stat-val">{{ it.development?.pull_requests_count || 0 }}</div>
+                  <div class="dev-stat-label">PRs</div>
+                </div>
+                <div class="dev-stat-box" (click)="activeTab.set('development')" title="View Builds">
+                  <div class="dev-stat-val">{{ it.development?.builds_count || 0 }}</div>
+                  <div class="dev-stat-label">Builds</div>
+                </div>
+              </div>
+
+              @if (it.development && (it.development.branches_count > 0 || it.development.commits_count > 0 || it.development.pull_requests_count > 0 || it.development.builds_count > 0)) {
+                <div class="dev-recent-mini">
+                  @for (pr of it.development.pull_requests.slice(0, 2); track pr.id) {
+                    <div class="dev-mini-item">
+                      <span class="pr-pill" [class]="pr.status.toLowerCase()">{{ pr.status }}</span>
+                      <a [href]="pr.pr_url || '#'" target="_blank" class="dev-mini-link">PR #{{ pr.pr_number }}: {{ pr.title }}</a>
+                    </div>
+                  }
+                  @for (b of it.development.builds.slice(0, 2); track b.id) {
+                    <div class="dev-mini-item">
+                      <span class="build-badge" [class]="b.status.toLowerCase()">{{ b.status === 'SUCCESS' ? '✓ Passed' : b.status === 'FAILED' ? '✗ Failed' : b.status }}</span>
+                      <span class="dev-mini-link">{{ b.pipeline_id }} #{{ b.build_number }}</span>
+                    </div>
+                  }
+                </div>
+              } @else {
+                <div class="dev-empty-hint">
+                  <span>No branches, commits, or pull requests linked.</span>
+                </div>
+              }
             </div>
 
             <div class="card-panel">
@@ -1555,6 +1827,288 @@ import {
             </div>
           </div>
         }
+
+        <!-- Link VCS Entity Modal -->
+        @if (showLinkDevModal()) {
+          <div
+            style="position: fixed; inset: 0; background: rgba(15, 23, 42, 0.55); z-index: 1200; display: flex; align-items: center; justify-content: center; padding: 16px;"
+            (click)="closeLinkDevModal()"
+          >
+            <div
+              class="card-panel"
+              style="width: 100%; max-width: 520px; max-height: 85vh; overflow-y: auto; box-shadow: 0 20px 45px rgba(0,0,0,0.25);"
+              (click)="$event.stopPropagation()"
+            >
+              <div class="section-header" style="margin-bottom: 12px;">
+                <div>
+                  <h3 style="margin: 0;">Link Development Asset</h3>
+                  <small class="text-muted">Link a branch, commit, PR, or build run to {{ it.key }}</small>
+                </div>
+                <button type="button" class="btn btn-ghost btn-sm" (click)="closeLinkDevModal()">✕</button>
+              </div>
+
+              @if (linkDevError()) {
+                <div style="margin-bottom: 12px; padding: 8px 12px; background: #ffebe6; color: #de350b; border-radius: 4px; font-size: 12px;">
+                  {{ linkDevError() }}
+                </div>
+              }
+
+              <div class="form-group">
+                <label>Asset Type</label>
+                <select [(ngModel)]="linkDevDraft.type" name="link_dev_type">
+                  <option value="branch">🌿 Branch</option>
+                  <option value="commit">📦 Commit</option>
+                  <option value="pull_request">🔀 Pull Request</option>
+                  <option value="build">⚡ CI/CD Build</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label>Repository Name</label>
+                <input type="text" [(ngModel)]="linkDevDraft.repository_name" name="link_dev_repo" placeholder="e.g. org/repo" />
+              </div>
+
+              @if (linkDevDraft.type === 'branch') {
+                <div class="form-group">
+                  <label>Branch Name *</label>
+                  <input type="text" [(ngModel)]="linkDevDraft.branch_name" name="link_branch_name" placeholder="e.g. feature/{{ it.key }}-login" />
+                </div>
+                <div class="form-group">
+                  <label>Branch URL (optional)</label>
+                  <input type="text" [(ngModel)]="linkDevDraft.branch_url" name="link_branch_url" placeholder="https://github.com/..." />
+                </div>
+                <div class="form-group">
+                  <label>Last Commit Hash (optional)</label>
+                  <input type="text" [(ngModel)]="linkDevDraft.last_commit_hash" name="link_branch_hash" placeholder="e.g. a1b2c3d4" />
+                </div>
+              } @else if (linkDevDraft.type === 'commit') {
+                <div class="form-group">
+                  <label>Commit Hash *</label>
+                  <input type="text" [(ngModel)]="linkDevDraft.commit_hash" name="link_commit_hash" placeholder="e.g. 7f8a9b0c..." />
+                </div>
+                <div class="form-group">
+                  <label>Commit Message</label>
+                  <textarea [(ngModel)]="linkDevDraft.message" name="link_commit_msg" rows="2" placeholder="e.g. {{ it.key }} #time 1h #comment implemented feature"></textarea>
+                </div>
+                <div class="grid-2">
+                  <div class="form-group">
+                    <label>Author Name</label>
+                    <input type="text" [(ngModel)]="linkDevDraft.author_name" name="link_commit_author" placeholder="Marcus Vance" />
+                  </div>
+                  <div class="form-group">
+                    <label>Author Email</label>
+                    <input type="text" [(ngModel)]="linkDevDraft.author_email" name="link_commit_email" placeholder="marcus@example.com" />
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label>Commit URL (optional)</label>
+                  <input type="text" [(ngModel)]="linkDevDraft.commit_url" name="link_commit_url" placeholder="https://github.com/.../commit/..." />
+                </div>
+              } @else if (linkDevDraft.type === 'pull_request') {
+                <div class="grid-2">
+                  <div class="form-group">
+                    <label>PR Number *</label>
+                    <input type="number" [(ngModel)]="linkDevDraft.pr_number" name="link_pr_num" />
+                  </div>
+                  <div class="form-group">
+                    <label>Status</label>
+                    <select [(ngModel)]="linkDevDraft.status" name="link_pr_status">
+                      <option value="OPEN">OPEN</option>
+                      <option value="MERGED">MERGED</option>
+                      <option value="DECLINED">DECLINED</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label>PR Title *</label>
+                  <input type="text" [(ngModel)]="linkDevDraft.title" name="link_pr_title" placeholder="e.g. [{{ it.key }}] Add authentication endpoints" />
+                </div>
+                <div class="grid-2">
+                  <div class="form-group">
+                    <label>Source Branch</label>
+                    <input type="text" [(ngModel)]="linkDevDraft.source_branch" name="link_pr_src" placeholder="feature/{{ it.key }}" />
+                  </div>
+                  <div class="form-group">
+                    <label>Target Branch</label>
+                    <input type="text" [(ngModel)]="linkDevDraft.target_branch" name="link_pr_tgt" placeholder="main" />
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label>PR URL (optional)</label>
+                  <input type="text" [(ngModel)]="linkDevDraft.pr_url" name="link_pr_url" placeholder="https://github.com/.../pull/1" />
+                </div>
+              } @else if (linkDevDraft.type === 'build') {
+                <div class="grid-2">
+                  <div class="form-group">
+                    <label>Pipeline Name</label>
+                    <input type="text" [(ngModel)]="linkDevDraft.pipeline_id" name="link_bd_pipe" placeholder="e.g. GitHub Actions" />
+                  </div>
+                  <div class="form-group">
+                    <label>Build / Run #</label>
+                    <input type="text" [(ngModel)]="linkDevDraft.build_number" name="link_bd_num" placeholder="e.g. 142" />
+                  </div>
+                </div>
+                <div class="grid-2">
+                  <div class="form-group">
+                    <label>Status</label>
+                    <select [(ngModel)]="linkDevDraft.build_status" name="link_bd_status">
+                      <option value="SUCCESS">SUCCESS</option>
+                      <option value="FAILED">FAILED</option>
+                      <option value="IN_PROGRESS">IN_PROGRESS</option>
+                      <option value="CANCELLED">CANCELLED</option>
+                    </select>
+                  </div>
+                  <div class="form-group">
+                    <label>Duration (seconds)</label>
+                    <input type="number" [(ngModel)]="linkDevDraft.duration_seconds" name="link_bd_dur" />
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label>Build URL (optional)</label>
+                  <input type="text" [(ngModel)]="linkDevDraft.build_url" name="link_bd_url" placeholder="https://..." />
+                </div>
+              }
+
+              <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;">
+                <button type="button" class="btn btn-secondary btn-sm" (click)="closeLinkDevModal()">Cancel</button>
+                <button type="button" class="btn btn-primary btn-sm" [disabled]="isLinkingDev()" (click)="submitLinkDev()">
+                  {{ isLinkingDev() ? 'Linking...' : 'Link Asset' }}
+                </button>
+              </div>
+            </div>
+          </div>
+        }
+
+        <!-- Smart Commit Simulator & Runner Modal -->
+        @if (showSmartCommitModal()) {
+          <div
+            style="position: fixed; inset: 0; background: rgba(15, 23, 42, 0.55); z-index: 1200; display: flex; align-items: center; justify-content: center; padding: 16px;"
+            (click)="closeSmartCommitModal()"
+          >
+            <div
+              class="card-panel"
+              style="width: 100%; max-width: 580px; max-height: 85vh; overflow-y: auto; box-shadow: 0 20px 45px rgba(0,0,0,0.25);"
+              (click)="$event.stopPropagation()"
+            >
+              <div class="section-header" style="margin-bottom: 12px;">
+                <div>
+                  <h3 style="margin: 0;">⚡ Smart Commit Simulator &amp; Runner</h3>
+                  <small class="text-muted">Test syntax like <code>{{ it.key }} #resolve #time 1h 30m #comment done</code></small>
+                </div>
+                <button type="button" class="btn btn-ghost btn-sm" (click)="closeSmartCommitModal()">✕</button>
+              </div>
+
+              @if (smartCommitError()) {
+                <div style="margin-bottom: 12px; padding: 8px 12px; background: #ffebe6; color: #de350b; border-radius: 4px; font-size: 12px;">
+                  {{ smartCommitError() }}
+                </div>
+              }
+
+              <div class="form-group">
+                <label>Commit Message *</label>
+                <textarea
+                  [(ngModel)]="smartCommitDraft.message"
+                  name="sc_msg"
+                  rows="3"
+                  placeholder="e.g. {{ it.key }} #resolve #time 1h 30m #comment Fixed null pointer and added tests"
+                  style="font-family: monospace; font-size: 12.5px;"
+                ></textarea>
+                <small class="text-muted" style="display: block; margin-top: 4px;">
+                  Supported commands: <code>#comment &lt;text&gt;</code>, <code>#time &lt;dur&gt; [note]</code>, <code>#&lt;transition&gt;</code> (e.g. <code>#resolve</code>, <code>#in-progress</code>, <code>#close</code>, <code>#done</code>)
+                </small>
+              </div>
+
+              <div class="grid-2">
+                <div class="form-group">
+                  <label>Committer Email</label>
+                  <input type="text" [(ngModel)]="smartCommitDraft.author_email" name="sc_author_email" placeholder="e.g. {{ api.currentUser()?.email || 'dev@example.com' }}" />
+                </div>
+                <div class="form-group">
+                  <label>Committer Name</label>
+                  <input type="text" [(ngModel)]="smartCommitDraft.author_name" name="sc_author_name" placeholder="e.g. {{ api.currentUser()?.display_name || 'Marcus Vance' }}" />
+                </div>
+              </div>
+
+              <div style="display: flex; gap: 8px; margin-top: 12px;">
+                <button type="button" class="btn btn-secondary btn-sm" [disabled]="isSimulating()" (click)="runSmartCommitSimulate(false)">
+                  {{ isSimulating() ? 'Analyzing...' : '🔍 Parse & Preview' }}
+                </button>
+                <button type="button" class="btn btn-primary btn-sm" [disabled]="isExecutingSmartCommit()" (click)="runSmartCommitSimulate(true)">
+                  {{ isExecutingSmartCommit() ? 'Executing...' : '⚡ Execute Smart Commit' }}
+                </button>
+              </div>
+
+              <!-- Simulation Output Preview -->
+              @if (smartCommitSimulation(); as sim) {
+                <div style="margin-top: 16px; padding: 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 12px;">
+                  <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-weight: 600;">
+                    <span>Execution Preview</span>
+                    <span [style.color]="sim.executed ? '#00875a' : '#0052cc'">
+                      {{ sim.executed ? '✓ Actions Applied' : 'ℹ Dry Run (Not Saved)' }}
+                    </span>
+                  </div>
+
+                  <div style="margin-bottom: 6px;">
+                    Matched Keys:
+                    @for (k of sim.matched_keys; track k) {
+                      <strong style="margin-right: 6px; color: #0052cc;">{{ k }}</strong>
+                    } @empty {
+                      <span class="text-muted">None</span>
+                    }
+                  </div>
+
+                  <div style="margin-bottom: 8px;">
+                    Resolved User: <strong>{{ sim.resolved_user_name }}</strong> (ID: {{ sim.resolved_user_id }})
+                  </div>
+
+                  <div style="margin-bottom: 8px;">
+                    <strong>Parsed Commands:</strong>
+                    @for (c of sim.parsed_commands; track c.raw_command) {
+                      <div style="margin: 4px 0; padding: 4px 8px; background: #ffffff; border-radius: 4px; border: 1px solid #ebecf0;">
+                        <span class="smart-cmd-tag">{{ c.type }}</span>
+                        @if (c.type === 'comment') {
+                          <span>Comment: "{{ c.comment_body }}"</span>
+                        } @else if (c.type === 'time') {
+                          <span>Time: <strong>{{ c.formatted_duration }}</strong> ({{ c.time_seconds }}s) {{ c.time_comment ? '— ' + c.time_comment : '' }}</span>
+                        } @else if (c.type === 'transition') {
+                          <span>Transition to: <strong>{{ c.target_status }}</strong></span>
+                        }
+                      </div>
+                    } @empty {
+                      <div class="text-muted">No commands detected. Enter <code>#comment</code>, <code>#time</code>, or <code>#resolve</code>.</div>
+                    }
+                  </div>
+
+                  @if (sim.applied_actions && sim.applied_actions.length > 0) {
+                    <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e2e8f0;">
+                      <strong style="color: #00875a;">Applied Actions:</strong>
+                      <ul style="margin: 4px 0 0 16px; padding: 0;">
+                        @for (a of sim.applied_actions; track a) {
+                          <li>{{ a }}</li>
+                        }
+                      </ul>
+                    </div>
+                  }
+
+                  @if (sim.errors && sim.errors.length > 0) {
+                    <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #ffa39e; color: #cf1322;">
+                      <strong>Errors:</strong>
+                      <ul style="margin: 4px 0 0 16px; padding: 0;">
+                        @for (e of sim.errors; track e) {
+                          <li>{{ e }}</li>
+                        }
+                      </ul>
+                    </div>
+                  }
+                </div>
+              }
+
+              <div style="display: flex; justify-content: flex-end; margin-top: 16px;">
+                <button type="button" class="btn btn-secondary btn-sm" (click)="closeSmartCommitModal()">Close</button>
+              </div>
+            </div>
+          </div>
+        }
       </div>
     }
   `,
@@ -1572,7 +2126,7 @@ export class ItemDetailComponent implements OnInit {
   readonly item = signal<WorkItemDetail | null>(null);
   readonly allItems = signal<WorkItem[]>([]);
   readonly securityLevels = signal<IssueSecurityLevel[]>([]);
-  readonly activeTab = signal<'comments' | 'worklogs' | 'history' | 'changelog'>('comments');
+  readonly activeTab = signal<'comments' | 'worklogs' | 'history' | 'changelog' | 'development'>('comments');
   readonly toastMsg = signal('');
   readonly resolvedScreen = signal<ScreenDef | null>(null);
   readonly activeScreenTabId = signal<number>(0);
@@ -1585,6 +2139,46 @@ export class ItemDetailComponent implements OnInit {
   readonly showWatchersModal = signal(false);
   readonly isTogglingWatch = signal(false);
   readonly isTogglingVote = signal(false);
+
+  // Step 14: Developer Tooling & Git Integration Signals
+  readonly showLinkDevModal = signal(false);
+  readonly showSmartCommitModal = signal(false);
+  readonly isLinkingDev = signal(false);
+  readonly linkDevError = signal('');
+  readonly isSimulating = signal(false);
+  readonly isExecutingSmartCommit = signal(false);
+  readonly smartCommitError = signal('');
+  readonly smartCommitSimulation = signal<SmartCommitSimulationResult | null>(null);
+
+  linkDevDraft = {
+    type: 'branch',
+    repository_name: 'main-repo',
+    branch_name: '',
+    branch_url: '',
+    last_commit_hash: '',
+    commit_hash: '',
+    message: '',
+    author_name: '',
+    author_email: '',
+    commit_url: '',
+    pr_number: 1,
+    title: '',
+    source_branch: '',
+    target_branch: 'main',
+    status: 'OPEN',
+    pr_url: '',
+    pipeline_id: 'GitHub Actions',
+    build_number: '1',
+    build_status: 'SUCCESS',
+    build_url: '',
+    duration_seconds: 60,
+  };
+
+  smartCommitDraft = {
+    message: '',
+    author_email: '',
+    author_name: '',
+  };
 
   // Step 7: Time Tracking & Worklogs Signals & Draft State
   readonly showLogWorkModal = signal(false);
@@ -2167,5 +2761,186 @@ export class ItemDetailComponent implements OnInit {
     setTimeout(() => {
       if (this.toastMsg() === msg) this.toastMsg.set('');
     }, 3000);
+  }
+
+  // Step 14: Developer Tooling & Git Integration Methods
+  getDevCount(it: WorkItemDetail | null): number {
+    if (!it || !it.development) return 0;
+    return (
+      (it.development.branches_count || 0) +
+      (it.development.commits_count || 0) +
+      (it.development.pull_requests_count || 0) +
+      (it.development.builds_count || 0)
+    );
+  }
+
+  async reloadDevOnly(key: string): Promise<void> {
+    try {
+      const dev = await this.api.getItemDevelopment(key);
+      const cur = this.item();
+      if (cur) {
+        this.item.set({ ...cur, development: dev });
+      }
+      this.showToast('Development data refreshed');
+    } catch (err: any) {
+      this.showToast(`Failed to refresh dev data: ${err?.message || 'Error'}`);
+    }
+  }
+
+  openLinkDevModal(): void {
+    const cur = this.item();
+    const curUser = this.api.currentUser();
+    this.linkDevDraft = {
+      type: 'branch',
+      repository_name: 'main-repo',
+      branch_name: cur ? `feature/${cur.key}-impl` : '',
+      branch_url: '',
+      last_commit_hash: '',
+      commit_hash: '',
+      message: cur ? `${cur.key} Implement feature` : '',
+      author_name: curUser?.display_name || '',
+      author_email: curUser?.email || '',
+      commit_url: '',
+      pr_number: 1,
+      title: cur ? `[${cur.key}] ${cur.title}` : '',
+      source_branch: cur ? `feature/${cur.key}` : '',
+      target_branch: 'main',
+      status: 'OPEN',
+      pr_url: '',
+      pipeline_id: 'GitHub Actions',
+      build_number: '1',
+      build_status: 'SUCCESS',
+      build_url: '',
+      duration_seconds: 60,
+    };
+    this.linkDevError.set('');
+    this.showLinkDevModal.set(true);
+  }
+
+  closeLinkDevModal(): void {
+    this.showLinkDevModal.set(false);
+    this.linkDevError.set('');
+  }
+
+  async submitLinkDev(): Promise<void> {
+    const cur = this.item();
+    if (!cur) return;
+    this.isLinkingDev.set(true);
+    this.linkDevError.set('');
+    try {
+      const payload: any = {
+        type: this.linkDevDraft.type,
+        repository_name: this.linkDevDraft.repository_name || 'main-repo',
+      };
+      if (this.linkDevDraft.type === 'branch') {
+        if (!this.linkDevDraft.branch_name.trim()) {
+          this.linkDevError.set('Branch name is required');
+          return;
+        }
+        payload.branch_name = this.linkDevDraft.branch_name.trim();
+        payload.branch_url = this.linkDevDraft.branch_url.trim();
+        payload.last_commit_hash = this.linkDevDraft.last_commit_hash.trim();
+      } else if (this.linkDevDraft.type === 'commit') {
+        if (!this.linkDevDraft.commit_hash.trim()) {
+          this.linkDevError.set('Commit hash is required');
+          return;
+        }
+        payload.commit_hash = this.linkDevDraft.commit_hash.trim();
+        payload.message = this.linkDevDraft.message;
+        payload.author_name = this.linkDevDraft.author_name;
+        payload.author_email = this.linkDevDraft.author_email;
+        payload.commit_url = this.linkDevDraft.commit_url;
+        payload.execute_smart_commits = true;
+      } else if (this.linkDevDraft.type === 'pull_request') {
+        if (!this.linkDevDraft.title.trim()) {
+          this.linkDevError.set('PR title is required');
+          return;
+        }
+        payload.pr_number = Number(this.linkDevDraft.pr_number) || 1;
+        payload.title = this.linkDevDraft.title.trim();
+        payload.source_branch = this.linkDevDraft.source_branch.trim();
+        payload.target_branch = this.linkDevDraft.target_branch.trim() || 'main';
+        payload.status = this.linkDevDraft.status;
+        payload.author_name = this.linkDevDraft.author_name;
+        payload.author_email = this.linkDevDraft.author_email;
+        payload.pr_url = this.linkDevDraft.pr_url;
+      } else if (this.linkDevDraft.type === 'build') {
+        payload.pipeline_id = this.linkDevDraft.pipeline_id || 'CI';
+        payload.build_number = String(this.linkDevDraft.build_number || '1');
+        payload.status = this.linkDevDraft.build_status;
+        payload.duration_seconds = Number(this.linkDevDraft.duration_seconds) || 60;
+        payload.build_url = this.linkDevDraft.build_url;
+      }
+
+      await this.api.linkItemDevelopment(cur.key, payload);
+      await this.reloadDetail(cur.key);
+      this.showToast('Development asset linked successfully');
+      this.closeLinkDevModal();
+    } catch (err: any) {
+      this.linkDevError.set(err?.message || 'Failed to link asset');
+    } finally {
+      this.isLinkingDev.set(false);
+    }
+  }
+
+  async unlinkDev(type: 'branches' | 'commits' | 'pull-requests' | 'builds' | string, id: number): Promise<void> {
+    const cur = this.item();
+    if (!cur) return;
+    if (!confirm(`Are you sure you want to unlink this item?`)) return;
+    try {
+      await this.api.unlinkItemDevelopment(cur.key, type, id);
+      await this.reloadDetail(cur.key);
+      this.showToast('Unlinked item');
+    } catch (err: any) {
+      this.showToast(`Error unlinking: ${err?.message || 'Failed'}`);
+    }
+  }
+
+  openSmartCommitModal(): void {
+    const cur = this.item();
+    const curUser = this.api.currentUser();
+    this.smartCommitDraft = {
+      message: cur ? `${cur.key} #time 45m #comment Implemented initial logic` : '',
+      author_email: curUser?.email || 'dev@example.com',
+      author_name: curUser?.display_name || 'Developer',
+    };
+    this.smartCommitError.set('');
+    this.smartCommitSimulation.set(null);
+    this.showSmartCommitModal.set(true);
+  }
+
+  closeSmartCommitModal(): void {
+    this.showSmartCommitModal.set(false);
+    this.smartCommitError.set('');
+    this.smartCommitSimulation.set(null);
+  }
+
+  async runSmartCommitSimulate(execute: boolean): Promise<void> {
+    if (!this.smartCommitDraft.message.trim()) {
+      this.smartCommitError.set('Commit message cannot be empty');
+      return;
+    }
+    if (execute) this.isExecutingSmartCommit.set(true);
+    else this.isSimulating.set(true);
+    this.smartCommitError.set('');
+    try {
+      const res = await this.api.simulateSmartCommit({
+        message: this.smartCommitDraft.message.trim(),
+        author_email: this.smartCommitDraft.author_email,
+        author_name: this.smartCommitDraft.author_name,
+        execute,
+      });
+      this.smartCommitSimulation.set(res);
+      if (execute) {
+        const cur = this.item();
+        if (cur) await this.reloadDetail(cur.key);
+        this.showToast('Smart commit executed successfully');
+      }
+    } catch (err: any) {
+      this.smartCommitError.set(err?.message || 'Smart commit simulation failed');
+    } finally {
+      this.isSimulating.set(false);
+      this.isExecutingSmartCommit.set(false);
+    }
   }
 }
