@@ -66,7 +66,7 @@ This document provides a comprehensive gap analysis and exhaustive development r
 ## 2. Epic 1: Issue Architecture, Custom Fields & Screen Schemes
 
 ### 1.1 Dynamic Custom Fields Engine
-- [ ] **Custom Field Definition Table (`custom_fields`)**:
+- [x] **Custom Field Definition Table (`custom_fields`)**:
   - Metadata: `id`, `name`, `field_key`, `type`, `description`, `is_searchable`, `created_at`.
   - Supported Field Types:
     - `short_text`: Single-line text input.
@@ -82,7 +82,7 @@ This document provides a comprehensive gap analysis and exhaustive development r
     - `url`: Web link with format validation.
     - `checkbox`: Boolean toggle.
     - `formula`: Calculated / scripted field based on expression evaluation.
-- [ ] **Custom Field Values Storage (`custom_field_values`)**:
+- [x] **Custom Field Values Storage (`custom_field_values`)**:
   - Normalized EAV (Entity-Attribute-Value) schema:
     ```sql
     CREATE TABLE custom_field_values (
@@ -99,21 +99,21 @@ This document provides a comprehensive gap analysis and exhaustive development r
     );
     CREATE UNIQUE INDEX idx_cfv_item_field ON custom_field_values(work_item_id, custom_field_id);
     ```
-- [ ] **Field Options Table (`custom_field_options`)**:
+- [x] **Field Options Table (`custom_field_options`)**:
   - Manage selectable options for single, multi, and cascading dropdowns with sort order and active/inactive status.
 
 ### 1.2 Field Configurations & Schemes
-- [ ] **Field Configurations (`field_configurations`)**:
+- [x] **Field Configurations (`field_configurations`)**:
   - Ability to mark fields as **Required**, **Optional**, or **Hidden** on a per-project or per-issue-type basis.
   - Custom field descriptions, renderers (e.g. wiki style vs plain text), and default values.
-- [ ] **Field Configuration Schemes (`field_configuration_schemes`)**:
+- [x] **Field Configuration Schemes (`field_configuration_schemes`)**:
   - Association mapping between Projects, Issue Types, and Field Configurations.
 
 ### 1.3 Screens, Screen Schemes & Layout Management
-- [ ] **Screens Engine (`screens` & `screen_tabs`)**:
+- [x] **Screens Engine (`screens` & `screen_tabs`)**:
   - Visual layout container organizing fields into one or more tabs.
   - Screen field placement order and tab groupings (e.g., *Main*, *Details*, *DevOps*, *Dates*).
-- [ ] **Screen Schemes (`screen_schemes`)**:
+- [x] **Screen Schemes (`screen_schemes`)**:
   - Map specific screens to operations:
     - **Create Issue Screen**: Simplified modal capturing minimal required fields.
     - **Edit Issue Screen**: Comprehensive form for modifying item properties.
@@ -728,16 +728,16 @@ flowchart TD
   - [x] Update issue detail view and create modal to support selecting components, affected versions, and fix versions.
 - **Verification**: Creating and editing an issue retains component and version relationships; transitioning to closed records resolution.
 
-#### Step 3: Dynamic Custom Fields Engine & Screen Schemes
+#### Step 3: Dynamic Custom Fields Engine & Screen Schemes *(Completed)*
 - **Why Next**: Custom fields must exist so that screens can lay them out, workflows can validate them, and JQL can search them.
 - **Backend Deliverables**:
-  - Database Migration: Create `custom_fields`, `custom_field_options`, `custom_field_values`, `field_configurations`, `screens`, `screen_tabs`, `screen_schemes`.
-  - High-performance EAV query handlers that batch-load custom field values when fetching work item details.
-  - Validation engine checking mandatory fields per project/issue-type configuration.
+  - [x] Database Migration: Create `custom_fields`, `custom_field_options`, `custom_field_values`, `field_configurations`, `screens`, `screen_tabs`, `screen_schemes`.
+  - [x] High-performance EAV query handlers that batch-load custom field values when fetching work item details.
+  - [x] Validation engine checking mandatory fields per project/issue-type configuration.
 - **Frontend Deliverables**:
-  - Custom Field Administrator view: Create text, numeric, date, dropdown, user-picker, and URL custom fields.
-  - Screen Designer: Organize fields across tabs for Create, Edit, View, and Transition screens.
-  - Dynamic Form Renderer: Render custom fields dynamically in Create and Edit modals based on active screen configurations.
+  - [x] Custom Field Administrator view: Create text, numeric, date, dropdown, user-picker, and URL custom fields.
+  - [x] Screen Designer: Organize fields across tabs for Create, Edit, View, and Transition screens.
+  - [x] Dynamic Form Renderer: Render custom fields dynamically in Create and Edit modals based on active screen configurations.
 - **Verification**: Custom field values persist correctly across types and display seamlessly in the work item view.
 
 #### Step 4: Directed Graph Workflow Engine & Transition Screens

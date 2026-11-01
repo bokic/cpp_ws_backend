@@ -5,6 +5,8 @@ import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { ApiService } from '../../services/api.service';
 import {
   PRIORITIES,
+  ScreenDef,
+  ScreenTab,
   WORKFLOW_STATES,
   WORK_ITEM_CATEGORIES,
   WORK_ITEM_TYPES,
@@ -131,6 +133,186 @@ import {
                 </button>
               </div>
             </div>
+
+            <!-- Dynamic Custom Fields & Screen Tabs Section -->
+            @if (resolvedScreen(); as screen) {
+              <div class="card-panel">
+                <div class="section-header" style="flex-wrap: wrap; gap: 8px;">
+                  <div>
+                    <h3>🧬 Custom Fields — {{ screen.name }}</h3>
+                    <small class="text-muted">
+                      Dynamic EAV fields organized by active Screen Tabs &amp; Field Configuration
+                    </small>
+                  </div>
+                  <a routerLink="/custom-fields" class="btn btn-ghost btn-sm">
+                    Configure Fields &amp; Screens →
+                  </a>
+                </div>
+
+                @if (screen.tabs.length > 0) {
+                  <div class="tabs-bar" style="margin: 12px 0;">
+                    @for (tab of screen.tabs; track tab.id) {
+                      <button
+                        type="button"
+                        class="tab-btn"
+                        [class.active]="activeScreenTabId() === tab.id"
+                        (click)="activeScreenTabId.set(tab.id)"
+                      >
+                        {{ tab.name }} ({{ tab.fields.length }})
+                      </button>
+                    }
+                  </div>
+
+                  @if (activeScreenTab(); as curTab) {
+                    <div class="grid-2">
+                      @for (f of curTab.fields; track f.field_key) {
+                        @if (!f.is_hidden) {
+                          <div
+                            class="form-group"
+                            [style.gridColumn]="f.field_type === 'long_text' ? '1 / -1' : 'auto'"
+                          >
+                            <label>
+                              {{ f.name }}
+                              @if (f.is_required) {
+                                <span style="color: #de350b; font-weight: bold;">*</span>
+                              }
+                              <small class="text-muted" style="font-weight: normal; margin-left: 6px;">
+                                ({{ f.field_type }})
+                              </small>
+                            </label>
+
+                            @switch (f.field_type) {
+                              @case ('formula') {
+                                <div
+                                  style="padding: 8px 12px; background: #f1f5f9; border-radius: 6px; font-weight: 600; color: #0f172a;"
+                                >
+                                  ∑ {{ customFieldsDraft[f.field_key] ?? 0 }}
+                                  <small class="text-muted" style="font-weight: normal; margin-left: 8px;">
+                                    ({{ f.formula_expr }})
+                                  </small>
+                                </div>
+                              }
+                              @case ('long_text') {
+                                <textarea
+                                  rows="3"
+                                  [name]="'detail_cf_' + f.field_key"
+                                  [(ngModel)]="customFieldsDraft[f.field_key]"
+                                  [placeholder]="f.description || ''"
+                                ></textarea>
+                              }
+                              @case ('number') {
+                                <input
+                                  type="number"
+                                  [name]="'detail_cf_' + f.field_key"
+                                  [attr.min]="f.min_value"
+                                  [attr.max]="f.max_value"
+                                  [(ngModel)]="customFieldsDraft[f.field_key]"
+                                />
+                              }
+                              @case ('date') {
+                                <input
+                                  type="date"
+                                  [name]="'detail_cf_' + f.field_key"
+                                  [(ngModel)]="customFieldsDraft[f.field_key]"
+                                />
+                              }
+                              @case ('datetime') {
+                                <input
+                                  type="datetime-local"
+                                  [name]="'detail_cf_' + f.field_key"
+                                  [(ngModel)]="customFieldsDraft[f.field_key]"
+                                />
+                              }
+                              @case ('select_single') {
+                                <select
+                                  [name]="'detail_cf_' + f.field_key"
+                                  [(ngModel)]="customFieldsDraft[f.field_key]"
+                                >
+                                  <option value="">— None —</option>
+                                  @for (opt of f.options; track opt.id) {
+                                    <option [value]="opt.value">{{ opt.value }}</option>
+                                  }
+                                </select>
+                              }
+                              @case ('select_multi') {
+                                <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px;">
+                                  @for (opt of f.options; track opt.id) {
+                                    <button
+                                      type="button"
+                                      class="pill"
+                                      [class.active]="isMultiOptionSelected(f.field_key, opt.value)"
+                                      (click)="toggleMultiOption(f.field_key, opt.value)"
+                                    >
+                                      {{ opt.value }}
+                                    </button>
+                                  }
+                                </div>
+                              }
+                              @case ('user_picker_single') {
+                                <select
+                                  [name]="'detail_cf_' + f.field_key"
+                                  [(ngModel)]="customFieldsDraft[f.field_key]"
+                                >
+                                  <option [ngValue]="null">— None —</option>
+                                  @for (u of api.users(); track u.id) {
+                                    <option [ngValue]="u.id">{{ u.display_name }} ({{ u.role }})</option>
+                                  }
+                                </select>
+                              }
+                              @case ('checkbox') {
+                                <label
+                                  style="display: inline-flex; align-items: center; gap: 8px; margin-top: 6px; cursor: pointer;"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    [name]="'detail_cf_' + f.field_key"
+                                    [(ngModel)]="customFieldsDraft[f.field_key]"
+                                  />
+                                  <span>{{ f.description || f.name }}</span>
+                                </label>
+                              }
+                              @case ('url') {
+                                <div style="display: flex; gap: 6px; align-items: center;">
+                                  <input
+                                    type="url"
+                                    [name]="'detail_cf_' + f.field_key"
+                                    [(ngModel)]="customFieldsDraft[f.field_key]"
+                                    placeholder="https://..."
+                                    style="flex: 1;"
+                                  />
+                                  @if (customFieldsDraft[f.field_key]) {
+                                    <a
+                                      [href]="customFieldsDraft[f.field_key]"
+                                      target="_blank"
+                                      class="btn btn-secondary btn-sm"
+                                    >
+                                      ↗
+                                    </a>
+                                  }
+                                </div>
+                              }
+                              @default {
+                                <input
+                                  type="text"
+                                  [name]="'detail_cf_' + f.field_key"
+                                  [(ngModel)]="customFieldsDraft[f.field_key]"
+                                />
+                              }
+                            }
+                          </div>
+                        }
+                      }
+                    </div>
+                  }
+                }
+
+                <div class="form-actions-inline" style="margin-top: 10px;">
+                  <button type="button" class="btn btn-primary" (click)="saveChanges()">
+                    Save Custom Fields
+                  </button>
+                </div>
+              </div>
+            }
 
             <!-- Subtasks Section -->
             <div class="card-panel">
@@ -597,6 +779,10 @@ export class ItemDetailComponent implements OnInit {
   readonly allItems = signal<WorkItem[]>([]);
   readonly activeTab = signal<'comments' | 'history'>('comments');
   readonly toastMsg = signal('');
+  readonly resolvedScreen = signal<ScreenDef | null>(null);
+  readonly activeScreenTabId = signal<number>(0);
+
+  customFieldsDraft: Record<string, any> = {};
 
   newSubtaskTitle = '';
   newCommentText = '';
@@ -619,6 +805,40 @@ export class ItemDetailComponent implements OnInit {
   async reloadDetail(idOrKey: string | number): Promise<void> {
     const d = await this.api.getItemDetail(idOrKey);
     this.item.set(d);
+    this.customFieldsDraft = { ...(d.custom_fields || {}) };
+    try {
+      const sc = await this.api.resolveScreen(d.project_id, 'edit', d.type);
+      this.resolvedScreen.set(sc);
+      if (sc.tabs.length > 0 && !sc.tabs.some((t) => t.id === this.activeScreenTabId())) {
+        this.activeScreenTabId.set(sc.tabs[0].id);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  activeScreenTab(): ScreenTab | null {
+    const sc = this.resolvedScreen();
+    if (!sc || sc.tabs.length === 0) return null;
+    return sc.tabs.find((t) => t.id === this.activeScreenTabId()) || sc.tabs[0];
+  }
+
+  isMultiOptionSelected(fieldKey: string, val: string): boolean {
+    const cur = this.customFieldsDraft[fieldKey];
+    return Array.isArray(cur) && cur.includes(val);
+  }
+
+  toggleMultiOption(fieldKey: string, val: string): void {
+    const cur = Array.isArray(this.customFieldsDraft[fieldKey])
+      ? [...this.customFieldsDraft[fieldKey]]
+      : [];
+    const idx = cur.indexOf(val);
+    if (idx >= 0) {
+      cur.splice(idx, 1);
+    } else {
+      cur.push(val);
+    }
+    this.customFieldsDraft[fieldKey] = cur;
   }
 
   projectComponents() {
@@ -663,30 +883,35 @@ export class ItemDetailComponent implements OnInit {
   async saveChanges(): Promise<void> {
     const cur = this.item();
     if (!cur) return;
-    await this.api.updateItem(cur.key, {
-      type: cur.type,
-      category: cur.category,
-      status: cur.status,
-      priority: cur.priority,
-      title: cur.title,
-      description: cur.description,
-      parent_id: cur.parent_id || 0,
-      sprint_id: cur.sprint_id || 0,
-      assignee_id: cur.assignee_id || 0,
-      resolution_id: cur.resolution_id || 0,
-      component_ids: cur.component_ids || [],
-      fix_version_ids: cur.fix_version_ids || [],
-      affects_version_ids: cur.affects_version_ids || [],
-      story_points: cur.story_points,
-      progress: cur.progress,
-      start_date: cur.start_date,
-      due_date: cur.due_date,
-      severity: cur.severity,
-      steps_to_reproduce: cur.steps_to_reproduce,
-      labels: cur.labels,
-    });
-    await this.reloadDetail(cur.key);
-    this.showToast(`Saved changes to ${cur.key}`);
+    try {
+      await this.api.updateItem(cur.key, {
+        type: cur.type,
+        category: cur.category,
+        status: cur.status,
+        priority: cur.priority,
+        title: cur.title,
+        description: cur.description,
+        parent_id: cur.parent_id || 0,
+        sprint_id: cur.sprint_id || 0,
+        assignee_id: cur.assignee_id || 0,
+        resolution_id: cur.resolution_id || 0,
+        component_ids: cur.component_ids || [],
+        fix_version_ids: cur.fix_version_ids || [],
+        affects_version_ids: cur.affects_version_ids || [],
+        story_points: cur.story_points,
+        progress: cur.progress,
+        start_date: cur.start_date,
+        due_date: cur.due_date,
+        severity: cur.severity,
+        steps_to_reproduce: cur.steps_to_reproduce,
+        labels: cur.labels,
+        custom_fields: this.customFieldsDraft,
+      });
+      await this.reloadDetail(cur.key);
+      this.showToast(`Saved changes to ${cur.key}`);
+    } catch (err: any) {
+      this.showToast(`Validation error: ${err?.message || 'Failed to save changes'}`);
+    }
   }
 
   async quickAddSubtask(): Promise<void> {

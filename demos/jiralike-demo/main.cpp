@@ -593,6 +593,47 @@ static void seed_demo_workspace(db::sqlite_db &conn, int admin_id, int project_i
         FROM work_items w
         JOIN versions v ON v.project_id = w.project_id
         WHERE w.category = 'Bug' AND v.name = 'v1.0.0';
+
+        INSERT OR IGNORE INTO custom_field_values (work_item_id, custom_field_id, text_value)
+        SELECT w.id, 1, CASE WHEN w.category = 'Bug' THEN 'Production' ELSE 'Staging' END
+        FROM work_items w;
+
+        INSERT OR IGNORE INTO custom_field_values (work_item_id, custom_field_id, text_value)
+        SELECT w.id, 2, '- [x] Unit & integration tests passing' || char(10) || '- [x] Zero SQLite lock contention under load'
+        FROM work_items w
+        WHERE w.type IN ('Story', 'Epic');
+
+        INSERT OR IGNORE INTO custom_field_values (work_item_id, custom_field_id, text_value)
+        SELECT w.id, 3, CASE WHEN w.priority IN ('Critical', 'Highest', 'High') THEN 'Tier 1 - Enterprise Critical' ELSE 'Tier 2 - High' END
+        FROM work_items w;
+
+        INSERT OR IGNORE INTO custom_field_values (work_item_id, custom_field_id, numeric_value, text_value)
+        SELECT w.id, 4, (w.story_points * 8.0), CAST(w.story_points * 8 AS TEXT)
+        FROM work_items w
+        WHERE w.story_points > 0;
+
+        INSERT OR IGNORE INTO custom_field_values (work_item_id, custom_field_id, date_value, text_value)
+        SELECT w.id, 5, w.due_date, w.due_date
+        FROM work_items w
+        WHERE w.due_date != '';
+
+        INSERT OR IGNORE INTO custom_field_values (work_item_id, custom_field_id, user_value_id, text_value)
+        SELECT w.id, 6, COALESCE(w.assignee_id, 1), CAST(COALESCE(w.assignee_id, 1) AS TEXT)
+        FROM work_items w
+        WHERE w.assignee_id IS NOT NULL;
+
+        INSERT OR IGNORE INTO custom_field_values (work_item_id, custom_field_id, text_value)
+        SELECT w.id, 7, 'https://docs.jiralike.local/specs/' || lower(w.key)
+        FROM work_items w
+        WHERE w.type IN ('Epic', 'Story');
+
+        INSERT OR IGNORE INTO custom_field_values (work_item_id, custom_field_id, text_value, numeric_value)
+        SELECT w.id, 8, CASE WHEN w.status = 'Done' THEN 'true' ELSE 'false' END, CASE WHEN w.status = 'Done' THEN 1 ELSE 0 END
+        FROM work_items w;
+
+        INSERT OR IGNORE INTO custom_field_values (work_item_id, custom_field_id, json_value, text_value)
+        SELECT w.id, 9, '["Linux x86_64","Docker / Kubernetes"]', 'Linux x86_64, Docker / Kubernetes'
+        FROM work_items w;
     )SQL");
 }
 
@@ -1753,6 +1794,1289 @@ static void handle_version_release_notes(backend::wsworker *worker,
     send_json(worker, header, "200 OK", res);
 }
 
+// =============================================================================
+// Step 3: Dynamic Custom Fields Engine, Field Configurations & Screen Schemes
+// =============================================================================
+
+static std::string normalize_field_key(const std::string &raw) {
+    std::string out;
+    out.reserve(raw.size());
+    bool last_underscore = false;
+    for (unsigned char c : raw) {
+        if (std::isalnum(c)) {
+            out.push_back(static_cast<char>(std::tolower(c)));
+            last_underscore = false;
+        } else if (!out.empty() && !last_underscore) {
+            out.push_back('_');
+            last_underscore = true;
+        }
+    }
+    while (!out.empty() && out.back() == '_') {
+        out.pop_back();
+    }
+    return out;
+}
+
+static json::json_value load_custom_field_options(db::sqlite_db &conn, int field_id) {
+    auto arr = json::json_value::make_array();
+    auto ostmt = conn.prepare(R"SQL(
+        SELECT id, custom_field_id, COALESCE(parent_option_id, 0), value, color, sort_order, is_active, is_default
+        FROM custom_field_options
+        WHERE custom_field_id = ?
+        ORDER BY sort_order ASC, id ASC;
+    )SQL");
+    ostmt.bind_int(1, field_id);
+    while (ostmt.step() == SQLITE_ROW) {
+        auto o = json::json_value::make_object();
+        o.add_int("id", ostmt.column_int(0));
+        o.add_int("custom_field_id", ostmt.column_int(1));
+        o.add_nullable_int("parent_option_id", ostmt.column_int(2));
+        o.add_str("value", ostmt.column_str(3));
+        o.add_str("color", ostmt.column_str(4));
+        o.add_int("sort_order", ostmt.column_int(5));
+        o.add_bool("is_active", ostmt.column_int(6) != 0);
+        o.add_bool("is_default", ostmt.column_int(7) != 0);
+        arr.add(std::move(o));
+    }
+    return arr;
+}
+
+static json::json_value row_to_custom_field_json(db::sqlite_db &conn, db::sqlite_stmt &stmt) {
+    int fid = stmt.column_int(0);
+    auto cf = json::json_value::make_object();
+    cf.add_int("id", fid);
+    cf.add_str("name", stmt.column_str(1));
+    cf.add_str("field_key", stmt.column_str(2));
+    cf.add_str("field_type", stmt.column_str(3));
+    cf.add_str("type", stmt.column_str(3));
+    cf.add_str("description", stmt.column_str(4));
+    cf.add_str("default_value", stmt.column_str(5));
+    cf.add_bool("is_required", stmt.column_int(6) != 0);
+    cf.add_bool("is_searchable", stmt.column_int(7) != 0);
+    if (stmt.column_is_null(8)) {
+        cf.add("min_value", json::json_value::make_null());
+    } else {
+        cf.add_double("min_value", stmt.column_double(8));
+    }
+    if (stmt.column_is_null(9)) {
+        cf.add("max_value", json::json_value::make_null());
+    } else {
+        cf.add_double("max_value", stmt.column_double(9));
+    }
+    cf.add_str("formula_expr", stmt.column_str(10));
+    cf.add_int("sort_order", stmt.column_int(11));
+    cf.add_str("created_at", stmt.column_str(12));
+    cf.add("options", load_custom_field_options(conn, fid));
+    return cf;
+}
+
+// GET | POST /api/custom-fields
+static void handle_custom_fields(backend::wsworker *worker,
+                                 const std::map<std::string, std::string> &header,
+                                 const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto stmt = conn.prepare(R"SQL(
+            SELECT id, name, field_key, field_type, description, default_value,
+                   is_required, is_searchable, min_value, max_value, formula_expr,
+                   sort_order, created_at
+            FROM custom_fields
+            ORDER BY sort_order ASC, id ASC;
+        )SQL");
+        auto arr = json::json_value::make_array();
+        while (stmt.step() == SQLITE_ROW) {
+            arr.add(row_to_custom_field_json(conn, stmt));
+        }
+        send_json(worker, header, "200 OK", arr);
+        return;
+    }
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string name = body.get_string("name");
+    std::string field_key = body.get_string("field_key");
+    if (field_key.empty()) {
+        field_key = normalize_field_key(name);
+    } else {
+        field_key = normalize_field_key(field_key);
+    }
+    std::string field_type = body.get_string("field_type", body.get_string("type", "short_text"));
+    std::string description = body.get_string("description");
+    std::string default_value = body.get_string("default_value");
+    bool is_required = body.get_bool("is_required", false);
+    bool is_searchable = body.get_bool("is_searchable", true);
+    bool has_min = body.has_key("min_value") && !body.is_null("min_value") && !body.get_string("min_value").empty();
+    double min_value = has_min ? body.get_double("min_value", 0.0) : 0.0;
+    bool has_max = body.has_key("max_value") && !body.is_null("max_value") && !body.get_string("max_value").empty();
+    double max_value = has_max ? body.get_double("max_value", 0.0) : 0.0;
+    std::string formula_expr = body.get_string("formula_expr");
+    int sort_order = body.get_int("sort_order", 100);
+    bool add_to_screens = body.get_bool("add_to_default_screens", true);
+
+    if (name.empty() || field_key.empty()) {
+        send_error(worker, header, "400 Bad Request", "Custom field name and field_key are required");
+        return;
+    }
+
+    int new_field_id = 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare(R"SQL(
+            INSERT INTO custom_fields (
+                name, field_key, field_type, description, default_value,
+                is_required, is_searchable, min_value, max_value, formula_expr, sort_order
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        )SQL");
+        ins.bind_text(1, name);
+        ins.bind_text(2, field_key);
+        ins.bind_text(3, field_type);
+        ins.bind_text(4, description);
+        ins.bind_text(5, default_value);
+        ins.bind_int(6, is_required ? 1 : 0);
+        ins.bind_int(7, is_searchable ? 1 : 0);
+        if (has_min) ins.bind_double(8, min_value); else ins.bind_null(8);
+        if (has_max) ins.bind_double(9, max_value); else ins.bind_null(9);
+        ins.bind_text(10, formula_expr);
+        ins.bind_int(11, sort_order);
+        ins.step_done();
+        new_field_id = static_cast<int>(conn.last_insert_rowid());
+
+        // Insert options if provided as string array or object array
+        if (body.has_key("options")) {
+            json_object *opts_arr = nullptr;
+            if (json_object_object_get_ex(body.get(), "options", &opts_arr) &&
+                opts_arr && json_object_is_type(opts_arr, json_type_array)) {
+                auto oins = conn.prepare(R"SQL(
+                    INSERT INTO custom_field_options (custom_field_id, parent_option_id, value, color, sort_order, is_active, is_default)
+                    VALUES (?, ?, ?, ?, ?, 1, ?);
+                )SQL");
+                size_t len = json_object_array_length(opts_arr);
+                for (size_t i = 0; i < len; ++i) {
+                    json_object *elem = json_object_array_get_idx(opts_arr, i);
+                    if (!elem || json_object_is_type(elem, json_type_null)) continue;
+                    std::string val;
+                    std::string color = "#0052CC";
+                    int parent_id = 0;
+                    int ord = static_cast<int>((i + 1) * 10);
+                    int is_def = (i == 0 ? 1 : 0);
+
+                    if (json_object_is_type(elem, json_type_object)) {
+                        json_object *vf = nullptr;
+                        if (json_object_object_get_ex(elem, "value", &vf) && vf) {
+                            const char *s = json_object_get_string(vf);
+                            if (s) val = s;
+                        }
+                        if (json_object_object_get_ex(elem, "color", &vf) && vf) {
+                            const char *s = json_object_get_string(vf);
+                            if (s && *s) color = s;
+                        }
+                        if (json_object_object_get_ex(elem, "parent_option_id", &vf) && vf && !json_object_is_type(vf, json_type_null)) {
+                            parent_id = json_object_get_int(vf);
+                        }
+                        if (json_object_object_get_ex(elem, "sort_order", &vf) && vf) {
+                            ord = json_object_get_int(vf);
+                        }
+                        if (json_object_object_get_ex(elem, "is_default", &vf) && vf) {
+                            is_def = json_object_get_boolean(vf) ? 1 : 0;
+                        }
+                    } else {
+                        const char *s = json_object_get_string(elem);
+                        if (s) val = s;
+                    }
+
+                    if (!val.empty()) {
+                        oins.clear_and_reset();
+                        oins.bind_int(1, new_field_id);
+                        oins.bind_optional_int(2, parent_id);
+                        oins.bind_text(3, val);
+                        oins.bind_text(4, color);
+                        oins.bind_int(5, ord);
+                        oins.bind_int(6, is_def);
+                        oins.step_done();
+                    }
+                }
+            }
+        }
+
+        // Register in default field configuration
+        auto fc_ins = conn.prepare(R"SQL(
+            INSERT OR IGNORE INTO field_configuration_items (
+                configuration_id, custom_field_id, issue_type, is_required, is_hidden, renderer, default_value
+            ) VALUES (1, ?, '*', ?, 0, ?, ?);
+        )SQL");
+        fc_ins.bind_int(1, new_field_id);
+        fc_ins.bind_int(2, is_required ? 1 : 0);
+        fc_ins.bind_text(3, field_type == "long_text" ? "markdown" : "plain");
+        fc_ins.bind_text(4, default_value);
+        fc_ins.step_done();
+
+        // Place onto requested screen tabs or default Create & Edit screens
+        auto tab_ids = body.get_int_array("screen_tab_ids");
+        if (tab_ids.empty() && add_to_screens) {
+            // Find first tab of Create screen (1) and Edit/View screen (2)
+            auto tstmt = conn.prepare(R"SQL(
+                SELECT id FROM screen_tabs
+                WHERE screen_id IN (1, 2)
+                GROUP BY screen_id
+                HAVING MIN(sort_order);
+            )SQL");
+            while (tstmt.step() == SQLITE_ROW) {
+                tab_ids.push_back(tstmt.column_int(0));
+            }
+        }
+        if (!tab_ids.empty()) {
+            auto stf_ins = conn.prepare(R"SQL(
+                INSERT OR IGNORE INTO screen_tab_fields (tab_id, field_key, custom_field_id, sort_order)
+                VALUES (?, ?, ?, ?);
+            )SQL");
+            for (int tid : tab_ids) {
+                stf_ins.clear_and_reset();
+                stf_ins.bind_int(1, tid);
+                stf_ins.bind_text(2, field_key);
+                stf_ins.bind_int(3, new_field_id);
+                stf_ins.bind_int(4, sort_order);
+                stf_ins.step_done();
+            }
+        }
+
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    auto q = conn.prepare(R"SQL(
+        SELECT id, name, field_key, field_type, description, default_value,
+               is_required, is_searchable, min_value, max_value, formula_expr,
+               sort_order, created_at
+        FROM custom_fields WHERE id = ?;
+    )SQL");
+    q.bind_int(1, new_field_id);
+    if (q.step() == SQLITE_ROW) {
+        send_json(worker, header, "201 Created", row_to_custom_field_json(conn, q));
+    } else {
+        send_error(worker, header, "500 Internal Server Error", "Failed to load created custom field");
+    }
+}
+
+// PUT | DELETE /api/custom-fields/([0-9]+)
+static void handle_custom_field_detail(backend::wsworker *worker,
+                                       const std::map<std::string, std::string> &header,
+                                       const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing custom field ID");
+        return;
+    }
+    int field_id = std::atoi(uri_params.front().c_str());
+
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    std::string method = get_header(header, "REQUEST_METHOD");
+    if (method == "DELETE") {
+        db::sqlite_transaction tx(conn);
+        auto del = conn.prepare("DELETE FROM custom_fields WHERE id = ?;");
+        del.bind_int(1, field_id);
+        del.step_done();
+        tx.commit();
+        auto res = json::json_value::make_object();
+        res.add_bool("deleted", true);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string cur_name, cur_desc, cur_def, cur_formula;
+    int cur_req = 0, cur_search = 1, cur_order = 10;
+    bool cur_has_min = false, cur_has_max = false;
+    double cur_min = 0.0, cur_max = 0.0;
+    {
+        auto cur = conn.prepare(R"SQL(
+            SELECT name, description, default_value, is_required, is_searchable,
+                   min_value, max_value, formula_expr, sort_order
+            FROM custom_fields WHERE id = ?;
+        )SQL");
+        cur.bind_int(1, field_id);
+        if (cur.step() != SQLITE_ROW) {
+            send_error(worker, header, "404 Not Found", "Custom field not found");
+            return;
+        }
+        cur_name = cur.column_str(0);
+        cur_desc = cur.column_str(1);
+        cur_def = cur.column_str(2);
+        cur_req = cur.column_int(3);
+        cur_search = cur.column_int(4);
+        cur_has_min = !cur.column_is_null(5);
+        cur_min = cur.column_double(5);
+        cur_has_max = !cur.column_is_null(6);
+        cur_max = cur.column_double(6);
+        cur_formula = cur.column_str(7);
+        cur_order = cur.column_int(8);
+    }
+
+    std::string name = body.has_key("name") ? body.get_string("name") : cur_name;
+    std::string desc = body.has_key("description") ? body.get_string("description") : cur_desc;
+    std::string def_val = body.has_key("default_value") ? body.get_string("default_value") : cur_def;
+    bool is_req = body.has_key("is_required") ? body.get_bool("is_required") : (cur_req != 0);
+    bool is_search = body.has_key("is_searchable") ? body.get_bool("is_searchable") : (cur_search != 0);
+    bool has_min = body.has_key("min_value") ? (!body.is_null("min_value") && !body.get_string("min_value").empty()) : cur_has_min;
+    double min_val = body.has_key("min_value") ? body.get_double("min_value", 0.0) : cur_min;
+    bool has_max = body.has_key("max_value") ? (!body.is_null("max_value") && !body.get_string("max_value").empty()) : cur_has_max;
+    double max_val = body.has_key("max_value") ? body.get_double("max_value", 0.0) : cur_max;
+    std::string formula = body.has_key("formula_expr") ? body.get_string("formula_expr") : cur_formula;
+    int sort_order = body.has_key("sort_order") ? body.get_int("sort_order", cur_order) : cur_order;
+
+    try {
+        db::sqlite_transaction tx(conn);
+        auto upd = conn.prepare(R"SQL(
+            UPDATE custom_fields
+            SET name = ?, description = ?, default_value = ?, is_required = ?,
+                is_searchable = ?, min_value = ?, max_value = ?, formula_expr = ?, sort_order = ?
+            WHERE id = ?;
+        )SQL");
+        upd.bind_text(1, name);
+        upd.bind_text(2, desc);
+        upd.bind_text(3, def_val);
+        upd.bind_int(4, is_req ? 1 : 0);
+        upd.bind_int(5, is_search ? 1 : 0);
+        if (has_min) upd.bind_double(6, min_val); else upd.bind_null(6);
+        if (has_max) upd.bind_double(7, max_val); else upd.bind_null(7);
+        upd.bind_text(8, formula);
+        upd.bind_int(9, sort_order);
+        upd.bind_int(10, field_id);
+        upd.step_done();
+
+        if (body.has_key("is_required")) {
+            auto fc_upd = conn.prepare(R"SQL(
+                UPDATE field_configuration_items
+                SET is_required = ?
+                WHERE custom_field_id = ? AND issue_type = '*';
+            )SQL");
+            fc_upd.bind_int(1, is_req ? 1 : 0);
+            fc_upd.bind_int(2, field_id);
+            fc_upd.step_done();
+        }
+
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    auto q = conn.prepare(R"SQL(
+        SELECT id, name, field_key, field_type, description, default_value,
+               is_required, is_searchable, min_value, max_value, formula_expr,
+               sort_order, created_at
+        FROM custom_fields WHERE id = ?;
+    )SQL");
+    q.bind_int(1, field_id);
+    if (q.step() == SQLITE_ROW) {
+        send_json(worker, header, "200 OK", row_to_custom_field_json(conn, q));
+    } else {
+        send_error(worker, header, "404 Not Found", "Custom field not found");
+    }
+}
+
+// POST /api/custom-fields/([0-9]+)/options
+static void handle_custom_field_options(backend::wsworker *worker,
+                                        const std::map<std::string, std::string> &header,
+                                        const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing custom field ID");
+        return;
+    }
+    int field_id = std::atoi(uri_params.front().c_str());
+
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string val = body.get_string("value");
+    std::string color = body.get_string("color", "#0052CC");
+    int parent_id = body.get_int("parent_option_id", 0);
+    int sort_order = body.get_int("sort_order", 10);
+    bool is_default = body.get_bool("is_default", false);
+
+    if (val.empty()) {
+        send_error(worker, header, "400 Bad Request", "Option value is required");
+        return;
+    }
+
+    int opt_id = 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare(R"SQL(
+            INSERT INTO custom_field_options (custom_field_id, parent_option_id, value, color, sort_order, is_active, is_default)
+            VALUES (?, ?, ?, ?, ?, 1, ?);
+        )SQL");
+        ins.bind_int(1, field_id);
+        ins.bind_optional_int(2, parent_id);
+        ins.bind_text(3, val);
+        ins.bind_text(4, color);
+        ins.bind_int(5, sort_order);
+        ins.bind_int(6, is_default ? 1 : 0);
+        ins.step_done();
+        opt_id = static_cast<int>(conn.last_insert_rowid());
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", opt_id);
+    res.add_int("custom_field_id", field_id);
+    res.add_nullable_int("parent_option_id", parent_id);
+    res.add_str("value", val);
+    res.add_str("color", color);
+    res.add_int("sort_order", sort_order);
+    res.add_bool("is_active", true);
+    res.add_bool("is_default", is_default);
+    send_json(worker, header, "201 Created", res);
+}
+
+// DELETE /api/custom-field-options/([0-9]+)
+static void handle_delete_custom_field_option(backend::wsworker *worker,
+                                              const std::map<std::string, std::string> &header,
+                                              const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing option ID");
+        return;
+    }
+    int opt_id = std::atoi(uri_params.front().c_str());
+
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    {
+        db::sqlite_transaction tx(conn);
+        auto del = conn.prepare("DELETE FROM custom_field_options WHERE id = ?;");
+        del.bind_int(1, opt_id);
+        del.step_done();
+        tx.commit();
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_bool("deleted", true);
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET | POST /api/field-configurations
+static void handle_field_configurations(backend::wsworker *worker,
+                                        const std::map<std::string, std::string> &header,
+                                        const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto stmt = conn.prepare("SELECT id, name, description, is_default, created_at FROM field_configurations ORDER BY id ASC;");
+        auto arr = json::json_value::make_array();
+        while (stmt.step() == SQLITE_ROW) {
+            int cfg_id = stmt.column_int(0);
+            auto cfg = json::json_value::make_object();
+            cfg.add_int("id", cfg_id);
+            cfg.add_str("name", stmt.column_str(1));
+            cfg.add_str("description", stmt.column_str(2));
+            cfg.add_bool("is_default", stmt.column_int(3) != 0);
+            cfg.add_str("created_at", stmt.column_str(4));
+
+            auto istmt = conn.prepare(R"SQL(
+                SELECT cf.id, cf.name, cf.field_key, cf.field_type,
+                       COALESCE(fci.id, 0),
+                       COALESCE(fci.issue_type, '*'),
+                       COALESCE(fci.is_required, cf.is_required),
+                       COALESCE(fci.is_hidden, 0),
+                       COALESCE(fci.renderer, CASE WHEN cf.field_type = 'long_text' THEN 'markdown' ELSE 'plain' END),
+                       COALESCE(NULLIF(fci.default_value, ''), cf.default_value),
+                       COALESCE(fci.description_override, '')
+                FROM custom_fields cf
+                LEFT JOIN field_configuration_items fci
+                  ON fci.custom_field_id = cf.id AND fci.configuration_id = ?
+                ORDER BY cf.sort_order ASC, cf.id ASC;
+            )SQL");
+            istmt.bind_int(1, cfg_id);
+            auto items = json::json_value::make_array();
+            while (istmt.step() == SQLITE_ROW) {
+                auto it = json::json_value::make_object();
+                it.add_int("custom_field_id", istmt.column_int(0));
+                it.add_str("field_name", istmt.column_str(1));
+                it.add_str("field_key", istmt.column_str(2));
+                it.add_str("field_type", istmt.column_str(3));
+                it.add_int("id", istmt.column_int(4));
+                it.add_int("configuration_id", cfg_id);
+                it.add_str("issue_type", istmt.column_str(5));
+                it.add_bool("is_required", istmt.column_int(6) != 0);
+                it.add_bool("is_hidden", istmt.column_int(7) != 0);
+                it.add_str("renderer", istmt.column_str(8));
+                it.add_str("default_value", istmt.column_str(9));
+                it.add_str("description_override", istmt.column_str(10));
+                items.add(std::move(it));
+            }
+            cfg.add("items", std::move(items));
+            arr.add(std::move(cfg));
+        }
+        send_json(worker, header, "200 OK", arr);
+        return;
+    }
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    // If custom_field_id is provided, upsert field_configuration_items rule
+    if (body.has_key("custom_field_id")) {
+        int cfg_id = body.get_int("configuration_id", 1);
+        int cf_id = body.get_int("custom_field_id", 0);
+        std::string issue_type = body.get_string("issue_type", "*");
+        if (issue_type.empty()) issue_type = "*";
+        bool is_required = body.get_bool("is_required", false);
+        bool is_hidden = body.get_bool("is_hidden", false);
+        std::string renderer = body.get_string("renderer", "plain");
+        std::string def_val = body.get_string("default_value");
+        std::string desc_override = body.get_string("description_override");
+
+        try {
+            db::sqlite_transaction tx(conn);
+            auto ups = conn.prepare(R"SQL(
+                INSERT INTO field_configuration_items (
+                    configuration_id, custom_field_id, issue_type, is_required, is_hidden, renderer, default_value, description_override
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(configuration_id, custom_field_id, issue_type) DO UPDATE SET
+                    is_required = excluded.is_required,
+                    is_hidden = excluded.is_hidden,
+                    renderer = excluded.renderer,
+                    default_value = excluded.default_value,
+                    description_override = excluded.description_override;
+            )SQL");
+            ups.bind_int(1, cfg_id);
+            ups.bind_int(2, cf_id);
+            ups.bind_text(3, issue_type);
+            ups.bind_int(4, is_required ? 1 : 0);
+            ups.bind_int(5, is_hidden ? 1 : 0);
+            ups.bind_text(6, renderer);
+            ups.bind_text(7, def_val);
+            ups.bind_text(8, desc_override);
+            ups.step_done();
+
+            if (issue_type == "*") {
+                auto cf_upd = conn.prepare("UPDATE custom_fields SET is_required = ? WHERE id = ?;");
+                cf_upd.bind_int(1, is_required ? 1 : 0);
+                cf_upd.bind_int(2, cf_id);
+                cf_upd.step_done();
+            }
+            tx.commit();
+        } catch (const std::exception &ex) {
+            send_error(worker, header, "400 Bad Request", ex.what());
+            return;
+        }
+
+        auto res = json::json_value::make_object();
+        res.add_bool("ok", true);
+        res.add_int("configuration_id", cfg_id);
+        res.add_int("custom_field_id", cf_id);
+        res.add_str("issue_type", issue_type);
+        res.add_bool("is_required", is_required);
+        res.add_bool("is_hidden", is_hidden);
+        res.add_str("renderer", renderer);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    // Create a new Field Configuration container
+    std::string name = body.get_string("name");
+    std::string description = body.get_string("description");
+    bool is_default = body.get_bool("is_default", false);
+    if (name.empty()) {
+        send_error(worker, header, "400 Bad Request", "Field configuration name is required");
+        return;
+    }
+
+    int new_cfg_id = 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare("INSERT INTO field_configurations (name, description, is_default) VALUES (?, ?, ?);");
+        ins.bind_text(1, name);
+        ins.bind_text(2, description);
+        ins.bind_int(3, is_default ? 1 : 0);
+        ins.step_done();
+        new_cfg_id = static_cast<int>(conn.last_insert_rowid());
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", new_cfg_id);
+    res.add_str("name", name);
+    res.add_str("description", description);
+    res.add_bool("is_default", is_default);
+    send_json(worker, header, "201 Created", res);
+}
+
+static json::json_value build_screen_json(db::sqlite_db &conn,
+                                          int screen_id,
+                                          int config_id = 1,
+                                          const std::string &issue_type = "*",
+                                          bool filter_hidden = false) {
+    auto sstmt = conn.prepare("SELECT id, name, description, screen_type, created_at FROM screens WHERE id = ?;");
+    sstmt.bind_int(1, screen_id);
+    if (sstmt.step() != SQLITE_ROW) {
+        return json::json_value::make_null();
+    }
+
+    auto sc = json::json_value::make_object();
+    sc.add_int("id", sstmt.column_int(0));
+    sc.add_str("name", sstmt.column_str(1));
+    sc.add_str("description", sstmt.column_str(2));
+    sc.add_str("screen_type", sstmt.column_str(3));
+    sc.add_str("created_at", sstmt.column_str(4));
+
+    auto tstmt = conn.prepare("SELECT id, name, sort_order FROM screen_tabs WHERE screen_id = ? ORDER BY sort_order ASC, id ASC;");
+    tstmt.bind_int(1, screen_id);
+    auto tabs_arr = json::json_value::make_array();
+
+    while (tstmt.step() == SQLITE_ROW) {
+        int tab_id = tstmt.column_int(0);
+        auto tab = json::json_value::make_object();
+        tab.add_int("id", tab_id);
+        tab.add_int("screen_id", screen_id);
+        tab.add_str("name", tstmt.column_str(1));
+        tab.add_int("sort_order", tstmt.column_int(2));
+
+        auto fstmt = conn.prepare(R"SQL(
+            SELECT stf.id, stf.tab_id, stf.field_key, COALESCE(stf.custom_field_id, cf.id, 0), stf.sort_order,
+                   COALESCE(cf.name, stf.field_key),
+                   COALESCE(cf.field_type, 'short_text'),
+                   COALESCE(NULLIF(fci.description_override, ''), cf.description, ''),
+                   COALESCE(fci.is_required, cf.is_required, 0),
+                   COALESCE(fci.is_hidden, 0),
+                   COALESCE(fci.renderer, CASE WHEN cf.field_type = 'long_text' THEN 'markdown' ELSE 'plain' END),
+                   COALESCE(NULLIF(fci.default_value, ''), cf.default_value, ''),
+                   cf.min_value,
+                   cf.max_value,
+                   COALESCE(cf.formula_expr, '')
+            FROM screen_tab_fields stf
+            LEFT JOIN custom_fields cf ON (cf.id = stf.custom_field_id OR cf.field_key = stf.field_key)
+            LEFT JOIN field_configuration_items fci
+              ON fci.custom_field_id = cf.id
+             AND fci.configuration_id = ?
+             AND fci.issue_type = COALESCE(
+                   (SELECT issue_type FROM field_configuration_items
+                    WHERE configuration_id = ? AND custom_field_id = cf.id AND issue_type IN (?, '*')
+                    ORDER BY CASE WHEN issue_type = ? THEN 0 ELSE 1 END LIMIT 1),
+                   '*'
+                 )
+            WHERE stf.tab_id = ?
+            ORDER BY stf.sort_order ASC, stf.id ASC;
+        )SQL");
+        fstmt.bind_int(1, config_id);
+        fstmt.bind_int(2, config_id);
+        fstmt.bind_text(3, issue_type);
+        fstmt.bind_text(4, issue_type);
+        fstmt.bind_int(5, tab_id);
+
+        auto fields_arr = json::json_value::make_array();
+        while (fstmt.step() == SQLITE_ROW) {
+            bool is_hidden = fstmt.column_int(9) != 0;
+            if (filter_hidden && is_hidden) continue;
+
+            int cf_id = fstmt.column_int(3);
+            auto fo = json::json_value::make_object();
+            fo.add_int("id", fstmt.column_int(0));
+            fo.add_int("tab_id", fstmt.column_int(1));
+            fo.add_str("field_key", fstmt.column_str(2));
+            fo.add_nullable_int("custom_field_id", cf_id);
+            fo.add_int("sort_order", fstmt.column_int(4));
+            fo.add_str("name", fstmt.column_str(5));
+            fo.add_str("field_type", fstmt.column_str(6));
+            fo.add_str("description", fstmt.column_str(7));
+            fo.add_bool("is_required", fstmt.column_int(8) != 0);
+            fo.add_bool("is_hidden", is_hidden);
+            fo.add_str("renderer", fstmt.column_str(10));
+            fo.add_str("default_value", fstmt.column_str(11));
+            if (fstmt.column_is_null(12)) {
+                fo.add("min_value", json::json_value::make_null());
+            } else {
+                fo.add_double("min_value", fstmt.column_double(12));
+            }
+            if (fstmt.column_is_null(13)) {
+                fo.add("max_value", json::json_value::make_null());
+            } else {
+                fo.add_double("max_value", fstmt.column_double(13));
+            }
+            fo.add_str("formula_expr", fstmt.column_str(14));
+            if (cf_id > 0) {
+                fo.add("options", load_custom_field_options(conn, cf_id));
+            } else {
+                fo.add("options", json::json_value::make_array());
+            }
+            fields_arr.add(std::move(fo));
+        }
+        tab.add("fields", std::move(fields_arr));
+        tabs_arr.add(std::move(tab));
+    }
+
+    sc.add("tabs", std::move(tabs_arr));
+    return sc;
+}
+
+// GET | POST /api/screens
+static void handle_screens(backend::wsworker *worker,
+                           const std::map<std::string, std::string> &header,
+                           const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto stmt = conn.prepare("SELECT id FROM screens ORDER BY id ASC;");
+        auto arr = json::json_value::make_array();
+        while (stmt.step() == SQLITE_ROW) {
+            arr.add(build_screen_json(conn, stmt.column_int(0)));
+        }
+        send_json(worker, header, "200 OK", arr);
+        return;
+    }
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string name = body.get_string("name");
+    std::string description = body.get_string("description");
+    std::string screen_type = body.get_string("screen_type", "default");
+    if (name.empty()) {
+        send_error(worker, header, "400 Bad Request", "Screen name is required");
+        return;
+    }
+
+    int screen_id = 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare("INSERT INTO screens (name, description, screen_type) VALUES (?, ?, ?);");
+        ins.bind_text(1, name);
+        ins.bind_text(2, description);
+        ins.bind_text(3, screen_type);
+        ins.step_done();
+        screen_id = static_cast<int>(conn.last_insert_rowid());
+
+        auto tab_names = body.get_string_array("tab_names");
+        if (tab_names.empty()) {
+            tab_names.push_back("General");
+        }
+        auto tins = conn.prepare("INSERT INTO screen_tabs (screen_id, name, sort_order) VALUES (?, ?, ?);");
+        int ord = 10;
+        for (const auto &tname : tab_names) {
+            if (tname.empty()) continue;
+            tins.clear_and_reset();
+            tins.bind_int(1, screen_id);
+            tins.bind_text(2, tname);
+            tins.bind_int(3, ord);
+            tins.step_done();
+            ord += 10;
+        }
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    send_json(worker, header, "201 Created", build_screen_json(conn, screen_id));
+}
+
+// PUT | DELETE /api/screens/([0-9]+)
+static void handle_screen_detail(backend::wsworker *worker,
+                                 const std::map<std::string, std::string> &header,
+                                 const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing screen ID");
+        return;
+    }
+    int screen_id = std::atoi(uri_params.front().c_str());
+
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    std::string method = get_header(header, "REQUEST_METHOD");
+    if (method == "DELETE") {
+        db::sqlite_transaction tx(conn);
+        auto del = conn.prepare("DELETE FROM screens WHERE id = ?;");
+        del.bind_int(1, screen_id);
+        del.step_done();
+        tx.commit();
+        auto res = json::json_value::make_object();
+        res.add_bool("deleted", true);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string name = body.get_string("name");
+    std::string description = body.get_string("description");
+    std::string screen_type = body.get_string("screen_type", "default");
+    if (name.empty()) {
+        send_error(worker, header, "400 Bad Request", "Screen name is required");
+        return;
+    }
+
+    try {
+        db::sqlite_transaction tx(conn);
+        auto upd = conn.prepare("UPDATE screens SET name = ?, description = ?, screen_type = ? WHERE id = ?;");
+        upd.bind_text(1, name);
+        upd.bind_text(2, description);
+        upd.bind_text(3, screen_type);
+        upd.bind_int(4, screen_id);
+        upd.step_done();
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    send_json(worker, header, "200 OK", build_screen_json(conn, screen_id));
+}
+
+// POST /api/screens/([0-9]+)/tabs
+static void handle_screen_tabs(backend::wsworker *worker,
+                               const std::map<std::string, std::string> &header,
+                               const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing screen ID");
+        return;
+    }
+    int screen_id = std::atoi(uri_params.front().c_str());
+
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string name = body.get_string("name");
+    int sort_order = body.get_int("sort_order", 50);
+    if (name.empty()) {
+        send_error(worker, header, "400 Bad Request", "Tab name is required");
+        return;
+    }
+
+    int tab_id = 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare("INSERT INTO screen_tabs (screen_id, name, sort_order) VALUES (?, ?, ?);");
+        ins.bind_int(1, screen_id);
+        ins.bind_text(2, name);
+        ins.bind_int(3, sort_order);
+        ins.step_done();
+        tab_id = static_cast<int>(conn.last_insert_rowid());
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", tab_id);
+    res.add_int("screen_id", screen_id);
+    res.add_str("name", name);
+    res.add_int("sort_order", sort_order);
+    res.add("fields", json::json_value::make_array());
+    send_json(worker, header, "201 Created", res);
+}
+
+// DELETE /api/screen-tabs/([0-9]+)
+static void handle_delete_screen_tab(backend::wsworker *worker,
+                                     const std::map<std::string, std::string> &header,
+                                     const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing tab ID");
+        return;
+    }
+    int tab_id = std::atoi(uri_params.front().c_str());
+
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    {
+        db::sqlite_transaction tx(conn);
+        auto del = conn.prepare("DELETE FROM screen_tabs WHERE id = ?;");
+        del.bind_int(1, tab_id);
+        del.step_done();
+        tx.commit();
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_bool("deleted", true);
+    send_json(worker, header, "200 OK", res);
+}
+
+// POST /api/screen-tabs/([0-9]+)/fields
+static void handle_screen_tab_fields(backend::wsworker *worker,
+                                     const std::map<std::string, std::string> &header,
+                                     const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing tab ID");
+        return;
+    }
+    int tab_id = std::atoi(uri_params.front().c_str());
+
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    int custom_field_id = body.get_int("custom_field_id", 0);
+    std::string field_key = body.get_string("field_key");
+    int sort_order = body.get_int("sort_order", 10);
+
+    if (custom_field_id > 0 && field_key.empty()) {
+        auto q = conn.prepare("SELECT field_key FROM custom_fields WHERE id = ?;");
+        q.bind_int(1, custom_field_id);
+        if (q.step() == SQLITE_ROW) {
+            field_key = q.column_str(0);
+        }
+    } else if (custom_field_id <= 0 && !field_key.empty()) {
+        auto q = conn.prepare("SELECT id FROM custom_fields WHERE field_key = ?;");
+        q.bind_text(1, field_key);
+        if (q.step() == SQLITE_ROW) {
+            custom_field_id = q.column_int(0);
+        }
+    }
+
+    if (field_key.empty()) {
+        send_error(worker, header, "400 Bad Request", "custom_field_id or field_key is required");
+        return;
+    }
+
+    int stf_id = 0;
+    try {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare(R"SQL(
+            INSERT INTO screen_tab_fields (tab_id, field_key, custom_field_id, sort_order)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(tab_id, field_key) DO UPDATE SET
+                sort_order = excluded.sort_order;
+        )SQL");
+        ins.bind_int(1, tab_id);
+        ins.bind_text(2, field_key);
+        ins.bind_optional_int(3, custom_field_id);
+        ins.bind_int(4, sort_order);
+        ins.step_done();
+        stf_id = static_cast<int>(conn.last_insert_rowid());
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", stf_id);
+    res.add_int("tab_id", tab_id);
+    res.add_str("field_key", field_key);
+    res.add_nullable_int("custom_field_id", custom_field_id);
+    res.add_int("sort_order", sort_order);
+    send_json(worker, header, "201 Created", res);
+}
+
+// DELETE /api/screen-tab-fields/([0-9]+)
+static void handle_delete_screen_tab_field(backend::wsworker *worker,
+                                           const std::map<std::string, std::string> &header,
+                                           const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing screen tab field ID");
+        return;
+    }
+    int stf_id = std::atoi(uri_params.front().c_str());
+
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    {
+        db::sqlite_transaction tx(conn);
+        auto del = conn.prepare("DELETE FROM screen_tab_fields WHERE id = ?;");
+        del.bind_int(1, stf_id);
+        del.step_done();
+        tx.commit();
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_bool("deleted", true);
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET | POST /api/screen-schemes
+static void handle_screen_schemes(backend::wsworker *worker,
+                                  const std::map<std::string, std::string> &header,
+                                  const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto stmt = conn.prepare(R"SQL(
+            SELECT ss.id, ss.name, ss.description, COALESCE(ss.project_id, 0), ss.is_default,
+                   ss.create_screen_id, COALESCE(s1.name, ''),
+                   ss.edit_screen_id,   COALESCE(s2.name, ''),
+                   ss.view_screen_id,   COALESCE(s3.name, ''),
+                   ss.transition_screen_id, COALESCE(s4.name, ''),
+                   ss.created_at
+            FROM screen_schemes ss
+            LEFT JOIN screens s1 ON s1.id = ss.create_screen_id
+            LEFT JOIN screens s2 ON s2.id = ss.edit_screen_id
+            LEFT JOIN screens s3 ON s3.id = ss.view_screen_id
+            LEFT JOIN screens s4 ON s4.id = ss.transition_screen_id
+            ORDER BY ss.is_default DESC, ss.id ASC;
+        )SQL");
+        auto arr = json::json_value::make_array();
+        while (stmt.step() == SQLITE_ROW) {
+            auto ss = json::json_value::make_object();
+            ss.add_int("id", stmt.column_int(0));
+            ss.add_str("name", stmt.column_str(1));
+            ss.add_str("description", stmt.column_str(2));
+            ss.add_nullable_int("project_id", stmt.column_int(3));
+            ss.add_bool("is_default", stmt.column_int(4) != 0);
+            ss.add_int("create_screen_id", stmt.column_int(5));
+            ss.add_str("create_screen_name", stmt.column_str(6));
+            ss.add_int("edit_screen_id", stmt.column_int(7));
+            ss.add_str("edit_screen_name", stmt.column_str(8));
+            ss.add_int("view_screen_id", stmt.column_int(9));
+            ss.add_str("view_screen_name", stmt.column_str(10));
+            ss.add_int("transition_screen_id", stmt.column_int(11));
+            ss.add_str("transition_screen_name", stmt.column_str(12));
+            ss.add_str("created_at", stmt.column_str(13));
+            arr.add(std::move(ss));
+        }
+        send_json(worker, header, "200 OK", arr);
+        return;
+    }
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    int id = body.get_int("id", 0);
+    std::string name = body.get_string("name");
+    std::string description = body.get_string("description");
+    int project_id = body.get_int("project_id", 0);
+    bool is_default = body.get_bool("is_default", false);
+    int create_screen_id = body.get_int("create_screen_id", 1);
+    int edit_screen_id = body.get_int("edit_screen_id", 2);
+    int view_screen_id = body.get_int("view_screen_id", 2);
+    int transition_screen_id = body.get_int("transition_screen_id", 3);
+
+    try {
+        db::sqlite_transaction tx(conn);
+        if (id > 0) {
+            auto upd = conn.prepare(R"SQL(
+                UPDATE screen_schemes
+                SET name = COALESCE(NULLIF(?, ''), name),
+                    description = ?,
+                    project_id = ?,
+                    create_screen_id = ?,
+                    edit_screen_id = ?,
+                    view_screen_id = ?,
+                    transition_screen_id = ?
+                WHERE id = ?;
+            )SQL");
+            upd.bind_text(1, name);
+            upd.bind_text(2, description);
+            upd.bind_optional_int(3, project_id);
+            upd.bind_int(4, create_screen_id);
+            upd.bind_int(5, edit_screen_id);
+            upd.bind_int(6, view_screen_id);
+            upd.bind_int(7, transition_screen_id);
+            upd.bind_int(8, id);
+            upd.step_done();
+        } else {
+            if (name.empty()) {
+                send_error(worker, header, "400 Bad Request", "Screen scheme name is required");
+                return;
+            }
+            auto ins = conn.prepare(R"SQL(
+                INSERT INTO screen_schemes (
+                    name, description, project_id, is_default,
+                    create_screen_id, edit_screen_id, view_screen_id, transition_screen_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+            )SQL");
+            ins.bind_text(1, name);
+            ins.bind_text(2, description);
+            ins.bind_optional_int(3, project_id);
+            ins.bind_int(4, is_default ? 1 : 0);
+            ins.bind_int(5, create_screen_id);
+            ins.bind_int(6, edit_screen_id);
+            ins.bind_int(7, view_screen_id);
+            ins.bind_int(8, transition_screen_id);
+            ins.step_done();
+            id = static_cast<int>(conn.last_insert_rowid());
+        }
+        tx.commit();
+    } catch (const std::exception &ex) {
+        send_error(worker, header, "400 Bad Request", ex.what());
+        return;
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", id);
+    res.add_str("name", name);
+    res.add_str("description", description);
+    res.add_nullable_int("project_id", project_id);
+    res.add_bool("is_default", is_default);
+    res.add_int("create_screen_id", create_screen_id);
+    res.add_int("edit_screen_id", edit_screen_id);
+    res.add_int("view_screen_id", view_screen_id);
+    res.add_int("transition_screen_id", transition_screen_id);
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET /api/screens/resolve?project_id=1&operation=create|edit|view|transition&issue_type=Story
+static void handle_resolve_screen(backend::wsworker *worker,
+                                  const std::map<std::string, std::string> &header,
+                                  const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+    int project_id = std::atoi(args["project_id"].c_str());
+    if (project_id <= 0) project_id = 1;
+    std::string operation = args["operation"];
+    if (operation.empty()) operation = "view";
+    std::string issue_type = args["issue_type"];
+    if (issue_type.empty()) issue_type = "*";
+    bool include_hidden = (args["include_hidden"] == "1" || args["include_hidden"] == "true");
+
+    int screen_id = 2;
+    {
+        auto ss = conn.prepare(R"SQL(
+            SELECT create_screen_id, edit_screen_id, view_screen_id, transition_screen_id
+            FROM screen_schemes
+            WHERE project_id = ? OR is_default = 1
+            ORDER BY CASE WHEN project_id = ? THEN 0 ELSE 1 END, id ASC
+            LIMIT 1;
+        )SQL");
+        ss.bind_int(1, project_id);
+        ss.bind_int(2, project_id);
+        if (ss.step() == SQLITE_ROW) {
+            if (operation == "create") screen_id = ss.column_int(0);
+            else if (operation == "edit") screen_id = ss.column_int(1);
+            else if (operation == "transition") screen_id = ss.column_int(3);
+            else screen_id = ss.column_int(2);
+        }
+    }
+
+    int config_id = 1;
+    {
+        auto fcs = conn.prepare(R"SQL(
+            SELECT configuration_id
+            FROM field_configuration_schemes
+            WHERE project_id = ? OR is_default = 1
+            ORDER BY CASE WHEN project_id = ? THEN 0 ELSE 1 END, id ASC
+            LIMIT 1;
+        )SQL");
+        fcs.bind_int(1, project_id);
+        fcs.bind_int(2, project_id);
+        if (fcs.step() == SQLITE_ROW) {
+            config_id = fcs.column_int(0);
+        }
+    }
+
+    auto resolved = build_screen_json(conn, screen_id, config_id, issue_type, !include_hidden);
+    if (!resolved) {
+        send_error(worker, header, "404 Not Found", "Resolved screen not found");
+        return;
+    }
+    resolved.add_str("operation", operation);
+    resolved.add_int("project_id", project_id);
+    resolved.add_str("issue_type", issue_type);
+    resolved.add_int("configuration_id", config_id);
+    send_json(worker, header, "200 OK", resolved);
+}
+
 // GET /api/sprints & POST /api/sprints
 static void handle_sprints(backend::wsworker *worker,
                            const std::map<std::string, std::string> &header,
@@ -2069,6 +3393,354 @@ static void sync_item_components_and_versions(db::sqlite_db &conn,
     }
 }
 
+struct raw_cf_input {
+    bool present = false;
+    bool is_null = false;
+    bool is_array = false;
+    std::string str_val;
+    std::string json_arr_val;
+};
+
+static std::map<std::string, raw_cf_input> extract_custom_fields_from_body(const json::json_value &body) {
+    std::map<std::string, raw_cf_input> out;
+    if (!body) return out;
+
+    auto parse_elem = [](json_object *val_obj) -> raw_cf_input {
+        raw_cf_input inp;
+        inp.present = true;
+        if (!val_obj || json_object_is_type(val_obj, json_type_null)) {
+            inp.is_null = true;
+            return inp;
+        }
+        if (json_object_is_type(val_obj, json_type_array)) {
+            inp.is_array = true;
+            const char *js = json_object_to_json_string_ext(val_obj, JSON_C_TO_STRING_PLAIN);
+            inp.json_arr_val = js ? js : "[]";
+            std::ostringstream oss;
+            size_t len = json_object_array_length(val_obj);
+            for (size_t i = 0; i < len; ++i) {
+                json_object *el = json_object_array_get_idx(val_obj, i);
+                if (el && !json_object_is_type(el, json_type_null)) {
+                    const char *s = json_object_get_string(el);
+                    if (s && *s) {
+                        if (oss.tellp() > 0) oss << ", ";
+                        oss << s;
+                    }
+                }
+            }
+            inp.str_val = oss.str();
+            return inp;
+        }
+        if (json_object_is_type(val_obj, json_type_boolean)) {
+            inp.str_val = json_object_get_boolean(val_obj) ? "true" : "false";
+            return inp;
+        }
+        const char *s = json_object_get_string(val_obj);
+        inp.str_val = s ? s : "";
+        return inp;
+    };
+
+    const char *keys_to_check[] = {"custom_fields", "custom_field_values"};
+    for (const char *top_key : keys_to_check) {
+        json_object *cf_container = nullptr;
+        if (!json_object_object_get_ex(body.get(), top_key, &cf_container) || !cf_container) continue;
+
+        if (json_object_is_type(cf_container, json_type_object)) {
+            json_object_object_foreach(cf_container, k, v) {
+                if (k) {
+                    out[std::string(k)] = parse_elem(v);
+                }
+            }
+        } else if (json_object_is_type(cf_container, json_type_array)) {
+            size_t len = json_object_array_length(cf_container);
+            for (size_t i = 0; i < len; ++i) {
+                json_object *entry = json_object_array_get_idx(cf_container, i);
+                if (!entry || !json_object_is_type(entry, json_type_object)) continue;
+                json_object *fk_obj = nullptr;
+                json_object *id_obj = nullptr;
+                json_object *val_obj = nullptr;
+                json_object_object_get_ex(entry, "field_key", &fk_obj);
+                json_object_object_get_ex(entry, "custom_field_id", &id_obj);
+                json_object_object_get_ex(entry, "value", &val_obj);
+                raw_cf_input parsed = parse_elem(val_obj);
+                if (fk_obj && !json_object_is_type(fk_obj, json_type_null)) {
+                    const char *fk = json_object_get_string(fk_obj);
+                    if (fk && *fk) out[std::string(fk)] = parsed;
+                }
+                if (id_obj && !json_object_is_type(id_obj, json_type_null)) {
+                    int cid = json_object_get_int(id_obj);
+                    if (cid > 0) out[std::to_string(cid)] = parsed;
+                }
+            }
+        }
+    }
+    return out;
+}
+
+static bool validate_custom_fields_for_item(db::sqlite_db &conn,
+                                            int project_id,
+                                            const std::string &issue_type,
+                                            const json::json_value &body,
+                                            bool is_create,
+                                            int existing_item_id,
+                                            std::string &err_msg) {
+    auto inputs = extract_custom_fields_from_body(body);
+
+    int config_id = 1;
+    {
+        auto fcs = conn.prepare(R"SQL(
+            SELECT configuration_id
+            FROM field_configuration_schemes
+            WHERE project_id = ? OR is_default = 1
+            ORDER BY CASE WHEN project_id = ? THEN 0 ELSE 1 END, id ASC
+            LIMIT 1;
+        )SQL");
+        fcs.bind_int(1, project_id);
+        fcs.bind_int(2, project_id);
+        if (fcs.step() == SQLITE_ROW) {
+            config_id = fcs.column_int(0);
+        }
+    }
+
+    auto stmt = conn.prepare(R"SQL(
+        SELECT cf.id, cf.name, cf.field_key, cf.field_type,
+               COALESCE(NULLIF(fci.default_value, ''), cf.default_value, ''),
+               COALESCE(fci.is_required, cf.is_required, 0),
+               COALESCE(fci.is_hidden, 0),
+               cf.min_value IS NOT NULL, COALESCE(cf.min_value, 0.0),
+               cf.max_value IS NOT NULL, COALESCE(cf.max_value, 0.0)
+        FROM custom_fields cf
+        LEFT JOIN field_configuration_items fci
+          ON fci.custom_field_id = cf.id
+         AND fci.configuration_id = ?
+         AND fci.issue_type = COALESCE(
+               (SELECT issue_type FROM field_configuration_items
+                WHERE configuration_id = ? AND custom_field_id = cf.id AND issue_type IN (?, '*')
+                ORDER BY CASE WHEN issue_type = ? THEN 0 ELSE 1 END LIMIT 1),
+               '*'
+             )
+        ORDER BY cf.sort_order ASC, cf.id ASC;
+    )SQL");
+    stmt.bind_int(1, config_id);
+    stmt.bind_int(2, config_id);
+    stmt.bind_text(3, issue_type);
+    stmt.bind_text(4, issue_type);
+
+    while (stmt.step() == SQLITE_ROW) {
+        int cf_id = stmt.column_int(0);
+        std::string cf_name = stmt.column_str(1);
+        std::string cf_key = stmt.column_str(2);
+        std::string cf_type = stmt.column_str(3);
+        std::string def_val = stmt.column_str(4);
+        bool is_req = stmt.column_int(5) != 0;
+        bool is_hidden = stmt.column_int(6) != 0;
+        bool has_min = stmt.column_int(7) != 0;
+        double min_val = stmt.column_double(8);
+        bool has_max = stmt.column_int(9) != 0;
+        double max_val = stmt.column_double(10);
+
+        if (cf_type == "formula") continue;
+
+        raw_cf_input inp;
+        auto it = inputs.find(cf_key);
+        if (it != inputs.end()) {
+            inp = it->second;
+        } else {
+            auto it_id = inputs.find(std::to_string(cf_id));
+            if (it_id != inputs.end()) {
+                inp = it_id->second;
+            }
+        }
+
+        // Check required constraint when field is required and not hidden
+        if (is_req && !is_hidden) {
+            bool has_non_empty = false;
+            if (inp.present && !inp.is_null && !inp.str_val.empty()) {
+                if (cf_type == "user_picker_single") {
+                    has_non_empty = (std::atoi(inp.str_val.c_str()) > 0);
+                } else {
+                    has_non_empty = true;
+                }
+            } else if (!inp.present && !is_create && existing_item_id > 0) {
+                // Check if existing item already has a stored value
+                auto ex = conn.prepare(R"SQL(
+                    SELECT COALESCE(text_value, ''), COALESCE(date_value, ''), COALESCE(user_value_id, 0), numeric_value IS NOT NULL
+                    FROM custom_field_values
+                    WHERE work_item_id = ? AND custom_field_id = ?;
+                )SQL");
+                ex.bind_int(1, existing_item_id);
+                ex.bind_int(2, cf_id);
+                if (ex.step() == SQLITE_ROW) {
+                    if (!ex.column_str(0).empty() || !ex.column_str(1).empty() || ex.column_int(2) > 0 || ex.column_int(3) != 0) {
+                        has_non_empty = true;
+                    }
+                }
+            }
+            if (!has_non_empty) {
+                err_msg = "Mandatory custom field '" + cf_name + "' (" + cf_key + ") is required";
+                return false;
+            }
+        }
+
+        // Validate value format & bounds when non-empty
+        if (inp.present && !inp.is_null && !inp.str_val.empty()) {
+            if (cf_type == "number") {
+                double num = 0.0;
+                try {
+                    size_t idx = 0;
+                    num = std::stod(inp.str_val, &idx);
+                } catch (...) {
+                    err_msg = "Custom field '" + cf_name + "' requires a valid numeric value";
+                    return false;
+                }
+                if (has_min && num < min_val) {
+                    err_msg = "Custom field '" + cf_name + "' must be >= " + std::to_string(min_val);
+                    return false;
+                }
+                if (has_max && num > max_val) {
+                    err_msg = "Custom field '" + cf_name + "' must be <= " + std::to_string(max_val);
+                    return false;
+                }
+            } else if (cf_type == "url") {
+                if (!inp.str_val.starts_with("http://") && !inp.str_val.starts_with("https://")) {
+                    err_msg = "Custom field '" + cf_name + "' requires a valid http:// or https:// URL";
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+static void sync_item_custom_fields(db::sqlite_db &conn,
+                                    int item_id,
+                                    const json::json_value &body,
+                                    bool is_create) {
+    auto inputs = extract_custom_fields_from_body(body);
+    if (!is_create && inputs.empty()) return;
+
+    auto stmt = conn.prepare(R"SQL(
+        SELECT id, field_key, field_type, default_value
+        FROM custom_fields
+        ORDER BY id ASC;
+    )SQL");
+
+    auto ups = conn.prepare(R"SQL(
+        INSERT INTO custom_field_values (
+            work_item_id, custom_field_id, text_value, numeric_value, date_value, user_value_id, json_value, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(work_item_id, custom_field_id) DO UPDATE SET
+            text_value    = excluded.text_value,
+            numeric_value = excluded.numeric_value,
+            date_value    = excluded.date_value,
+            user_value_id = excluded.user_value_id,
+            json_value    = excluded.json_value,
+            updated_at    = datetime('now');
+    )SQL");
+
+    while (stmt.step() == SQLITE_ROW) {
+        int cf_id = stmt.column_int(0);
+        std::string cf_key = stmt.column_str(1);
+        std::string cf_type = stmt.column_str(2);
+        std::string def_val = stmt.column_str(3);
+
+        if (cf_type == "formula") continue;
+
+        raw_cf_input inp;
+        auto it = inputs.find(cf_key);
+        if (it != inputs.end()) {
+            inp = it->second;
+        } else {
+            auto it_id = inputs.find(std::to_string(cf_id));
+            if (it_id != inputs.end()) {
+                inp = it_id->second;
+            }
+        }
+
+        if (!inp.present) {
+            if (is_create && !def_val.empty()) {
+                inp.present = true;
+                inp.str_val = def_val;
+                if (cf_type == "select_multi" && def_val.starts_with("[")) {
+                    inp.is_array = true;
+                    inp.json_arr_val = def_val;
+                }
+            } else {
+                continue;
+            }
+        }
+
+        std::string text_val = inp.is_null ? "" : inp.str_val;
+        bool has_num = false;
+        double num_val = 0.0;
+        std::string date_val;
+        int user_id = 0;
+        std::string json_val = inp.json_arr_val;
+
+        if (!inp.is_null && !text_val.empty()) {
+            if (cf_type == "number") {
+                try {
+                    num_val = std::stod(text_val);
+                    has_num = true;
+                } catch (...) {}
+            } else if (cf_type == "date" || cf_type == "datetime") {
+                date_val = text_val;
+            } else if (cf_type == "user_picker_single") {
+                user_id = std::atoi(text_val.c_str());
+                if (user_id <= 0) text_val.clear();
+            } else if (cf_type == "checkbox") {
+                bool b = (text_val == "true" || text_val == "1");
+                text_val = b ? "true" : "false";
+                has_num = true;
+                num_val = b ? 1.0 : 0.0;
+            } else if (cf_type == "select_multi" && json_val.empty()) {
+                // Convert comma-separated text_val into a JSON array string
+                auto jarr = json::json_value::make_array();
+                std::stringstream ss(text_val);
+                std::string token;
+                while (std::getline(ss, token, ',')) {
+                    size_t start = token.find_first_not_of(" \t");
+                    size_t end = token.find_last_not_of(" \t");
+                    if (start != std::string::npos) {
+                        jarr.add(json::json_value::make_string(token.substr(start, end - start + 1)));
+                    }
+                }
+                json_val = jarr.to_string();
+            }
+        } else if (cf_type == "checkbox" && !inp.is_null) {
+            text_val = "false";
+            has_num = true;
+            num_val = 0.0;
+        }
+
+        ups.clear_and_reset();
+        ups.bind_int(1, item_id);
+        ups.bind_int(2, cf_id);
+        ups.bind_text(3, text_val);
+        if (has_num) ups.bind_double(4, num_val); else ups.bind_null(4);
+        ups.bind_text(5, date_val);
+        ups.bind_optional_int(6, user_id);
+        ups.bind_text(7, json_val);
+        ups.step_done();
+    }
+}
+
+static double evaluate_custom_formula(const std::string &formula_expr, int story_points, int progress) {
+    if (formula_expr.find("story_points") != std::string::npos) {
+        auto star = formula_expr.find('*');
+        if (star != std::string::npos) {
+            double mult = std::atof(formula_expr.substr(star + 1).c_str());
+            if (mult <= 0.0) mult = 4.0;
+            return static_cast<double>(story_points) * mult;
+        }
+        return static_cast<double>(story_points) * 4.0;
+    }
+    if (formula_expr.find("progress") != std::string::npos) {
+        return static_cast<double>(progress);
+    }
+    return static_cast<double>(story_points * 4);
+}
+
 static json::json_value row_to_work_item_json(db::sqlite_db &conn, db::sqlite_stmt &stmt) {
     auto item = json::json_value::make_object();
     int item_id = stmt.column_int(0);
@@ -2166,6 +3838,102 @@ static json::json_value row_to_work_item_json(db::sqlite_db &conn, db::sqlite_st
     item.add("fix_version_ids", std::move(fix_ids_arr));
     item.add("affects_versions", std::move(aff_arr));
     item.add("affects_version_ids", std::move(aff_ids_arr));
+
+    // Load custom fields EAV values (cached prepared statement)
+    int story_pts = stmt.column_int(12);
+    int prog = stmt.column_int(13);
+    auto cf_map = json::json_value::make_object();
+    auto cf_entries = json::json_value::make_array();
+    {
+        auto cfstmt = conn.prepare(R"SQL(
+            SELECT cf.id, cf.field_key, cf.name, cf.field_type, cf.formula_expr, cf.is_required,
+                   COALESCE(cfv.text_value, ''),
+                   cfv.numeric_value IS NOT NULL, COALESCE(cfv.numeric_value, 0.0),
+                   COALESCE(cfv.date_value, ''),
+                   COALESCE(cfv.user_value_id, 0),
+                   COALESCE(u.display_name, ''),
+                   COALESCE(cfv.json_value, '')
+            FROM custom_fields cf
+            LEFT JOIN custom_field_values cfv ON cfv.custom_field_id = cf.id AND cfv.work_item_id = ?
+            LEFT JOIN users u ON u.id = cfv.user_value_id
+            ORDER BY cf.sort_order ASC, cf.id ASC;
+        )SQL");
+        cfstmt.bind_int(1, item_id);
+        while (cfstmt.step() == SQLITE_ROW) {
+            int cf_id = cfstmt.column_int(0);
+            std::string fkey = cfstmt.column_str(1);
+            std::string fname = cfstmt.column_str(2);
+            std::string ftype = cfstmt.column_str(3);
+            std::string formula_expr = cfstmt.column_str(4);
+            bool is_req = cfstmt.column_int(5) != 0;
+            std::string txt_val = cfstmt.column_str(6);
+            bool has_num = cfstmt.column_int(7) != 0;
+            double num_val = cfstmt.column_double(8);
+            std::string date_val = cfstmt.column_str(9);
+            int user_val_id = cfstmt.column_int(10);
+            std::string user_name = cfstmt.column_str(11);
+            std::string json_val = cfstmt.column_str(12);
+
+            auto entry = json::json_value::make_object();
+            entry.add_int("custom_field_id", cf_id);
+            entry.add_str("field_key", fkey);
+            entry.add_str("name", fname);
+            entry.add_str("field_type", ftype);
+            entry.add_bool("is_required", is_req);
+            entry.add_nullable_int("user_value_id", user_val_id);
+            entry.add_str("user_display_name", user_name);
+
+            if (ftype == "formula") {
+                double calc = evaluate_custom_formula(formula_expr, story_pts, prog);
+                cf_map.add_double(fkey.c_str(), calc);
+                entry.add_double("value", calc);
+                std::ostringstream oss;
+                oss << calc;
+                entry.add_str("display_value", oss.str());
+            } else if (ftype == "number") {
+                if (has_num) {
+                    cf_map.add_double(fkey.c_str(), num_val);
+                    entry.add_double("value", num_val);
+                    entry.add_str("display_value", txt_val);
+                } else {
+                    cf_map.add(fkey.c_str(), json::json_value::make_null());
+                    entry.add("value", json::json_value::make_null());
+                    entry.add_str("display_value", "");
+                }
+            } else if (ftype == "checkbox") {
+                bool b = (txt_val == "true" || txt_val == "1" || (has_num && num_val != 0.0));
+                cf_map.add_bool(fkey.c_str(), b);
+                entry.add_bool("value", b);
+                entry.add_str("display_value", b ? "Yes" : "No");
+            } else if (ftype == "user_picker_single") {
+                cf_map.add_nullable_int(fkey.c_str(), user_val_id);
+                entry.add_nullable_int("value", user_val_id);
+                entry.add_str("display_value", user_name);
+            } else if (ftype == "select_multi") {
+                auto parsed_arr = json::json_value::parse(json_val);
+                if (parsed_arr && json_object_is_type(parsed_arr.get(), json_type_array)) {
+                    cf_map.add(fkey.c_str(), std::move(parsed_arr));
+                } else {
+                    cf_map.add(fkey.c_str(), json::json_value::make_array());
+                }
+                auto parsed_arr2 = json::json_value::parse(json_val);
+                if (parsed_arr2 && json_object_is_type(parsed_arr2.get(), json_type_array)) {
+                    entry.add("value", std::move(parsed_arr2));
+                } else {
+                    entry.add("value", json::json_value::make_array());
+                }
+                entry.add_str("display_value", txt_val);
+            } else {
+                std::string eff = (!date_val.empty()) ? date_val : txt_val;
+                cf_map.add_str(fkey.c_str(), eff);
+                entry.add_str("value", eff);
+                entry.add_str("display_value", eff);
+            }
+            cf_entries.add(std::move(entry));
+        }
+    }
+    item.add("custom_fields", std::move(cf_map));
+    item.add("custom_field_entries", std::move(cf_entries));
 
     return item;
 }
@@ -2313,6 +4081,12 @@ static void handle_items(backend::wsworker *worker,
         return;
     }
 
+    std::string cf_err;
+    if (!validate_custom_fields_for_item(conn, project_id, type, body, true, 0, cf_err)) {
+        send_error(worker, header, "400 Bad Request", cf_err);
+        return;
+    }
+
     // Component default assignee auto-routing when assignee_id is not explicitly specified
     auto comp_ids = body.get_int_array("component_ids");
     if (assignee_id <= 0 && !comp_ids.empty()) {
@@ -2394,6 +4168,7 @@ static void handle_items(backend::wsworker *worker,
         new_item_id = static_cast<int>(conn.last_insert_rowid());
 
         sync_item_components_and_versions(conn, new_item_id, body, true);
+        sync_item_custom_fields(conn, new_item_id, body, true);
 
         auto hist = conn.prepare(R"SQL(
             INSERT INTO workflow_history (work_item_id, from_status, to_status, changed_by, comment)
@@ -2624,10 +4399,11 @@ static void handle_item_detail(backend::wsworker *worker,
     }
 
     std::string old_status;
+    int old_project_id = 1;
     int old_resolution_id = 0;
     std::string old_resolution_date;
     {
-        auto cur = conn.prepare("SELECT status, COALESCE(resolution_id, 0), COALESCE(resolution_date, '') FROM work_items WHERE id = ?;");
+        auto cur = conn.prepare("SELECT status, COALESCE(resolution_id, 0), COALESCE(resolution_date, ''), project_id FROM work_items WHERE id = ?;");
         cur.bind_int(1, item_id);
         if (cur.step() != SQLITE_ROW) {
             send_error(worker, header, "404 Not Found", "Work item not found");
@@ -2636,9 +4412,15 @@ static void handle_item_detail(backend::wsworker *worker,
         old_status = cur.column_str(0);
         old_resolution_id = cur.column_int(1);
         old_resolution_date = cur.column_str(2);
+        old_project_id = cur.column_int(3);
     }
 
     std::string type = body.get_string("type", "Task");
+    std::string cf_err;
+    if (!validate_custom_fields_for_item(conn, old_project_id, type, body, false, item_id, cf_err)) {
+        send_error(worker, header, "400 Bad Request", cf_err);
+        return;
+    }
     std::string category = body.get_string("category", "New Feature");
     std::string status = body.get_string("status", old_status);
     std::string priority = body.get_string("priority", "Medium");
@@ -2712,6 +4494,7 @@ static void handle_item_detail(backend::wsworker *worker,
         upd.step_done();
 
         sync_item_components_and_versions(conn, item_id, body, false);
+        sync_item_custom_fields(conn, item_id, body, false);
 
         if (status != old_status) {
             auto hist = conn.prepare(R"SQL(
@@ -2842,6 +4625,8 @@ static void handle_item_state_transition(backend::wsworker *worker,
         upd.bind_text(8, new_res_date);
         upd.bind_int(9, item_id);
         upd.step_done();
+
+        sync_item_custom_fields(conn, item_id, body, false);
 
         if (new_status != old_status) {
             auto hist = conn.prepare(R"SQL(
@@ -3309,6 +5094,19 @@ int main(int argc, char *argv[]) {
         {"^/api/projects/([0-9]+)/versions$",       backend::GET | backend::POST,   handle_versions             },
         {"^/api/versions/([0-9]+)$",                backend::PUT | backend::DELETE, handle_version_detail       },
         {"^/api/versions/([0-9]+)/release-notes$",  backend::GET,                   handle_version_release_notes},
+        {"^/api/custom-fields$",                    backend::GET | backend::POST,   handle_custom_fields        },
+        {"^/api/custom-fields/([0-9]+)$",           backend::PUT | backend::DELETE, handle_custom_field_detail  },
+        {"^/api/custom-fields/([0-9]+)/options$",   backend::POST,                  handle_custom_field_options },
+        {"^/api/custom-field-options/([0-9]+)$",    backend::DELETE,                handle_delete_custom_field_option},
+        {"^/api/field-configurations$",             backend::GET | backend::POST,   handle_field_configurations },
+        {"^/api/screens/resolve$",                  backend::GET,                   handle_resolve_screen       },
+        {"^/api/screens$",                          backend::GET | backend::POST,   handle_screens              },
+        {"^/api/screens/([0-9]+)$",                 backend::PUT | backend::DELETE, handle_screen_detail        },
+        {"^/api/screens/([0-9]+)/tabs$",            backend::POST,                  handle_screen_tabs          },
+        {"^/api/screen-tabs/([0-9]+)$",             backend::DELETE,                handle_delete_screen_tab    },
+        {"^/api/screen-tabs/([0-9]+)/fields$",      backend::POST,                  handle_screen_tab_fields    },
+        {"^/api/screen-tab-fields/([0-9]+)$",       backend::DELETE,                handle_delete_screen_tab_field},
+        {"^/api/screen-schemes$",                   backend::GET | backend::POST,   handle_screen_schemes       },
         {"^/api/sprints$",                          backend::GET | backend::POST,   handle_sprints              },
         {"^/api/sprints/([0-9]+)$",                 backend::PUT | backend::DELETE, handle_sprint_detail        },
         {"^/api/sprints/([0-9]+)/current$",         backend::POST,                  handle_sprint_set_current   },

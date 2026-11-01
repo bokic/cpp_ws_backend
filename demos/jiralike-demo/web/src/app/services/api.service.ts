@@ -2,6 +2,9 @@ import { Injectable, computed, signal } from '@angular/core';
 import {
   AttachmentItem,
   CommentItem,
+  CustomFieldDef,
+  CustomFieldOption,
+  FieldConfiguration,
   IssueTypeDef,
   IssueTypeScheme,
   Project,
@@ -9,6 +12,9 @@ import {
   ProjectVersion,
   ReleaseNotesResponse,
   Resolution,
+  ScreenDef,
+  ScreenScheme,
+  ScreenTab,
   SetupStatus,
   Sprint,
   User,
@@ -37,6 +43,10 @@ export class ApiService {
   readonly issueTypeSchemes = signal<IssueTypeScheme[]>([]);
   readonly components = signal<ProjectComponent[]>([]);
   readonly versions = signal<ProjectVersion[]>([]);
+  readonly customFields = signal<CustomFieldDef[]>([]);
+  readonly fieldConfigurations = signal<FieldConfiguration[]>([]);
+  readonly screens = signal<ScreenDef[]>([]);
+  readonly screenSchemes = signal<ScreenScheme[]>([]);
   readonly currentSprint = computed<Sprint | null>(() => {
     const list = this.sprints();
     return (
@@ -159,7 +169,20 @@ export class ApiService {
   }
 
   async loadReferenceData(): Promise<void> {
-    const [projs, usrs, sprs, resList, typesList, schemesList, compsList, versList] = await Promise.all([
+    const [
+      projs,
+      usrs,
+      sprs,
+      resList,
+      typesList,
+      schemesList,
+      compsList,
+      versList,
+      cfList,
+      fcList,
+      scrList,
+      ssList,
+    ] = await Promise.all([
       this.getProjects(),
       this.getUsers(),
       this.getSprints(),
@@ -168,6 +191,10 @@ export class ApiService {
       this.getIssueTypeSchemes().catch(() => [] as IssueTypeScheme[]),
       this.getComponents().catch(() => [] as ProjectComponent[]),
       this.getVersions().catch(() => [] as ProjectVersion[]),
+      this.getCustomFields().catch(() => [] as CustomFieldDef[]),
+      this.getFieldConfigurations().catch(() => [] as FieldConfiguration[]),
+      this.getScreens().catch(() => [] as ScreenDef[]),
+      this.getScreenSchemes().catch(() => [] as ScreenScheme[]),
     ]);
     this.projects.set(projs);
     if (projs.length > 0 && !this.activeProject()) {
@@ -180,6 +207,10 @@ export class ApiService {
     this.issueTypeSchemes.set(schemesList);
     this.components.set(compsList);
     this.versions.set(versList);
+    this.customFields.set(cfList);
+    this.fieldConfigurations.set(fcList);
+    this.screens.set(scrList);
+    this.screenSchemes.set(ssList);
   }
 
   async getResolutions(): Promise<Resolution[]> {
@@ -325,6 +356,204 @@ export class ApiService {
 
   async getReleaseNotes(versionId: number): Promise<ReleaseNotesResponse> {
     return this.request<ReleaseNotesResponse>(`/api/versions/${versionId}/release-notes`);
+  }
+
+  async getCustomFields(): Promise<CustomFieldDef[]> {
+    return this.request<CustomFieldDef[]>('/api/custom-fields');
+  }
+
+  async createCustomField(payload: {
+    name: string;
+    field_key?: string;
+    field_type: string;
+    description?: string;
+    default_value?: string;
+    is_required?: boolean;
+    is_searchable?: boolean;
+    min_value?: number | null;
+    max_value?: number | null;
+    formula_expr?: string;
+    sort_order?: number;
+    options?: (string | { value: string; color?: string; is_default?: boolean })[];
+    add_to_default_screens?: boolean;
+  }): Promise<CustomFieldDef> {
+    const cf = await this.request<CustomFieldDef>('/api/custom-fields', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    const [cfList, fcList, scrList] = await Promise.all([
+      this.getCustomFields(),
+      this.getFieldConfigurations(),
+      this.getScreens(),
+    ]);
+    this.customFields.set(cfList);
+    this.fieldConfigurations.set(fcList);
+    this.screens.set(scrList);
+    return cf;
+  }
+
+  async updateCustomField(id: number, payload: Partial<CustomFieldDef>): Promise<CustomFieldDef> {
+    const cf = await this.request<CustomFieldDef>(`/api/custom-fields/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    const [cfList, fcList, scrList] = await Promise.all([
+      this.getCustomFields(),
+      this.getFieldConfigurations(),
+      this.getScreens(),
+    ]);
+    this.customFields.set(cfList);
+    this.fieldConfigurations.set(fcList);
+    this.screens.set(scrList);
+    return cf;
+  }
+
+  async deleteCustomField(id: number): Promise<void> {
+    await this.request(`/api/custom-fields/${id}`, { method: 'DELETE' });
+    const [cfList, fcList, scrList] = await Promise.all([
+      this.getCustomFields(),
+      this.getFieldConfigurations(),
+      this.getScreens(),
+    ]);
+    this.customFields.set(cfList);
+    this.fieldConfigurations.set(fcList);
+    this.screens.set(scrList);
+  }
+
+  async addCustomFieldOption(
+    fieldId: number,
+    payload: { value: string; color?: string; is_default?: boolean; sort_order?: number }
+  ): Promise<CustomFieldOption> {
+    const opt = await this.request<CustomFieldOption>(`/api/custom-fields/${fieldId}/options`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    this.customFields.set(await this.getCustomFields());
+    this.screens.set(await this.getScreens());
+    return opt;
+  }
+
+  async deleteCustomFieldOption(optionId: number): Promise<void> {
+    await this.request(`/api/custom-field-options/${optionId}`, { method: 'DELETE' });
+    this.customFields.set(await this.getCustomFields());
+    this.screens.set(await this.getScreens());
+  }
+
+  async getFieldConfigurations(): Promise<FieldConfiguration[]> {
+    return this.request<FieldConfiguration[]>('/api/field-configurations');
+  }
+
+  async updateFieldConfigurationItem(payload: {
+    configuration_id: number;
+    custom_field_id: number;
+    issue_type?: string;
+    is_required: boolean;
+    is_hidden: boolean;
+    renderer: 'plain' | 'markdown';
+    default_value?: string;
+    description_override?: string;
+  }): Promise<void> {
+    await this.request('/api/field-configurations', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    const [cfList, fcList, scrList] = await Promise.all([
+      this.getCustomFields(),
+      this.getFieldConfigurations(),
+      this.getScreens(),
+    ]);
+    this.customFields.set(cfList);
+    this.fieldConfigurations.set(fcList);
+    this.screens.set(scrList);
+  }
+
+  async getScreens(): Promise<ScreenDef[]> {
+    return this.request<ScreenDef[]>('/api/screens');
+  }
+
+  async createScreen(payload: {
+    name: string;
+    description: string;
+    screen_type: string;
+    tab_names?: string[];
+  }): Promise<ScreenDef> {
+    const sc = await this.request<ScreenDef>('/api/screens', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    this.screens.set(await this.getScreens());
+    return sc;
+  }
+
+  async deleteScreen(screenId: number): Promise<void> {
+    await this.request(`/api/screens/${screenId}`, { method: 'DELETE' });
+    this.screens.set(await this.getScreens());
+  }
+
+  async addScreenTab(screenId: number, payload: { name: string; sort_order?: number }): Promise<ScreenTab> {
+    const t = await this.request<ScreenTab>(`/api/screens/${screenId}/tabs`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    this.screens.set(await this.getScreens());
+    return t;
+  }
+
+  async deleteScreenTab(tabId: number): Promise<void> {
+    await this.request(`/api/screen-tabs/${tabId}`, { method: 'DELETE' });
+    this.screens.set(await this.getScreens());
+  }
+
+  async addScreenTabField(
+    tabId: number,
+    payload: { custom_field_id?: number; field_key?: string; sort_order?: number }
+  ): Promise<void> {
+    await this.request(`/api/screen-tabs/${tabId}/fields`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    this.screens.set(await this.getScreens());
+  }
+
+  async removeScreenTabField(tabFieldId: number): Promise<void> {
+    await this.request(`/api/screen-tab-fields/${tabFieldId}`, { method: 'DELETE' });
+    this.screens.set(await this.getScreens());
+  }
+
+  async getScreenSchemes(): Promise<ScreenScheme[]> {
+    return this.request<ScreenScheme[]>('/api/screen-schemes');
+  }
+
+  async saveScreenScheme(payload: {
+    id?: number;
+    name: string;
+    description: string;
+    project_id?: number | null;
+    is_default?: boolean;
+    create_screen_id: number;
+    edit_screen_id: number;
+    view_screen_id: number;
+    transition_screen_id: number;
+  }): Promise<ScreenScheme> {
+    const ss = await this.request<ScreenScheme>('/api/screen-schemes', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    this.screenSchemes.set(await this.getScreenSchemes());
+    return ss;
+  }
+
+  async resolveScreen(
+    projectId: number,
+    operation: 'create' | 'edit' | 'view' | 'transition',
+    issueType = '*'
+  ): Promise<ScreenDef> {
+    const params = new URLSearchParams({
+      project_id: String(projectId || 1),
+      operation,
+      issue_type: issueType || '*',
+    });
+    return this.request<ScreenDef>(`/api/screens/resolve?${params.toString()}`);
   }
 
   async getProjects(): Promise<Project[]> {

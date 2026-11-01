@@ -6,6 +6,9 @@ import { ApiService } from '../../services/api.service';
 import {
   PRIORITIES,
   PriorityType,
+  ScreenDef,
+  ScreenTab,
+  ScreenTabField,
   WORKFLOW_STATES,
   WORK_ITEM_CATEGORIES,
   WORK_ITEM_TYPES,
@@ -291,6 +294,155 @@ import {
           </div>
         </div>
 
+        <!-- Dynamic Custom Fields & Screen Tabs Renderer -->
+        @if (resolvedScreen(); as screen) {
+          <div class="card-panel" style="background: #f8fafc; border: 1px solid #e2e8f0; margin-top: 8px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px;">
+              <div>
+                <h4 style="margin: 0;">🧬 Custom Fields — {{ screen.name }}</h4>
+                <small class="text-muted">Rendered dynamically from active Screen Scheme &amp; Field Configuration</small>
+              </div>
+              <a routerLink="/custom-fields" class="btn btn-ghost btn-sm">Configure Fields &amp; Screens →</a>
+            </div>
+
+            @if (screen.tabs.length > 0) {
+              <div class="tabs-bar" style="margin-bottom: 14px;">
+                @for (tab of screen.tabs; track tab.id) {
+                  <button
+                    type="button"
+                    class="tab-btn"
+                    [class.active]="activeScreenTabId() === tab.id"
+                    (click)="activeScreenTabId.set(tab.id)"
+                  >
+                    {{ tab.name }} ({{ tab.fields.length }})
+                  </button>
+                }
+              </div>
+
+              @if (activeScreenTab(); as curTab) {
+                <div class="grid-2">
+                  @for (f of curTab.fields; track f.field_key) {
+                    @if (!f.is_hidden && f.field_type !== 'formula') {
+                      <div class="form-group" [style.gridColumn]="f.field_type === 'long_text' ? '1 / -1' : 'auto'">
+                        <label>
+                          {{ f.name }}
+                          @if (f.is_required) {
+                            <span style="color: #de350b; font-weight: bold;">*</span>
+                          }
+                          <small class="text-muted" style="font-weight: normal; margin-left: 6px;">({{ f.field_type }})</small>
+                        </label>
+
+                        @switch (f.field_type) {
+                          @case ('long_text') {
+                            <textarea
+                              rows="3"
+                              [name]="'cf_' + f.field_key"
+                              [(ngModel)]="form.custom_fields[f.field_key]"
+                              [placeholder]="f.description || 'Enter ' + f.name + '...'"
+                            ></textarea>
+                          }
+                          @case ('number') {
+                            <input
+                              type="number"
+                              [name]="'cf_' + f.field_key"
+                              [attr.min]="f.min_value"
+                              [attr.max]="f.max_value"
+                              [(ngModel)]="form.custom_fields[f.field_key]"
+                              [placeholder]="f.description || 'Numeric value'"
+                            />
+                          }
+                          @case ('date') {
+                            <input
+                              type="date"
+                              [name]="'cf_' + f.field_key"
+                              [(ngModel)]="form.custom_fields[f.field_key]"
+                            />
+                          }
+                          @case ('datetime') {
+                            <input
+                              type="datetime-local"
+                              [name]="'cf_' + f.field_key"
+                              [(ngModel)]="form.custom_fields[f.field_key]"
+                            />
+                          }
+                          @case ('select_single') {
+                            <select
+                              [name]="'cf_' + f.field_key"
+                              [(ngModel)]="form.custom_fields[f.field_key]"
+                            >
+                              <option value="">— Select {{ f.name }} —</option>
+                              @for (opt of f.options; track opt.id) {
+                                <option [value]="opt.value">{{ opt.value }}</option>
+                              }
+                            </select>
+                          }
+                          @case ('select_multi') {
+                            <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px;">
+                              @for (opt of f.options; track opt.id) {
+                                <button
+                                  type="button"
+                                  class="pill"
+                                  [class.active]="isMultiOptionSelected(f.field_key, opt.value)"
+                                  (click)="toggleMultiOption(f.field_key, opt.value)"
+                                >
+                                  {{ opt.value }}
+                                </button>
+                              }
+                            </div>
+                          }
+                          @case ('user_picker_single') {
+                            <select
+                              [name]="'cf_' + f.field_key"
+                              [(ngModel)]="form.custom_fields[f.field_key]"
+                            >
+                              <option [ngValue]="null">— None —</option>
+                              @for (u of api.users(); track u.id) {
+                                <option [ngValue]="u.id">{{ u.display_name }} ({{ u.role }})</option>
+                              }
+                            </select>
+                          }
+                          @case ('checkbox') {
+                            <label style="display: inline-flex; align-items: center; gap: 8px; margin-top: 6px; cursor: pointer;">
+                              <input
+                                type="checkbox"
+                                [name]="'cf_' + f.field_key"
+                                [(ngModel)]="form.custom_fields[f.field_key]"
+                              />
+                              <span>{{ f.description || f.name }}</span>
+                            </label>
+                          }
+                          @case ('url') {
+                            <input
+                              type="url"
+                              [name]="'cf_' + f.field_key"
+                              [(ngModel)]="form.custom_fields[f.field_key]"
+                              placeholder="https://..."
+                            />
+                          }
+                          @default {
+                            <input
+                              type="text"
+                              [name]="'cf_' + f.field_key"
+                              [(ngModel)]="form.custom_fields[f.field_key]"
+                              [placeholder]="f.description || ''"
+                            />
+                          }
+                        }
+
+                        @if (f.description && f.field_type !== 'checkbox') {
+                          <small class="text-muted" style="display: block; margin-top: 3px; font-size: 0.76rem;">
+                            {{ f.description }}
+                          </small>
+                        }
+                      </div>
+                    }
+                  }
+                </div>
+              }
+            }
+          </div>
+        }
+
         <!-- File Attachments Upload to blobs/ -->
         <div class="form-group">
           <label for="create-file-input">Attachments (Uploaded to <code>blobs/</code> directory)</label>
@@ -339,6 +491,8 @@ export class CreateItemComponent implements OnInit {
   readonly selectedFiles = signal<File[]>([]);
   readonly submitting = signal(false);
   readonly errorMsg = signal('');
+  readonly resolvedScreen = signal<ScreenDef | null>(null);
+  readonly activeScreenTabId = signal<number>(0);
 
   form: {
     project_id: number;
@@ -360,6 +514,7 @@ export class CreateItemComponent implements OnInit {
     component_ids: number[];
     fix_version_ids: number[];
     affects_version_ids: number[];
+    custom_fields: Record<string, any>;
   } = {
     project_id: 1,
     type: 'Task',
@@ -380,7 +535,71 @@ export class CreateItemComponent implements OnInit {
     component_ids: [],
     fix_version_ids: [],
     affects_version_ids: [],
+    custom_fields: {},
   };
+
+  activeScreenTab(): ScreenTab | null {
+    const sc = this.resolvedScreen();
+    if (!sc || sc.tabs.length === 0) return null;
+    return sc.tabs.find((t) => t.id === this.activeScreenTabId()) || sc.tabs[0];
+  }
+
+  isMultiOptionSelected(fieldKey: string, val: string): boolean {
+    const cur = this.form.custom_fields[fieldKey];
+    return Array.isArray(cur) && cur.includes(val);
+  }
+
+  toggleMultiOption(fieldKey: string, val: string): void {
+    const cur = Array.isArray(this.form.custom_fields[fieldKey])
+      ? [...this.form.custom_fields[fieldKey]]
+      : [];
+    const idx = cur.indexOf(val);
+    if (idx >= 0) {
+      cur.splice(idx, 1);
+    } else {
+      cur.push(val);
+    }
+    this.form.custom_fields[fieldKey] = cur;
+  }
+
+  async loadCreateScreen(): Promise<void> {
+    try {
+      const sc = await this.api.resolveScreen(this.form.project_id, 'create', this.form.type);
+      this.resolvedScreen.set(sc);
+      if (sc.tabs.length > 0) {
+        this.activeScreenTabId.set(sc.tabs[0].id);
+      }
+      for (const t of sc.tabs) {
+        for (const f of t.fields) {
+          if (this.form.custom_fields[f.field_key] === undefined) {
+            if (f.field_type === 'checkbox') {
+              this.form.custom_fields[f.field_key] = f.default_value === 'true';
+            } else if (f.field_type === 'select_multi') {
+              try {
+                this.form.custom_fields[f.field_key] = f.default_value
+                  ? JSON.parse(f.default_value)
+                  : [];
+              } catch {
+                this.form.custom_fields[f.field_key] = [];
+              }
+            } else if (f.field_type === 'number') {
+              this.form.custom_fields[f.field_key] = f.default_value
+                ? Number(f.default_value)
+                : null;
+            } else if (f.field_type === 'user_picker_single') {
+              this.form.custom_fields[f.field_key] = f.default_value
+                ? Number(f.default_value)
+                : null;
+            } else {
+              this.form.custom_fields[f.field_key] = f.default_value || '';
+            }
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
 
   projectComponents() {
     return this.api.components().filter((c) => c.project_id === this.form.project_id);
@@ -420,6 +639,7 @@ export class CreateItemComponent implements OnInit {
     if (qParent > 0) {
       this.form.parent_id = qParent;
     }
+    await this.loadCreateScreen();
   }
 
   typeDescription(t: WorkItemType): string {

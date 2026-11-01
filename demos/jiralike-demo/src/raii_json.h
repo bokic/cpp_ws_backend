@@ -93,6 +93,10 @@ public:
         return json_value(json_object_new_boolean(val ? 1 : 0));
     }
 
+    static json_value make_double(double val) {
+        return json_value(json_object_new_double(val));
+    }
+
     static json_value make_null() {
         return json_value(nullptr);
     }
@@ -120,6 +124,10 @@ public:
 
     void add_bool(const char *key, bool val) {
         add(key, make_bool(val));
+    }
+
+    void add_double(const char *key, double val) {
+        add(key, make_double(val));
     }
 
     void add_nullable_int(const char *key, int val) {
@@ -168,6 +176,21 @@ public:
         return json_object_get_boolean(field) != 0;
     }
 
+    double get_double(const char *key, double default_val = 0.0) const noexcept {
+        if (!m_obj || !json_object_is_type(m_obj, json_type_object)) return default_val;
+        json_object *field = nullptr;
+        if (!json_object_object_get_ex(m_obj, key, &field) || !field) return default_val;
+        if (json_object_is_type(field, json_type_null)) return default_val;
+        return json_object_get_double(field);
+    }
+
+    bool is_null(const char *key) const noexcept {
+        if (!m_obj || !json_object_is_type(m_obj, json_type_object)) return true;
+        json_object *field = nullptr;
+        if (!json_object_object_get_ex(m_obj, key, &field) || !field) return true;
+        return json_object_is_type(field, json_type_null) != 0;
+    }
+
     std::vector<int> get_int_array(const char *key) const {
         std::vector<int> out;
         if (!m_obj || !json_object_is_type(m_obj, json_type_object)) return out;
@@ -181,6 +204,24 @@ public:
             if (elem && !json_object_is_type(elem, json_type_null)) {
                 int v = json_object_get_int(elem);
                 if (v > 0) out.push_back(v);
+            }
+        }
+        return out;
+    }
+
+    std::vector<std::string> get_string_array(const char *key) const {
+        std::vector<std::string> out;
+        if (!m_obj || !json_object_is_type(m_obj, json_type_object)) return out;
+        json_object *arr = nullptr;
+        if (!json_object_object_get_ex(m_obj, key, &arr) || !arr) return out;
+        if (!json_object_is_type(arr, json_type_array)) return out;
+        size_t len = json_object_array_length(arr);
+        out.reserve(len);
+        for (size_t i = 0; i < len; ++i) {
+            json_object *elem = json_object_array_get_idx(arr, i);
+            if (elem && !json_object_is_type(elem, json_type_null)) {
+                const char *s = json_object_get_string(elem);
+                if (s) out.emplace_back(s);
             }
         }
         return out;

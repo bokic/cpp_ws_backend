@@ -195,6 +195,8 @@ export interface WorkItem {
   fix_version_ids?: number[];
   affects_versions?: { id: number; name: string; status: string }[];
   affects_version_ids?: number[];
+  custom_fields?: Record<string, any>;
+  custom_field_entries?: CustomFieldValueEntry[];
   story_points: number;
   progress: number;
   start_date: string;
@@ -269,4 +271,142 @@ export interface WorkItemDetail extends WorkItem {
   comments: CommentItem[];
   attachments: AttachmentItem[];
   history: WorkflowHistoryItem[];
+}
+
+export type CustomFieldType =
+  | 'short_text'
+  | 'long_text'
+  | 'number'
+  | 'date'
+  | 'datetime'
+  | 'select_single'
+  | 'select_multi'
+  | 'cascading_select'
+  | 'user_picker_single'
+  | 'user_picker_multi'
+  | 'group_picker'
+  | 'url'
+  | 'checkbox'
+  | 'formula';
+
+export interface CustomFieldOption {
+  id: number;
+  custom_field_id: number;
+  parent_option_id: number | null;
+  value: string;
+  color: string;
+  sort_order: number;
+  is_active: boolean;
+  is_default: boolean;
+}
+
+export interface CustomFieldDef {
+  id: number;
+  name: string;
+  field_key: string;
+  field_type: CustomFieldType;
+  type?: CustomFieldType;
+  description: string;
+  default_value: string;
+  is_required: boolean;
+  is_searchable: boolean;
+  min_value: number | null;
+  max_value: number | null;
+  formula_expr: string;
+  sort_order: number;
+  created_at?: string;
+  options: CustomFieldOption[];
+}
+
+export interface CustomFieldValueEntry {
+  custom_field_id: number;
+  field_key: string;
+  name: string;
+  field_type: CustomFieldType;
+  is_required: boolean;
+  value: any;
+  display_value: string;
+  user_value_id: number | null;
+  user_display_name: string;
+}
+
+export interface FieldConfigurationItem {
+  id: number;
+  configuration_id: number;
+  custom_field_id: number;
+  field_name: string;
+  field_key: string;
+  field_type: CustomFieldType;
+  issue_type: string;
+  is_required: boolean;
+  is_hidden: boolean;
+  renderer: 'plain' | 'markdown';
+  default_value: string;
+  description_override: string;
+}
+
+export interface FieldConfiguration {
+  id: number;
+  name: string;
+  description: string;
+  is_default: boolean;
+  created_at?: string;
+  items: FieldConfigurationItem[];
+}
+
+export interface ScreenTabField {
+  id: number;
+  tab_id: number;
+  field_key: string;
+  custom_field_id: number | null;
+  sort_order: number;
+  name: string;
+  field_type: CustomFieldType;
+  description: string;
+  is_required: boolean;
+  is_hidden: boolean;
+  renderer: 'plain' | 'markdown';
+  default_value: string;
+  min_value: number | null;
+  max_value: number | null;
+  formula_expr: string;
+  options: CustomFieldOption[];
+}
+
+export interface ScreenTab {
+  id: number;
+  screen_id: number;
+  name: string;
+  sort_order: number;
+  fields: ScreenTabField[];
+}
+
+export interface ScreenDef {
+  id: number;
+  name: string;
+  description: string;
+  screen_type: 'create' | 'edit' | 'view' | 'transition' | 'default' | string;
+  created_at?: string;
+  tabs: ScreenTab[];
+  operation?: string;
+  project_id?: number;
+  issue_type?: string;
+  configuration_id?: number;
+}
+
+export interface ScreenScheme {
+  id: number;
+  name: string;
+  description: string;
+  project_id: number | null;
+  is_default: boolean;
+  create_screen_id: number;
+  create_screen_name?: string;
+  edit_screen_id: number;
+  edit_screen_name?: string;
+  view_screen_id: number;
+  view_screen_name?: string;
+  transition_screen_id: number;
+  transition_screen_name?: string;
+  created_at?: string;
 }
