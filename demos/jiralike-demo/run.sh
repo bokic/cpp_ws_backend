@@ -10,6 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # Default configurations (can be overridden via environment variables or flags)
+HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-4200}"
 FCGI_PORT="${FCGI_PORT:-9002}"
 WORKERS="${WORKERS:-4}"
@@ -25,6 +26,7 @@ Usage: $(basename "$0") [OPTIONS]
 Launches the Jira-Like Demo (C++ FastCGI backend + Node.js dev-gateway).
 
 Options:
+  -H, --host <host>       Host address to bind to (default: 0.0.0.0, env: HOST)
   -p, --port <port>       HTTP gateway port for web app (default: 4200, env: PORT)
   -f, --fcgi-port <port>  FastCGI backend port (default: 9002, env: FCGI_PORT)
   -w, --workers <count>   FastCGI worker thread count (default: 4, env: WORKERS)
@@ -35,10 +37,10 @@ Options:
   -h, --help              Show this help message and exit
 
 Examples:
-  ./run.sh                     # Run with default settings (http://localhost:4200)
+  ./run.sh                     # Run with default settings (http://0.0.0.0:4200)
   ./run.sh -p 8080 -w 8        # Run webapp on port 8080 with 8 backend workers
   ./run.sh --build             # Rebuild and run
-  ./run.sh --backend-only      # Run only FastCGI server on 127.0.0.1:9002
+  ./run.sh --backend-only      # Run only FastCGI server on 0.0.0.0:9002
 EOF
     exit 0
 }
@@ -46,6 +48,10 @@ EOF
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        -H|--host)
+            HOST="$2"
+            shift 2
+            ;;
         -p|--port)
             PORT="$2"
             shift 2
@@ -156,8 +162,8 @@ cleanup() {
 trap cleanup INT TERM EXIT
 
 # 3. Start C++ FastCGI Backend
-echo ">> Starting FastCGI backend on 127.0.0.1:$FCGI_PORT (workers: $WORKERS)..."
-"$BINARY" -n "127.0.0.1:$FCGI_PORT" -w "$WORKERS" -d "$DB_PATH" -u "$BLOBS_DIR" &
+echo ">> Starting FastCGI backend on $HOST:$FCGI_PORT (workers: $WORKERS)..."
+"$BINARY" -n "$HOST:$FCGI_PORT" -w "$WORKERS" -d "$DB_PATH" -u "$BLOBS_DIR" &
 BACKEND_PID=$!
 
 sleep 0.5
@@ -173,8 +179,12 @@ if [ "$BACKEND_ONLY" = false ]; then
         exit 1
     fi
 
-    echo ">> Starting HTTP Dev Gateway on port $PORT..."
-    PORT="$PORT" FCGI_HOST="127.0.0.1" FCGI_PORT="$FCGI_PORT" node "$SCRIPT_DIR/dev-gateway.js" &
+    echo ">> Starting HTTP Dev Gateway on $HOST:$PORT..."
+    GATEWAY_FCGI_HOST="127.0.0.1"
+    if [ "$HOST" != "0.0.0.0" ]; then
+        GATEWAY_FCGI_HOST="$HOST"
+    fi
+    HOST="$HOST" PORT="$PORT" FCGI_HOST="$GATEWAY_FCGI_HOST" FCGI_PORT="$FCGI_PORT" node "$SCRIPT_DIR/dev-gateway.js" &
     GATEWAY_PID=$!
 
     sleep 0.5
@@ -185,10 +195,10 @@ if [ "$BACKEND_ONLY" = false ]; then
 
     echo "=================================================================="
     echo "  🚀 JIRALIKE DEMO IS READY AND RUNNING!"
-    echo "  - Web Application:         http://localhost:$PORT"
-    echo "  - Interactive API Docs:    http://localhost:$PORT/api/docs"
-    echo "  - OpenAPI Specification:   http://localhost:$PORT/api/openapi.json"
-    echo "  - FastCGI Listener:        127.0.0.1:$FCGI_PORT ($WORKERS workers)"
+    echo "  - Web Application:         http://$HOST:$PORT (or http://localhost:$PORT)"
+    echo "  - Interactive API Docs:    http://$HOST:$PORT/api/docs"
+    echo "  - OpenAPI Specification:   http://$HOST:$PORT/api/openapi.json"
+    echo "  - FastCGI Listener:        $HOST:$FCGI_PORT ($WORKERS workers)"
     echo "=================================================================="
     echo "  Press Ctrl+C to stop all services"
     echo "=================================================================="
@@ -197,7 +207,7 @@ if [ "$BACKEND_ONLY" = false ]; then
 else
     echo "=================================================================="
     echo "  🚀 JIRALIKE FASTCGI BACKEND IS RUNNING!"
-    echo "  - FastCGI Listener:        127.0.0.1:$FCGI_PORT ($WORKERS workers)"
+    echo "  - FastCGI Listener:        $HOST:$FCGI_PORT ($WORKERS workers)"
     echo "=================================================================="
     echo "  Press Ctrl+C to stop the backend"
     echo "=================================================================="

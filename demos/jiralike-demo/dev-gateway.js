@@ -12,6 +12,7 @@ const net = require('net');
 const fs = require('fs');
 const path = require('path');
 
+const HTTP_HOST = process.env.HOST || '0.0.0.0';
 const HTTP_PORT = Number(process.env.PORT || 4200);
 const FCGI_SOCK = process.env.FCGI_SOCK;
 const FCGI_HOST = process.env.FCGI_HOST || '127.0.0.1';
@@ -241,6 +242,6 @@ const server = http.createServer((req, res) => {
   }
 });
 
-server.listen(HTTP_PORT, '0.0.0.0', () => {
-  console.log(`[jiralike-gateway] Serving Angular SPA + FastCGI (/api -> ${FCGI_HOST}:${FCGI_PORT}) at http://localhost:${HTTP_PORT}`);
+server.listen(HTTP_PORT, HTTP_HOST, () => {
+  console.log(`[jiralike-gateway] Serving Angular SPA + FastCGI (/api -> ${FCGI_HOST}:${FCGI_PORT}) at http://${HTTP_HOST}:${HTTP_PORT}`);
 });

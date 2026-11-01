@@ -270,6 +270,7 @@ Then open **[http://localhost:4200](http://localhost:4200)** in your browser!
 Usage: ./run.sh [OPTIONS]
 
 Options:
+  -H, --host <host>       Host address to bind to (default: 0.0.0.0, env: HOST)
   -p, --port <port>       HTTP gateway port for web app (default: 4200, env: PORT)
   -f, --fcgi-port <port>  FastCGI backend port (default: 9002, env: FCGI_PORT)
   -w, --workers <count>   FastCGI worker thread count (default: 4, env: WORKERS)
