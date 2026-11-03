@@ -79,6 +79,14 @@ import {
         >
           ✔ Resolutions ({{ api.resolutions().length }})
         </button>
+        <button
+          type="button"
+          class="tab-btn"
+          [class.active]="activeTab() === 'project-details'"
+          (click)="activeTab.set('project-details'); loadProjectEditForm()"
+        >
+          ⚙️ Project Details &amp; Danger Zone
+        </button>
       </div>
 
       <!-- TAB 1: COMPONENTS -->
@@ -346,6 +354,14 @@ import {
                       @if (it.is_system) {
                         <span class="text-muted" style="font-size: 0.78rem;">System</span>
                       }
+                      <button
+                        type="button"
+                        class="btn btn-ghost btn-sm"
+                        (click)="deleteIssueType(it)"
+                        title="Delete Issue Type"
+                      >
+                        🗑
+                      </button>
                     </div>
                   </div>
                 }
@@ -437,10 +453,18 @@ import {
                       <strong>✔ {{ r.name }}</strong>
                       <span class="text-muted" style="margin-left: 10px;">{{ r.description }}</span>
                     </div>
-                    <div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
                       @if (r.is_default) {
                         <span class="current-pill">Default Resolution</span>
                       }
+                      <button
+                        type="button"
+                        class="btn btn-ghost btn-sm"
+                        (click)="deleteResolution(r)"
+                        title="Delete Resolution"
+                      >
+                        🗑
+                      </button>
                     </div>
                   </div>
                 }
@@ -478,13 +502,75 @@ import {
           </div>
         </div>
       }
+
+      <!-- TAB 5: PROJECT DETAILS & DANGER ZONE -->
+      @if (activeTab() === 'project-details') {
+        <div class="detail-grid">
+          <div class="detail-main">
+            <div class="card-panel">
+              <h3>Project Information</h3>
+              <p class="text-muted" style="margin-bottom: 16px;">
+                Edit core attributes of the current project (name, key, description, project lead, category).
+              </p>
+              <form (ngSubmit)="saveProjectDetails()">
+                <div class="grid-2">
+                  <div class="form-group">
+                    <label>Project Name *</label>
+                    <input type="text" [(ngModel)]="editProjectForm.name" name="p_name" required />
+                  </div>
+                  <div class="form-group">
+                    <label>Project Key *</label>
+                    <input type="text" [(ngModel)]="editProjectForm.key" name="p_key" required />
+                  </div>
+                </div>
+                <div class="grid-2">
+                  <div class="form-group">
+                    <label>Project Lead</label>
+                    <select [(ngModel)]="editProjectForm.lead_user_id" name="p_lead">
+                      <option [ngValue]="null">Unassigned</option>
+                      @for (u of api.users(); track u.id) {
+                        <option [ngValue]="u.id">{{ u.display_name }} (&#64;{{ u.username }})</option>
+                      }
+                    </select>
+                  </div>
+                  <div class="form-group">
+                    <label>Category</label>
+                    <input type="text" [(ngModel)]="editProjectForm.project_category" name="p_cat" placeholder="e.g. Software, Core" />
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label>URL</label>
+                  <input type="url" [(ngModel)]="editProjectForm.url" name="p_url" placeholder="https://..." />
+                </div>
+                <div class="form-group">
+                  <label>Description</label>
+                  <textarea [(ngModel)]="editProjectForm.description" name="p_desc" rows="3"></textarea>
+                </div>
+                <button type="submit" class="btn btn-primary" style="margin-top: 8px;">
+                  Save Project Details
+                </button>
+              </form>
+            </div>
+
+            <div class="card-panel" style="margin-top: 20px; border-color: #ffbdad; background-color: #fffaf9;">
+              <h3 style="color: #bf2600;">⚠️ Danger Zone: Delete Project</h3>
+              <p class="text-muted" style="margin-bottom: 14px;">
+                Deleting a project will permanently remove its components, versions, sprints, boards, and work items. This action cannot be undone.
+              </p>
+              <button type="button" class="btn btn-danger" (click)="deleteCurrentProject()">
+                Delete This Project Permanently
+              </button>
+            </div>
+          </div>
+        </div>
+      }
     </div>
   `,
 })
 export class ProjectSettingsComponent implements OnInit {
   readonly api = inject(ApiService);
 
-  readonly activeTab = signal<'components' | 'versions' | 'issue-types' | 'resolutions'>('components');
+  readonly activeTab = signal<'components' | 'versions' | 'issue-types' | 'resolutions' | 'project-details'>('components');
   readonly selectedProjectId = signal<number>(1);
   readonly releaseNotes = signal<ReleaseNotesResponse | null>(null);
   readonly toastMsg = signal('');
@@ -666,6 +752,90 @@ export class ProjectSettingsComponent implements OnInit {
       this.newResolution.name = '';
       this.newResolution.description = '';
       this.showToast('Resolution created');
+    } catch (e) {
+      this.errorMsg.set((e as Error).message);
+    }
+  }
+
+  editProjectForm = {
+    name: '',
+    key: '',
+    description: '',
+    lead_user_id: null as number | null,
+    url: '',
+    project_category: '',
+  };
+
+  loadProjectEditForm(): void {
+    const cur = this.api.projects().find(p => p.id === this.selectedProjectId());
+    if (cur) {
+      this.editProjectForm = {
+        name: cur.name,
+        key: cur.key,
+        description: cur.description || '',
+        lead_user_id: cur.lead_user_id || null,
+        url: '',
+        project_category: '',
+      };
+    }
+  }
+
+  async saveProjectDetails(): Promise<void> {
+    const pid = this.selectedProjectId();
+    if (!pid || !this.editProjectForm.name.trim() || !this.editProjectForm.key.trim()) return;
+    this.errorMsg.set('');
+    try {
+      await this.api.updateProject(pid, {
+        name: this.editProjectForm.name.trim(),
+        key: this.editProjectForm.key.trim().toUpperCase(),
+        description: this.editProjectForm.description.trim(),
+        lead_user_id: this.editProjectForm.lead_user_id || undefined,
+        url: this.editProjectForm.url.trim(),
+        project_category: this.editProjectForm.project_category.trim(),
+      });
+      this.showToast('Project details successfully saved');
+    } catch (e) {
+      this.errorMsg.set((e as Error).message);
+    }
+  }
+
+  async deleteCurrentProject(): Promise<void> {
+    const pid = this.selectedProjectId();
+    const cur = this.api.projects().find(p => p.id === pid);
+    if (!pid || !cur) return;
+    if (!confirm(`Are you absolutely sure you want to permanently delete project '${cur.name}' (${cur.key}) and ALL its items?`)) {
+      return;
+    }
+    this.errorMsg.set('');
+    try {
+      await this.api.deleteProject(pid);
+      this.showToast(`Project '${cur.name}' deleted`);
+      const remaining = this.api.projects();
+      if (remaining.length > 0) {
+        this.selectedProjectId.set(remaining[0].id);
+      }
+    } catch (e) {
+      this.errorMsg.set((e as Error).message);
+    }
+  }
+
+  async deleteIssueType(it: any): Promise<void> {
+    if (!confirm(`Delete issue type '${it.name}'?`)) return;
+    this.errorMsg.set('');
+    try {
+      await this.api.deleteIssueType(it.id);
+      this.showToast(`Issue type '${it.name}' deleted`);
+    } catch (e) {
+      this.errorMsg.set((e as Error).message);
+    }
+  }
+
+  async deleteResolution(r: any): Promise<void> {
+    if (!confirm(`Delete resolution '${r.name}'?`)) return;
+    this.errorMsg.set('');
+    try {
+      await this.api.deleteResolution(r.id);
+      this.showToast(`Resolution '${r.name}' deleted`);
     } catch (e) {
       this.errorMsg.set((e as Error).message);
     }

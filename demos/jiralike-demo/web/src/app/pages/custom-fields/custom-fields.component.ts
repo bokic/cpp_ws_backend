@@ -156,8 +156,17 @@ import {
                             {{ opt.value }}
                             <button
                               type="button"
+                              style="border: none; background: transparent; cursor: pointer; font-size: 11px; margin-left: 4px; color: #0052cc;"
+                              (click)="editOption(opt)"
+                              title="Edit option"
+                            >
+                              ✏️
+                            </button>
+                            <button
+                              type="button"
                               style="border: none; background: transparent; cursor: pointer; font-weight: bold; color: #64748b;"
                               (click)="removeOption(opt.id)"
+                              title="Remove option"
                             >
                               ×
                             </button>
@@ -825,6 +834,18 @@ export class CustomFieldsComponent implements OnInit {
   async removeOption(optionId: number): Promise<void> {
     await this.api.deleteCustomFieldOption(optionId);
     this.showToast('Option removed');
+  }
+
+  async editOption(opt: any): Promise<void> {
+    const newVal = prompt('Edit option value:', opt.value);
+    if (newVal === null || !newVal.trim() || newVal === opt.value) return;
+    try {
+      await this.api.updateCustomFieldOption(opt.id, { value: newVal.trim() });
+      opt.value = newVal.trim();
+      this.showToast(`Updated option to '${newVal.trim()}'`);
+    } catch (e: any) {
+      this.showToast(e?.message || 'Failed to update option');
+    }
   }
 
   async updateConfigItem(

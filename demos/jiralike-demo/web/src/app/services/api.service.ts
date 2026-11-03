@@ -115,6 +115,8 @@ import {
   TwoFactorVerifyResponse,
   InboundMailHandler,
   InboundMailLog,
+  AdminTableDescriptor,
+  AdminTableData,
 } from '../models/jira.models';
 import { I18nService } from './i18n.service';
 
@@ -1994,6 +1996,13 @@ export class ApiService {
     });
   }
 
+  async updateUserGroup(id: number, data: { name: string; description?: string }): Promise<UserGroup> {
+    return this.request<UserGroup>(`/api/groups/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
   async deleteUserGroup(id: number): Promise<{ deleted: boolean }> {
     return this.request<{ deleted: boolean }>(`/api/groups/${id}`, {
       method: 'DELETE',
@@ -3224,5 +3233,170 @@ export class ApiService {
 
   async getOpenApiSpec(): Promise<any> {
     return this.request<any>('/api/openapi.json');
+  }
+
+  // --- Universal Admin Database Studio API ---
+  async getAdminTables(): Promise<AdminTableDescriptor[]> {
+    return this.request<AdminTableDescriptor[]>('/api/admin/tables');
+  }
+
+  async getAdminTableData(
+    table: string,
+    params: { page?: number; pageSize?: number; search?: string; sortBy?: string; sortDir?: string } = {}
+  ): Promise<AdminTableData> {
+    const q = new URLSearchParams();
+    if (params.page) q.set('page', String(params.page));
+    if (params.pageSize) q.set('pageSize', String(params.pageSize));
+    if (params.search) q.set('search', params.search);
+    if (params.sortBy) q.set('sortBy', params.sortBy);
+    if (params.sortDir) q.set('sortDir', params.sortDir);
+    const qs = q.toString() ? `?${q.toString()}` : '';
+    return this.request<AdminTableData>(`/api/admin/tables/${encodeURIComponent(table)}${qs}`);
+  }
+
+  async insertAdminTableRow(table: string, row: Record<string, any>): Promise<any> {
+    return this.request<any>(`/api/admin/tables/${encodeURIComponent(table)}`, {
+      method: 'POST',
+      body: JSON.stringify(row),
+    });
+  }
+
+  async updateAdminTableRow(
+    table: string,
+    payload: { keys?: Record<string, any>; values?: Record<string, any>; [k: string]: any }
+  ): Promise<any> {
+    return this.request<any>(`/api/admin/tables/${encodeURIComponent(table)}/row`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteAdminTableRow(table: string, keys: Record<string, any>): Promise<any> {
+    return this.request<any>(`/api/admin/tables/${encodeURIComponent(table)}/row`, {
+      method: 'DELETE',
+      body: JSON.stringify({ keys }),
+    });
+  }
+
+  // --- Domain CRUD Additions ---
+  async updateUser(id: number, payload: Partial<User> & { password?: string }): Promise<User> {
+    const res = await this.request<User>(`/api/users/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    const list = await this.getUsers();
+    this.users.set(list);
+    return res;
+  }
+
+  async deleteUser(id: number): Promise<{ deleted: boolean; id: number }> {
+    const res = await this.request<{ deleted: boolean; id: number }>(`/api/users/${id}`, {
+      method: 'DELETE',
+    });
+    const list = await this.getUsers();
+    this.users.set(list);
+    return res;
+  }
+
+  async updateProject(id: number, payload: Partial<Project>): Promise<Project> {
+    const res = await this.request<Project>(`/api/projects/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    const list = await this.getProjects();
+    this.projects.set(list);
+    return res;
+  }
+
+  async deleteProject(id: number): Promise<{ deleted: boolean; id: number }> {
+    const res = await this.request<{ deleted: boolean; id: number }>(`/api/projects/${id}`, {
+      method: 'DELETE',
+    });
+    const list = await this.getProjects();
+    this.projects.set(list);
+    return res;
+  }
+
+  async updateComment(id: number, body: string): Promise<any> {
+    return this.request<any>(`/api/comments/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ body }),
+    });
+  }
+
+  async deleteComment(id: number): Promise<{ deleted: boolean; id: number }> {
+    return this.request<{ deleted: boolean; id: number }>(`/api/comments/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async updateResolution(id: number, payload: Partial<Resolution>): Promise<Resolution> {
+    const res = await this.request<Resolution>(`/api/resolutions/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    const list = await this.getResolutions();
+    this.resolutions.set(list);
+    return res;
+  }
+
+  async deleteResolution(id: number): Promise<{ deleted: boolean; id: number }> {
+    const res = await this.request<{ deleted: boolean; id: number }>(`/api/resolutions/${id}`, {
+      method: 'DELETE',
+    });
+    const list = await this.getResolutions();
+    this.resolutions.set(list);
+    return res;
+  }
+
+  async updateIssueType(id: number, payload: Partial<IssueTypeDef>): Promise<IssueTypeDef> {
+    const res = await this.request<IssueTypeDef>(`/api/issue-types/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    const list = await this.getIssueTypes();
+    this.issueTypes.set(list);
+    return res;
+  }
+
+  async deleteIssueType(id: number): Promise<{ deleted: boolean; id: number }> {
+    const res = await this.request<{ deleted: boolean; id: number }>(`/api/issue-types/${id}`, {
+      method: 'DELETE',
+    });
+    const list = await this.getIssueTypes();
+    this.issueTypes.set(list);
+    return res;
+  }
+
+  async updateCustomFieldOption(id: number, payload: Partial<CustomFieldOption>): Promise<CustomFieldOption> {
+    return this.request<CustomFieldOption>(`/api/custom-field-options/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateWorkflowScheme(id: number, payload: any): Promise<any> {
+    return this.request<any>(`/api/workflow-schemes/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async clearAutomationLogs(): Promise<{ cleared: boolean }> {
+    return this.request<{ cleared: boolean }>('/api/automation/logs/clear', {
+      method: 'POST',
+    });
+  }
+
+  async clearMailLogs(): Promise<{ cleared: boolean }> {
+    return this.request<{ cleared: boolean }>('/api/mail/logs/clear', {
+      method: 'POST',
+    });
+  }
+
+  async clearWebhookDeliveries(): Promise<{ cleared: boolean }> {
+    return this.request<{ cleared: boolean }>('/api/webhooks/deliveries/clear', {
+      method: 'POST',
+    });
   }
 }

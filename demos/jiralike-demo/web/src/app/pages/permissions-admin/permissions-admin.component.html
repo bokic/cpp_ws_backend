@@ -314,15 +314,26 @@
                   Members: {{ g.member_count || g.members?.length || 0 }}
                 </div>
               </div>
-              @if (g.name !== 'jira-administrators') {
+              <div style="display: flex; gap: 4px;">
                 <button
                   type="button"
-                  class="btn btn-ghost btn-xs text-danger"
-                  (click)="deleteGroup(g); $event.stopPropagation()"
+                  class="btn btn-ghost btn-xs"
+                  (click)="openEditGroupModal(g); $event.stopPropagation()"
+                  title="Edit Group"
                 >
-                  🗑
+                  ✏️
                 </button>
-              }
+                @if (g.name !== 'jira-administrators') {
+                  <button
+                    type="button"
+                    class="btn btn-ghost btn-xs text-danger"
+                    (click)="deleteGroup(g); $event.stopPropagation()"
+                    title="Delete Group"
+                  >
+                    🗑
+                  </button>
+                }
+              </div>
             </div>
           }
         </div>
@@ -846,6 +857,29 @@
         <button type="button" class="btn btn-secondary" (click)="showNewTokenModal.set(false)">Cancel</button>
         <button type="button" class="btn btn-primary" [disabled]="!newTokenName().trim()" (click)="createToken(); showNewTokenModal.set(false)">
           Generate Token
+        </button>
+      </div>
+    </div>
+  </div>
+}
+
+<!-- MODAL: Edit User Group -->
+@if (showEditGroupModal()) {
+  <div class="modal-backdrop" (click)="showEditGroupModal.set(false)">
+    <div class="modal-card" (click)="$event.stopPropagation()">
+      <h3>Edit User Group</h3>
+      <div class="form-group" style="margin-top: 12px;">
+        <label>Group Name *</label>
+        <input type="text" [(ngModel)]="editGroupName" placeholder="Group name" />
+      </div>
+      <div class="form-group">
+        <label>Description</label>
+        <textarea [(ngModel)]="editGroupDesc" rows="2" placeholder="Group responsibility..."></textarea>
+      </div>
+      <div class="modal-actions" style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;">
+        <button type="button" class="btn btn-secondary" (click)="showEditGroupModal.set(false)">Cancel</button>
+        <button type="button" class="btn btn-primary" [disabled]="!editGroupName().trim()" (click)="saveEditGroup()">
+          Save Changes
         </button>
       </div>
     </div>

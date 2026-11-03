@@ -28,6 +28,8 @@
           <a routerLink="/trash" routerLinkActive="active" title="Trash Bin (30-day retention)">{{ 'nav.trashBin' | i18n }}</a>
           <a routerLink="/developer/docs" routerLinkActive="active" title="OpenAPI 3.0 Documentation &amp; Rate Limiting Governance">{{ 'nav.developerDocs' | i18n }}</a>
           @if (user.role === 'Admin') {
+            <a routerLink="/users" routerLinkActive="active" title="User Management">👥 Users</a>
+            <a routerLink="/database" routerLinkActive="active" title="Universal Database Studio">🗄️ Database</a>
             <a routerLink="/sprints" routerLinkActive="active">{{ 'nav.sprintEditor' | i18n }}</a>
           }
           <button type="button" class="nav-create-btn" (click)="openCreateModal()" title="Create Issue (Press 'c')">{{ 'nav.create' | i18n }}</button>

@@ -1008,12 +1008,28 @@ import {
                       <div class="avatar-circle" [style.background]="c.author_color">
                         {{ c.author_name.slice(0, 2).toUpperCase() }}
                       </div>
-                      <div class="comment-content">
-                        <div class="comment-header">
-                          <strong>{{ c.author_name }}</strong>
-                          <span class="text-muted">{{ c.created_at }}</span>
+                      <div class="comment-content" style="flex: 1;">
+                        <div class="comment-header" style="display: flex; justify-content: space-between; align-items: center;">
+                          <div>
+                            <strong>{{ c.author_name }}</strong>
+                            <span class="text-muted" style="margin-left: 8px;">{{ c.created_at }}</span>
+                          </div>
+                          <div style="display: flex; gap: 4px;">
+                            <button type="button" class="btn btn-ghost btn-xs" (click)="startEditComment(c)" title="Edit comment">✏️</button>
+                            <button type="button" class="btn btn-ghost btn-xs" (click)="deleteComment(c.id)" title="Delete comment">🗑</button>
+                          </div>
                         </div>
-                        <app-markdown-viewer [content]="c.body"></app-markdown-viewer>
+                        @if (editingCommentId() === c.id) {
+                          <div style="margin-top: 8px;">
+                            <textarea [(ngModel)]="editingCommentText" rows="3" class="form-control" style="width: 100%; box-sizing: border-box;"></textarea>
+                            <div style="margin-top: 6px; display: flex; gap: 6px;">
+                              <button type="button" class="btn btn-primary btn-sm" (click)="saveEditComment(c.id)">Save</button>
+                              <button type="button" class="btn btn-secondary btn-sm" (click)="editingCommentId.set(null)">Cancel</button>
+                            </div>
+                          </div>
+                        } @else {
+                          <app-markdown-viewer [content]="c.body"></app-markdown-viewer>
+                        }
                       </div>
                     </div>
                   }
@@ -2783,6 +2799,40 @@ export class ItemDetailComponent implements OnInit, OnDestroy {
     await this.api.addComment(cur.key, this.newCommentText.trim());
     this.newCommentText = '';
     await this.reloadDetail(cur.key);
+  }
+
+  readonly editingCommentId = signal<number | null>(null);
+  editingCommentText = '';
+
+  startEditComment(c: any): void {
+    this.editingCommentId.set(c.id);
+    this.editingCommentText = c.body;
+  }
+
+  async saveEditComment(commentId: number): Promise<void> {
+    const cur = this.item();
+    if (!cur || !this.editingCommentText.trim()) return;
+    try {
+      await this.api.updateComment(commentId, this.editingCommentText.trim());
+      this.editingCommentId.set(null);
+      this.showToast('Comment updated');
+      await this.reloadDetail(cur.key);
+    } catch (e: any) {
+      this.showToast(e?.message || 'Failed to update comment');
+    }
+  }
+
+  async deleteComment(commentId: number): Promise<void> {
+    const cur = this.item();
+    if (!cur) return;
+    if (!confirm('Are you sure you want to delete this comment?')) return;
+    try {
+      await this.api.deleteComment(commentId);
+      this.showToast('Comment deleted');
+      await this.reloadDetail(cur.key);
+    } catch (e: any) {
+      this.showToast(e?.message || 'Failed to delete comment');
+    }
   }
 
   readonly showCloneModal = signal(false);

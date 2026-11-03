@@ -1,0 +1,395 @@
+.users-admin-page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 24px;
+}
+
+.page-header h2 {
+  margin: 0 0 6px 0;
+  font-size: 24px;
+  font-weight: 700;
+  color: #091e42;
+}
+
+.subtitle {
+  margin: 0;
+  font-size: 14px;
+  color: #6b778c;
+}
+
+.toolbar-card {
+  background: white;
+  border: 1px solid #dfe1e6;
+  border-radius: 4px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.search-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  background: #fafbfc;
+  border: 1px solid #dfe1e6;
+  border-radius: 4px;
+  padding: 6px 12px;
+}
+
+.search-input-wrap input {
+  border: none;
+  background: none;
+  outline: none;
+  width: 100%;
+  font-size: 13px;
+}
+
+.role-filter-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #42526e;
+}
+
+.role-filter-wrap select {
+  padding: 6px 10px;
+  border: 1px solid #dfe1e6;
+  border-radius: 4px;
+  font-size: 13px;
+  background: white;
+}
+
+.total-badge {
+  font-size: 12px;
+  color: #6b778c;
+  font-weight: 500;
+}
+
+/* Users Table */
+.table-card {
+  background: white;
+  border: 1px solid #dfe1e6;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.users-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.users-table th {
+  background: #fafbfc;
+  border-bottom: 2px solid #dfe1e6;
+  padding: 10px 16px;
+  text-align: left;
+  font-weight: 600;
+  color: #42526e;
+}
+
+.users-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid #dfe1e6;
+  color: #172b4d;
+}
+
+.users-table tr:hover {
+  background: #f4f5f7;
+}
+
+.user-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.user-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.user-names {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.display-name {
+  font-weight: 600;
+}
+
+.you-badge {
+  background: #ebecf0;
+  color: #42526e;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+}
+
+.username-cell {
+  color: #0052cc;
+  font-family: monospace;
+}
+
+.role-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  background: #ebecf0;
+  color: #42526e;
+}
+
+.role-pill.admin-role {
+  background: #deebff;
+  color: #0052cc;
+}
+
+.date-cell {
+  color: #6b778c;
+  font-size: 12px;
+}
+
+.actions-th, .actions-td {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.actions-td button {
+  margin-left: 6px;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 32px;
+  color: #6b778c;
+}
+
+/* Modals & Forms */
+.modal-backdrop {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(9, 30, 66, 0.54);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-card {
+  background: white;
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  width: 500px;
+  max-width: 90vw;
+}
+
+.modal-card.modal-sm {
+  width: 420px;
+}
+
+.modal-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid #dfe1e6;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modal-header.danger-header {
+  background: #ffebe6;
+  color: #bf2600;
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  font-size: 16px;
+  cursor: pointer;
+  color: #6b778c;
+}
+
+.modal-body {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.modal-footer {
+  padding: 12px 20px;
+  border-top: 1px solid #dfe1e6;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  background: #fafbfc;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-group label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #172b4d;
+}
+
+.form-group input, .form-group select {
+  padding: 8px 10px;
+  border: 1px solid #dfe1e6;
+  border-radius: 3px;
+  font-size: 13px;
+}
+
+.form-group input:focus, .form-group select:focus {
+  border-color: #4c9aff;
+  outline: none;
+}
+
+.color-palette {
+  display: flex;
+  gap: 8px;
+}
+
+.color-dot {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.color-dot:hover {
+  transform: scale(1.15);
+}
+
+.color-dot.selected {
+  border-color: #091e42;
+  box-shadow: 0 0 0 2px white inset;
+}
+
+.warning-text {
+  font-size: 12px;
+  color: #bf2600;
+  margin-top: 6px;
+}
+
+/* Alerts */
+.alert {
+  padding: 10px 14px;
+  border-radius: 4px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.alert-error {
+  background-color: #ffebe6;
+  color: #bf2600;
+  border: 1px solid #ffbdad;
+}
+
+.alert-success {
+  background-color: #e3fcef;
+  color: #006644;
+  border: 1px solid #abf5d1;
+}
+
+.alert-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: inherit;
+}
+
+/* Buttons */
+.btn {
+  padding: 7px 14px;
+  border-radius: 3px;
+  font-size: 13px;
+  font-weight: 500;
+  border: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-sm {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.btn-primary {
+  background: #0052cc;
+  color: white;
+}
+
+.btn-primary:hover {
+  background: #0065ff;
+}
+
+.btn-secondary {
+  background: #ebecf0;
+  color: #172b4d;
+}
+
+.btn-secondary:hover {
+  background: #dfe1e6;
+}
+
+.btn-danger {
+  background: #de350b;
+  color: white;
+}
+
+.btn-danger:hover {
+  background: #ff5630;
+}
+
+.btn-danger-outline {
+  background: none;
+  border: 1px solid #ffbdad;
+  color: #de350b;
+}
+
+.btn-danger-outline:hover:not(:disabled) {
+  background: #ffebe6;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

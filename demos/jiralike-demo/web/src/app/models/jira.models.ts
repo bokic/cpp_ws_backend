@@ -87,6 +87,8 @@ export interface Project {
   description: string;
   lead_user_id: number | null;
   lead_name?: string;
+  url?: string;
+  project_category?: string;
   issue_seq: number;
   issue_type_scheme_id?: number;
   issue_type_scheme_name?: string;
@@ -2055,6 +2057,41 @@ export interface RateLimitStatus {
     token_refill_rate: number;
   };
 }
+
+export interface AdminColumnMeta {
+  cid: number;
+  name: string;
+  type: string;
+  notnull: boolean;
+  default_value: string;
+  pk: number;
+}
+
+export interface AdminForeignKeyMeta {
+  id: number;
+  table: string;
+  from: string;
+  to: string;
+  on_update: string;
+  on_delete: string;
+}
+
+export interface AdminTableDescriptor {
+  name: string;
+  row_count: number;
+  columns: AdminColumnMeta[];
+  foreign_keys: AdminForeignKeyMeta[];
+}
+
+export interface AdminTableData {
+  table: string;
+  total: number;
+  page: number;
+  pageSize: number;
+  columns: AdminColumnMeta[];
+  rows: Record<string, any>[];
+}
+
 
 
 

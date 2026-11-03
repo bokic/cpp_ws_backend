@@ -24,6 +24,8 @@ import { SecuritySettingsComponent } from './pages/security-settings/security-se
 import { MailHandlersComponent } from './pages/mail-handlers/mail-handlers.component';
 import { UserPreferencesComponent } from './pages/user-preferences/user-preferences.component';
 import { ApiDocsComponent } from './pages/api-docs/api-docs.component';
+import { DatabaseAdminComponent } from './pages/database-admin/database-admin.component';
+import { UsersAdminComponent } from './pages/users-admin/users-admin.component';
 
 export const routes: Routes = [
   { path: '', pathMatch: 'full', redirectTo: 'dashboards' },
@@ -38,6 +40,11 @@ export const routes: Routes = [
   { path: 'developer/docs', component: ApiDocsComponent },
   { path: 'docs', component: ApiDocsComponent },
   { path: 'settings/security', component: SecuritySettingsComponent },
+  { path: 'settings/database', component: DatabaseAdminComponent },
+  { path: 'admin/tables', component: DatabaseAdminComponent },
+  { path: 'database', component: DatabaseAdminComponent },
+  { path: 'settings/users', component: UsersAdminComponent },
+  { path: 'users', component: UsersAdminComponent },
   { path: 'settings/mail-handlers', component: MailHandlersComponent },
   { path: 'mail-handlers', component: MailHandlersComponent },
   { path: 'servicedesk', component: ServiceDeskPortalComponent },

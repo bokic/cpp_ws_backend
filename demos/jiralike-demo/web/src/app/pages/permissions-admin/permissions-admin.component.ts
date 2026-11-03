@@ -426,6 +426,36 @@ export class PermissionsAdminComponent implements OnInit {
     }
   }
 
+  readonly showEditGroupModal = signal<boolean>(false);
+  editGroupName = signal<string>('');
+  editGroupDesc = signal<string>('');
+
+  openEditGroupModal(group: UserGroup): void {
+    this.selectedGroup.set(group);
+    this.editGroupName.set(group.name);
+    this.editGroupDesc.set(group.description || '');
+    this.showEditGroupModal.set(true);
+  }
+
+  async saveEditGroup(): Promise<void> {
+    const group = this.selectedGroup();
+    if (!group) return;
+    const name = this.editGroupName().trim();
+    if (!name) return;
+    try {
+      await this.api.updateUserGroup(group.id, {
+        name,
+        description: this.editGroupDesc(),
+      });
+      this.showToast(`Group "${name}" updated!`);
+      this.showEditGroupModal.set(false);
+      await this.loadUserGroups();
+      await this.selectGroup(group.id);
+    } catch (err: any) {
+      this.errorMsg.set(err?.message || 'Failed to update group');
+    }
+  }
+
   async deleteGroup(group: UserGroup): Promise<void> {
     if (!confirm(`Delete group "${group.name}"?`)) return;
     try {

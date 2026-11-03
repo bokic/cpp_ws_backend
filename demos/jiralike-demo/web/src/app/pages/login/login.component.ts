@@ -175,24 +175,6 @@ import { ApiService } from '../../services/api.service';
               </div>
             }
           </div>
-
-          <div class="demo-accounts">
-            <div class="demo-title">Quick Fill Demo Accounts:</div>
-            <div class="demo-pills">
-              <button type="button" class="btn btn-ghost btn-sm" (click)="fillDemo('admin', 'admin123')">
-                Admin (admin / admin123)
-              </button>
-              <button type="button" class="btn btn-ghost btn-sm" (click)="fillDemo('sarah', 'demo123')">
-                PM (sarah / demo123)
-              </button>
-              <button type="button" class="btn btn-ghost btn-sm" (click)="fillDemo('marcus', 'demo123')">
-                Dev (marcus / demo123)
-              </button>
-              <button type="button" class="btn btn-ghost btn-sm" (click)="fillDemo('elena', 'demo123')">
-                QA (elena / demo123)
-              </button>
-            </div>
-          </div>
         }
       </div>
     </div>
@@ -202,8 +184,8 @@ export class LoginComponent implements OnInit {
   readonly api = inject(ApiService);
   private readonly router = inject(Router);
 
-  username = 'admin';
-  password = 'admin123';
+  username = '';
+  password = '';
   readonly loading = signal(false);
   readonly errorMsg = signal('');
 
@@ -232,11 +214,6 @@ export class LoginComponent implements OnInit {
     } catch {
       // ignore
     }
-  }
-
-  fillDemo(u: string, p: string): void {
-    this.username = u;
-    this.password = p;
   }
 
   toggleSsoDomain(): void {

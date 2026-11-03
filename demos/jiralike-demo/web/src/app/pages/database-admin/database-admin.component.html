@@ -1,0 +1,313 @@
+<div class="db-admin-layout">
+  <!-- Sidebar: Tables Browser -->
+  <aside class="tables-sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-title">
+        <span class="icon">🗄️</span>
+        <h3>Database Studio</h3>
+      </div>
+      <span class="table-count-badge">{{ tables().length }} tables</span>
+    </div>
+
+    <div class="sidebar-search">
+      <input 
+        type="text" 
+        placeholder="Filter tables..." 
+        [ngModel]="tableSearch()" 
+        (ngModelChange)="tableSearch.set($event)"
+      />
+    </div>
+
+    <div class="tables-list">
+      @for (tbl of filteredTables(); track tbl.name) {
+        <button 
+          class="table-item" 
+          [class.active]="selectedTable() === tbl.name"
+          (click)="selectTable(tbl.name)"
+        >
+          <span class="tbl-name">{{ tbl.name }}</span>
+          <span class="tbl-badge">{{ tbl.row_count }}</span>
+        </button>
+      }
+      @if (filteredTables().length === 0) {
+        <div class="no-tables">No matching tables</div>
+      }
+    </div>
+  </aside>
+
+  <!-- Main Studio Workspace -->
+  <main class="studio-main">
+    <!-- Top Action Bar -->
+    <header class="studio-header">
+      <div class="table-info">
+        <h2 class="current-table-title">{{ selectedTable() }}</h2>
+        <span class="table-meta">
+          {{ currentTableData()?.total || 0 }} rows • {{ currentColumns().length }} columns
+        </span>
+      </div>
+
+      <div class="table-actions">
+        <div class="search-box">
+          <input 
+            type="text" 
+            placeholder="Search rows..." 
+            [ngModel]="rowSearch()" 
+            (ngModelChange)="rowSearch.set($event)"
+            (keyup.enter)="loadRows()"
+          />
+          <button class="btn btn-secondary btn-sm" (click)="loadRows()">Search</button>
+        </div>
+
+        <button class="btn btn-primary" (click)="openAddModal()">
+          <span>➕</span> Add Record
+        </button>
+
+        <button class="btn btn-secondary" (click)="exportJson()" title="Export JSON">
+          <span>📥</span> Export
+        </button>
+
+        <button class="btn btn-secondary" (click)="loadRows()" title="Refresh">
+          <span>🔄</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Alerts -->
+    @if (errorMessage()) {
+      <div class="alert alert-error">
+        <span>⚠️ {{ errorMessage() }}</span>
+        <button class="alert-close" (click)="errorMessage.set('')">✕</button>
+      </div>
+    }
+    @if (successMessage()) {
+      <div class="alert alert-success">
+        <span>✓ {{ successMessage() }}</span>
+      </div>
+    }
+
+    <!-- Data Table View -->
+    <div class="table-container">
+      @if (loading()) {
+        <div class="loading-overlay">
+          <div class="spinner"></div>
+          <span>Loading data...</span>
+        </div>
+      }
+
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th class="actions-col">Actions</th>
+              @for (col of currentColumns(); track col.name) {
+                <th 
+                  class="sortable-col" 
+                  [class.pk-col]="col.pk > 0"
+                  (click)="onSort(col.name)"
+                >
+                  <div class="th-content">
+                    <span class="col-name">
+                      @if (col.pk > 0) { <span class="pk-badge" title="Primary Key">🔑</span> }
+                      {{ col.name }}
+                    </span>
+                    <span class="col-type">{{ col.type }}</span>
+                    @if (sortBy() === col.name) {
+                      <span class="sort-icon">{{ sortDir() === 'ASC' ? '▲' : '▼' }}</span>
+                    }
+                  </div>
+                </th>
+              }
+            </tr>
+          </thead>
+          <tbody>
+            @for (row of currentTableData()?.rows || []; track $index) {
+              <tr>
+                <td class="actions-col">
+                  <div class="row-btns">
+                    <button class="icon-btn edit-btn" (click)="openEditModal(row)" title="Edit row">
+                      ✏️
+                    </button>
+                    <button class="icon-btn delete-btn" (click)="openDeleteModal(row)" title="Delete row">
+                      🗑️
+                    </button>
+                  </div>
+                </td>
+                @for (col of currentColumns(); track col.name) {
+                  <td class="cell-data" [class.null-cell]="row[col.name] === null">
+                    {{ row[col.name] === null ? 'NULL' : row[col.name] }}
+                  </td>
+                }
+              </tr>
+            }
+            @if ((currentTableData()?.rows?.length || 0) === 0 && !loading()) {
+              <tr>
+                <td [attr.colspan]="currentColumns().length + 1" class="empty-cell">
+                  No records found in table {{ selectedTable() }}
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Pagination Footer -->
+    <footer class="pagination-footer">
+      <div class="pagination-info">
+        Page {{ currentPage() }} of {{ totalPages() }} ({{ currentTableData()?.total || 0 }} total records)
+      </div>
+
+      <div class="pagination-controls">
+        <button 
+          class="btn btn-secondary btn-sm" 
+          [disabled]="currentPage() <= 1"
+          (click)="onPageChange(currentPage() - 1)"
+        >
+          Previous
+        </button>
+
+        <span class="page-current">{{ currentPage() }}</span>
+
+        <button 
+          class="btn btn-secondary btn-sm" 
+          [disabled]="currentPage() >= totalPages()"
+          (click)="onPageChange(currentPage() + 1)"
+        >
+          Next
+        </button>
+
+        <select [ngModel]="pageSize()" (ngModelChange)="pageSize.set($event); loadRows()" class="page-size-select">
+          <option [value]="25">25 rows</option>
+          <option [value]="50">50 rows</option>
+          <option [value]="100">100 rows</option>
+          <option [value]="200">200 rows</option>
+        </select>
+      </div>
+    </footer>
+  </main>
+</div>
+
+<!-- ADD RECORD MODAL -->
+@if (showAddModal()) {
+  <div class="modal-backdrop">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Add Record to {{ selectedTable() }}</h3>
+        <button class="modal-close" (click)="showAddModal.set(false)">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <form (submit)="saveNewRecord(); $event.preventDefault()" class="dynamic-form">
+          @for (col of currentColumns(); track col.name) {
+            <div class="form-group">
+              <label class="form-label">
+                <span class="label-name">{{ col.name }}</span>
+                <span class="label-type">({{ col.type }}{{ col.notnull ? ' • Required' : '' }}{{ col.pk > 0 ? ' • PK' : '' }})</span>
+              </label>
+              
+              @if (col.type.toUpperCase().includes('TEXT') || col.type.toUpperCase().includes('CHAR') || col.type === '') {
+                <input 
+                  type="text" 
+                  class="form-control" 
+                  [(ngModel)]="formData[col.name]" 
+                  [name]="col.name"
+                  [placeholder]="col.default_value || 'NULL'"
+                />
+              } @else if (col.type.toUpperCase().includes('INT') || col.type.toUpperCase().includes('REAL') || col.type.toUpperCase().includes('FLOAT')) {
+                <input 
+                  type="number" 
+                  class="form-control" 
+                  [(ngModel)]="formData[col.name]" 
+                  [name]="col.name"
+                  [placeholder]="col.default_value || '0'"
+                />
+              } @else {
+                <input 
+                  type="text" 
+                  class="form-control" 
+                  [(ngModel)]="formData[col.name]" 
+                  [name]="col.name"
+                />
+              }
+            </div>
+          }
+
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" (click)="showAddModal.set(false)">Cancel</button>
+            <button type="submit" class="btn btn-primary">Insert Record</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+}
+
+<!-- EDIT RECORD MODAL -->
+@if (showEditModal()) {
+  <div class="modal-backdrop">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Edit Record in {{ selectedTable() }}</h3>
+        <button class="modal-close" (click)="showEditModal.set(false)">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <form (submit)="saveEditedRecord(); $event.preventDefault()" class="dynamic-form">
+          @for (col of currentColumns(); track col.name) {
+            <div class="form-group" [class.pk-highlight]="col.pk > 0">
+              <label class="form-label">
+                <span class="label-name">
+                  @if (col.pk > 0) { 🔑 }
+                  {{ col.name }}
+                </span>
+                <span class="label-type">({{ col.type }}{{ col.notnull ? ' • Required' : '' }})</span>
+              </label>
+              
+              <input 
+                type="text" 
+                class="form-control" 
+                [(ngModel)]="formData[col.name]" 
+                [name]="col.name"
+              />
+            </div>
+          }
+
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" (click)="showEditModal.set(false)">Cancel</button>
+            <button type="submit" class="btn btn-primary">Save Changes</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+}
+
+<!-- DELETE RECORD MODAL -->
+@if (showDeleteModal()) {
+  <div class="modal-backdrop">
+    <div class="modal-card modal-sm">
+      <div class="modal-header danger-header">
+        <h3>Delete Record from {{ selectedTable() }}</h3>
+        <button class="modal-close" (click)="showDeleteModal.set(false)">✕</button>
+      </div>
+
+      <div class="modal-body">
+        <p>Are you sure you want to permanently delete this row?</p>
+        <div class="row-preview">
+          @for (col of currentColumns(); track col.name) {
+            @if (col.pk > 0 || col.name === 'id' || col.name === 'name' || col.name === 'key') {
+              <div class="preview-item">
+                <strong>{{ col.name }}:</strong> {{ selectedRow ? selectedRow[col.name] : '' }}
+              </div>
+            }
+          }
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" (click)="showDeleteModal.set(false)">Cancel</button>
+        <button type="button" class="btn btn-danger" (click)="confirmDelete()">Delete Permanently</button>
+      </div>
+    </div>
+  </div>
+}

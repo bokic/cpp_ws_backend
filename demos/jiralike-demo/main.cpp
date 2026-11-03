@@ -13883,6 +13883,39 @@ static void handle_group_detail(backend::wsworker *worker,
         return;
     }
 
+    if (method == "PUT") {
+        auto u_auth = get_authenticated_user(conn, worker, header);
+        if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
+            send_error(worker, header, "403 Forbidden", "Only administrators can edit groups");
+            return;
+        }
+        auto body = json::json_value::parse(worker->body());
+        if (!body) {
+            send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+            return;
+        }
+        std::string name = body.get_string("name");
+        std::string desc = body.get_string("description");
+        if (name.empty()) {
+            send_error(worker, header, "400 Bad Request", "Group name is required");
+            return;
+        }
+        db::sqlite_transaction tx(conn);
+        auto upd = conn.prepare("UPDATE user_groups SET name = ?, description = ? WHERE id = ?;");
+        upd.bind_text(1, name);
+        upd.bind_text(2, desc);
+        upd.bind_int(3, group_id);
+        upd.step_done();
+        tx.commit();
+
+        auto res = json::json_value::make_object();
+        res.add_int("id", group_id);
+        res.add_str("name", name);
+        res.add_str("description", desc);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
     auto u_auth = get_authenticated_user(conn, worker, header);
     if (!u_auth.authenticated || !security::user_is_admin(conn, u_auth.id, u_auth.role)) {
         send_error(worker, header, "403 Forbidden", "Only administrators can delete groups");
@@ -18632,6 +18665,8 @@ static void handle_swagger_docs(backend::wsworker *worker,
                  proto.c_str(), len, html_str.c_str());
 }
 
+#include "src/admin_studio_engine.h"
+
 static constexpr auto DEFAULT_SOCKET_NAME = ":9002";
 static constexpr auto DEFAULT_BACKLOG = 100;
 
@@ -18708,9 +18743,13 @@ int main(int argc, char *argv[]) {
         {"^/api/auth/logout$",                      backend::POST,                  handle_auth_logout          },
         {"^/api/auth/me$",                          backend::GET,                   handle_auth_me              },
         {"^/api/users$",                            backend::GET | backend::POST,   handle_users                },
+        {"^/api/users/([0-9]+)$",                   backend::PUT | backend::DELETE, handle_user_detail         },
         {"^/api/projects$",                         backend::GET | backend::POST,   handle_projects             },
+        {"^/api/projects/([0-9]+)$",                backend::PUT | backend::DELETE, handle_project_detail      },
         {"^/api/resolutions$",                      backend::GET | backend::POST,   handle_resolutions          },
+        {"^/api/resolutions/([0-9]+)$",             backend::PUT | backend::DELETE, handle_resolution_detail   },
         {"^/api/issue-types$",                      backend::GET | backend::POST,   handle_issue_types          },
+        {"^/api/issue-types/([0-9]+)$",             backend::PUT | backend::DELETE, handle_issue_type_detail   },
         {"^/api/issue-type-schemes$",               backend::GET | backend::POST,   handle_issue_type_schemes   },
         {"^/api/components$",                       backend::GET | backend::POST,   handle_components           },
         {"^/api/projects/([0-9]+)/components$",     backend::GET | backend::POST,   handle_components           },
@@ -18722,7 +18761,7 @@ int main(int argc, char *argv[]) {
         {"^/api/custom-fields$",                    backend::GET | backend::POST,   handle_custom_fields        },
         {"^/api/custom-fields/([0-9]+)$",           backend::PUT | backend::DELETE, handle_custom_field_detail  },
         {"^/api/custom-fields/([0-9]+)/options$",   backend::POST,                  handle_custom_field_options },
-        {"^/api/custom-field-options/([0-9]+)$",    backend::DELETE,                handle_delete_custom_field_option},
+        {"^/api/custom-field-options/([0-9]+)$",    backend::PUT | backend::DELETE, handle_custom_field_option_detail},
         {"^/api/field-configurations$",             backend::GET | backend::POST,   handle_field_configurations },
         {"^/api/screens/resolve$",                  backend::GET,                   handle_resolve_screen       },
         {"^/api/screens$",                          backend::GET | backend::POST,   handle_screens              },
@@ -18741,7 +18780,7 @@ int main(int argc, char *argv[]) {
         {"^/api/workflow-transitions/([0-9]+)/rules$", backend::POST,               handle_workflow_transition_rules},
         {"^/api/workflow-transition-rules/([0-9]+)$", backend::DELETE,              handle_delete_workflow_transition_rule},
         {"^/api/workflow-schemes$",                 backend::GET | backend::POST,   handle_workflow_schemes     },
-        {"^/api/workflow-schemes/([0-9]+)$",        backend::DELETE,                handle_delete_workflow_scheme},
+        {"^/api/workflow-schemes/([0-9]+)$",        backend::PUT | backend::DELETE, handle_workflow_scheme_detail},
         {"^/api/search/jql$",                       backend::GET | backend::POST,   handle_search_jql           },
         {"^/api/search/validate$",                  backend::POST,                  handle_search_validate      },
         {"^/api/search/suggestions$",               backend::GET,                   handle_search_suggestions   },
@@ -18773,6 +18812,7 @@ int main(int argc, char *argv[]) {
         {"^/api/items/([A-Za-z0-9_-]+)/transitions$",   backend::GET | backend::POST,   handle_item_available_transitions},
         {"^/api/items/([A-Za-z0-9_-]+)/state$",         backend::PATCH | backend::POST, handle_item_state_transition},
         {"^/api/items/([A-Za-z0-9_-]+)/comments$",      backend::POST,                  handle_item_comments        },
+        {"^/api/comments/([0-9]+)$",                    backend::PUT | backend::DELETE, handle_comment_detail       },
         {"^/api/items/([A-Za-z0-9_-]+)/worklogs$",      backend::GET | backend::POST,   handle_item_worklogs        },
         {"^/api/worklogs$",                             backend::GET,                   handle_all_worklogs_timesheet},
         {"^/api/worklogs/([0-9]+)$",                    backend::PUT | backend::DELETE, handle_worklog_detail       },
@@ -18824,7 +18864,7 @@ int main(int argc, char *argv[]) {
         {"^/api/security-schemes/([0-9]+)/levels/([0-9]+)/grants/([0-9]+)$", backend::DELETE, handle_security_scheme_level_grant_delete },
         {"^/api/security-levels$",                      backend::GET,                   handle_security_levels      },
         {"^/api/groups$",                               backend::GET | backend::POST,   handle_groups               },
-        {"^/api/groups/([0-9]+)$",                      backend::GET | backend::DELETE, handle_group_detail         },
+        {"^/api/groups/([0-9]+)$",                      backend::GET | backend::PUT | backend::DELETE, handle_group_detail },
         {"^/api/groups/([0-9]+)/members$",              backend::GET | backend::POST,   handle_group_members        },
         {"^/api/groups/([0-9]+)/members/([0-9]+)$",     backend::DELETE,                handle_group_member_delete  },
         {"^/api/projects/([0-9]+)/permission-scheme$",  backend::PUT,                   handle_project_permission_scheme },
@@ -18920,6 +18960,12 @@ int main(int argc, char *argv[]) {
         {"^/api/mail/logs$",                            backend::GET,                   handle_mail_logs            },
         {"^/api/mail/inbound$",                         backend::POST,                  handle_mail_inbound         },
         {"^/api/user/preferences$",                     backend::GET | backend::PUT,    handle_user_preferences     },
+        {"^/api/automation/logs/clear$",                backend::POST | backend::DELETE,handle_clear_automation_logs },
+        {"^/api/mail/logs/clear$",                      backend::POST | backend::DELETE,handle_clear_mail_logs       },
+        {"^/api/webhooks/deliveries/clear$",            backend::POST | backend::DELETE,handle_clear_webhook_deliveries },
+        {"^/api/admin/tables$",                         backend::GET,                   handle_admin_tables          },
+        {"^/api/admin/tables/([A-Za-z0-9_]+)$",         backend::GET | backend::POST,   handle_admin_table_detail    },
+        {"^/api/admin/tables/([A-Za-z0-9_]+)/row$",     backend::PUT | backend::DELETE, handle_admin_table_row       },
         {"^/api/rate-limits$",                          backend::GET | backend::PUT,    handle_rate_limits          },
         {"^/api/rate-limits/reset$",                    backend::POST,                  handle_rate_limits_reset    },
         {"^/api/openapi.json$",                         backend::GET,                   handle_openapi_spec         },
