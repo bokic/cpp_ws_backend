@@ -8,7 +8,7 @@ license=('LGPL3')
 makedepends=('cmake' 'ninja' 'gcc' 'fcgi' 'json-c' 'sqlite' 'nodejs' 'npm')
 
 build() {
-  cd "${srcdir}/../../.."
+  cd "${srcdir}/../../../.."
   ./build.sh
   cd "${srcdir}/../../web"
   npm install
@@ -19,23 +19,32 @@ package_jiralike-demo() {
   depends=('fcgi' 'json-c' 'sqlite')
   pkgdesc="Jira-like project management FastCGI backend written in C++23 with automatic SQLite migrations"
   install -Dm755 "${srcdir}/../../jiralike-demo" "$pkgdir/opt/jiralike-demo/jiralike-demo"
-  install -Dm644 "${srcdir}/../../jiralike-demo.service" "$pkgdir/etc/systemd/system/jiralike-demo.service"
+  install -Dm644 "${srcdir}/../../jiralike-demo.service" "$pkgdir/usr/lib/systemd/system/jiralike-demo.service"
+  install -Dm644 "${srcdir}/../jiralike-demo.sysusers" "$pkgdir/usr/lib/sysusers.d/jiralike-demo.conf"
+  install -Dm644 "${srcdir}/../jiralike-demo.tmpfiles" "$pkgdir/usr/lib/tmpfiles.d/jiralike-demo.conf"
   mkdir -p "$pkgdir/opt/jiralike-demo/db/migrations"
   cp -r "${srcdir}/../../db/migrations/"*.sql "$pkgdir/opt/jiralike-demo/db/migrations/"
-  mkdir -p "$pkgdir/var/lib/jiralike-demo/db" "$pkgdir/var/lib/jiralike-demo/blobs"
 }
 
 package_jiralike-demo-config-nginx() {
   arch=('any')
   depends=('nginx' 'jiralike-demo-fe')
   pkgdesc="Nginx configuration for jiralike-demo Angular SPA and FastCGI backend"
-  install -Dm644 "${srcdir}/../../nginx/000-jiralike-demo.com" "$pkgdir/etc/nginx/sites-available/000-jiralike-demo.com"
+  install -d "$pkgdir/etc/nginx/sites-available"
+  sed 's|/opt/jiralike-demo-fe|/srv/http/jiralike-demo|g' \
+    "${srcdir}/../../nginx/000-jiralike-demo.com" \
+    > "$pkgdir/etc/nginx/sites-available/000-jiralike-demo.com"
+  chmod 644 "$pkgdir/etc/nginx/sites-available/000-jiralike-demo.com"
 }
 
 package_jiralike-demo-fe() {
   arch=('any')
   depends=('jiralike-demo')
   pkgdesc="jiralike-demo Angular Single-Page Application frontend"
-  mkdir -p "$pkgdir/opt/jiralike-demo-fe"
-  cp -r "${srcdir}/../../web/dist/web/browser/"* "$pkgdir/opt/jiralike-demo-fe/"
+  local destdir="$pkgdir/srv/http/jiralike-demo"
+  mkdir -p "$destdir"
+  cp -r "${srcdir}/../../web/dist/web/browser/"* "$destdir/"
+  chown -R http:http "$destdir"
+  find "$destdir" -type d -exec chmod 555 {} +
+  find "$destdir" -type f -exec chmod 444 {} +
 }
