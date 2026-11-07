@@ -1,6 +1,7 @@
 #pragma once
 
 #include "raii_json.h"
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <ctime>
@@ -131,6 +132,11 @@ public:
         return m_cv.wait_for(lock, timeout, [&]() {
             return m_shutdown.load() || (!m_events.empty() && m_events.back().id > since_id);
         });
+    }
+
+    // Async-signal-safe flag setter for signal handlers
+    void request_shutdown() {
+        m_shutdown.store(true, std::memory_order_relaxed);
     }
 
     void shutdown() {

@@ -410,8 +410,8 @@ import {
                           <div class="gadget-burndown">
                             <div class="burndown-meta">
                               <span class="sprint-name"><strong>{{ data.sprint_name || 'Current Sprint' }}</strong></span>
-                              <span class="days-left">{{ data.days_remaining || 0 }} days remaining</span>
-                              <span class="pts-rem">{{ data.points_remaining || 0 }} pts remaining</span>
+                              <span class="days-left">{{ data.days_remaining ?? data.timeline?.length ?? 0 }} days</span>
+                              <span class="pts-rem">{{ data.remaining_points ?? data.points_remaining ?? 0 }} pts remaining</span>
                             </div>
 
                             <svg viewBox="0 0 450 180" class="burndown-svg">
@@ -1256,12 +1256,13 @@ export class DashboardsComponent implements OnInit {
     const plotW = width - paddingLeft - paddingRight;
     const plotH = height - paddingTop - paddingBottom;
 
-    const maxPts = Math.max(...timeline.map((t) => t.ideal_remaining || 0), 10);
+    const maxPts = Math.max(...timeline.map((t) => t.ideal_points ?? t.ideal_remaining ?? 0), 10);
 
     return timeline
       .map((t, i) => {
+        const val = t.ideal_points ?? t.ideal_remaining ?? 0;
         const x = paddingLeft + (i / Math.max(timeline.length - 1, 1)) * plotW;
-        const y = height - paddingBottom - ((t.ideal_remaining || 0) / maxPts) * plotH;
+        const y = height - paddingBottom - (val / maxPts) * plotH;
         return `${i === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)}`;
       })
       .join(' ');
@@ -1276,12 +1277,16 @@ export class DashboardsComponent implements OnInit {
     const plotW = width - paddingLeft - paddingRight;
     const plotH = height - paddingTop - paddingBottom;
 
-    const maxPts = Math.max(...timeline.map((t) => Math.max(t.ideal_remaining || 0, t.actual_remaining || 0)), 10);
+    const maxPts = Math.max(
+      ...timeline.map((t) => Math.max(t.ideal_points ?? t.ideal_remaining ?? 0, t.remaining_points ?? t.actual_remaining ?? 0)),
+      10
+    );
 
     return timeline
       .map((t, i) => {
+        const val = t.remaining_points ?? t.actual_remaining ?? t.ideal_points ?? t.ideal_remaining ?? 0;
         const x = paddingLeft + (i / Math.max(timeline.length - 1, 1)) * plotW;
-        const y = height - paddingBottom - ((t.actual_remaining ?? t.ideal_remaining ?? 0) / maxPts) * plotH;
+        const y = height - paddingBottom - (val / maxPts) * plotH;
         return `${i === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)}`;
       })
       .join(' ');

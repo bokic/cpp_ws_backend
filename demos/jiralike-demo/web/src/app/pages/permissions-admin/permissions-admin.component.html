@@ -885,3 +885,26 @@
     </div>
   </div>
 }
+
+<!-- MODAL: Create Issue Security Scheme -->
+@if (showNewSecSchemeModal()) {
+  <div class="modal-backdrop" (click)="showNewSecSchemeModal.set(false)">
+    <div class="modal-card" (click)="$event.stopPropagation()">
+      <h3>Create Issue Security Scheme</h3>
+      <div class="form-group" style="margin-top: 12px;">
+        <label>Scheme Name *</label>
+        <input type="text" [(ngModel)]="newSecSchemeName" placeholder="e.g. Enterprise Confidentiality Scheme" />
+      </div>
+      <div class="form-group">
+        <label>Description</label>
+        <textarea [(ngModel)]="newSecSchemeDesc" rows="2" placeholder="Describe security scheme purpose..."></textarea>
+      </div>
+      <div class="modal-actions" style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px;">
+        <button type="button" class="btn btn-secondary" (click)="showNewSecSchemeModal.set(false)">Cancel</button>
+        <button type="button" class="btn btn-primary" [disabled]="!newSecSchemeName().trim()" (click)="createSecurityScheme()">
+          Create Scheme
+        </button>
+      </div>
+    </div>
+  </div>
+}

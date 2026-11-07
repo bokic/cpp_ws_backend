@@ -346,7 +346,8 @@ export class RichEditorComponent {
     let html = md
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
 
     // Restore safe tags we support
     html = html.replace(/&lt;u&gt;/gi, '<u>').replace(/&lt;\/u&gt;/gi, '</u>');
@@ -415,10 +416,16 @@ export class RichEditorComponent {
     });
 
     // Images: ![alt](url)
-    html = html.replace(/!\[(.*?)\]\((.*?)\)/g, '<div class="md-img-card"><img src="$2" alt="$1" loading="lazy" /><div class="md-img-caption">$1</div></div>');
+    html = html.replace(/!\[(.*?)\]\((.*?)\)/g, (_, alt, url) => {
+      const safeUrl = /^(https?:\/\/|\/|data:image\/)/i.test(url.trim()) ? url.trim() : '#';
+      return `<div class="md-img-card"><img src="${safeUrl}" alt="${alt}" loading="lazy" /><div class="md-img-caption">${alt}</div></div>`;
+    });
 
     // Links: [text](url)
-    html = html.replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2" target="_blank" rel="noopener" class="md-link">$1 ↗</a>');
+    html = html.replace(/\[(.*?)\]\((.*?)\)/g, (_, text, url) => {
+      const safeUrl = /^(https?:\/\/|mailto:|\/|#)/i.test(url.trim()) ? url.trim() : '#';
+      return `<a href="${safeUrl}" target="_blank" rel="noopener" class="md-link">${text} ↗</a>`;
+    });
 
     // Bold, Italic, Strikethrough, Inline Code
     html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
@@ -433,7 +440,7 @@ export class RichEditorComponent {
 
     // Issue Key Auto-Links: PROJ-123 / JIRA-123
     html = html.replace(/\b([A-Z][A-Z0-9]+-[0-9]+)\b/g, (match, issueKey) => {
-      return `<a href="/board?selected=${issueKey}" class="issue-mention-badge" title="View ${issueKey}">🏷 ${issueKey}</a>`;
+      return `<a href="/items/${issueKey}" class="issue-mention-badge" title="View ${issueKey}">🏷 ${issueKey}</a>`;
     });
 
     // Paragraph line breaks

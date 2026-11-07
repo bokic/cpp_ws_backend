@@ -1814,6 +1814,8 @@ export interface SlaMetric {
   start_condition?: string;
   pause_condition?: string;
   stop_condition?: string;
+  target_duration_seconds?: number;
+  warning_duration_seconds?: number;
   goals?: SlaGoal[];
 }
 

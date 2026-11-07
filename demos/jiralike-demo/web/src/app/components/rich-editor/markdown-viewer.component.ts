@@ -210,7 +210,8 @@ export class MarkdownViewerComponent {
     let html = md
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
 
     html = html.replace(/&lt;u&gt;/gi, '<u>').replace(/&lt;\/u&gt;/gi, '</u>');
 
@@ -275,10 +276,16 @@ export class MarkdownViewerComponent {
     });
 
     // Images
-    html = html.replace(/!\[(.*?)\]\((.*?)\)/g, '<div class="md-img-card"><img src="$2" alt="$1" loading="lazy" /><div class="md-img-caption">$1</div></div>');
+    html = html.replace(/!\[(.*?)\]\((.*?)\)/g, (_, alt, url) => {
+      const safeUrl = /^(https?:\/\/|\/|data:image\/)/i.test(url.trim()) ? url.trim() : '#';
+      return `<div class="md-img-card"><img src="${safeUrl}" alt="${alt}" loading="lazy" /><div class="md-img-caption">${alt}</div></div>`;
+    });
 
     // Links
-    html = html.replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2" target="_blank" rel="noopener" class="md-link">$1 ↗</a>');
+    html = html.replace(/\[(.*?)\]\((.*?)\)/g, (_, text, url) => {
+      const safeUrl = /^(https?:\/\/|mailto:|\/|#)/i.test(url.trim()) ? url.trim() : '#';
+      return `<a href="${safeUrl}" target="_blank" rel="noopener" class="md-link">${text} ↗</a>`;
+    });
 
     // Inlines
     html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
@@ -290,7 +297,7 @@ export class MarkdownViewerComponent {
     html = html.replace(/(?:^|\s)@([a-zA-Z0-9_.-]+)/g, ' <span class="mention-badge">@$1</span>');
 
     // Issue key badges
-    html = html.replace(/\b([A-Z][A-Z0-9]+-[0-9]+)\b/g, '<a href="/board?selected=$1" class="issue-mention-badge" title="View $1">🏷 $1</a>');
+    html = html.replace(/\b([A-Z][A-Z0-9]+-[0-9]+)\b/g, '<a href="/items/$1" class="issue-mention-badge" title="View $1">🏷 $1</a>');
 
     html = html.replace(/\n\n/g, '<p></p>');
     html = html.replace(/\n/g, '<br />');

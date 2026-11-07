@@ -167,12 +167,6 @@ public:
             return true;
         }
 
-        // Check explicit test bypass header if provided
-        auto it_bypass = header.find("HTTP_X_RATE_LIMIT_BYPASS");
-        if (it_bypass != header.end() && it_bypass->second == "true") {
-            return true;
-        }
-
         std::string client_key;
         std::string entity_type;
         std::string raw_id;

@@ -214,6 +214,7 @@ inline void route_notification(db::sqlite_db &conn, const NotificationEvent &ev)
         int assignee_id = 0;
         int reporter_id = 0;
         int lead_user_id = 0;
+        int security_level_id = 0;
         std::string current_key = ev.issue_key;
         std::string current_title = ev.issue_title;
         std::string current_status = ev.issue_status;
@@ -221,7 +222,7 @@ inline void route_notification(db::sqlite_db &conn, const NotificationEvent &ev)
         int project_id = ev.project_id;
 
         {
-            auto stmt = conn.prepare("SELECT key, title, status, priority, project_id, COALESCE(assignee_id, 0), COALESCE(reporter_id, 0) FROM work_items WHERE id = ?;");
+            auto stmt = conn.prepare("SELECT key, title, status, priority, project_id, COALESCE(assignee_id, 0), COALESCE(reporter_id, 0), COALESCE(security_level_id, 0) FROM work_items WHERE id = ?;");
             stmt.bind_int(1, ev.issue_id);
             if (stmt.step() == SQLITE_ROW) {
                 if (current_key.empty()) current_key = stmt.column_str(0);
@@ -231,6 +232,7 @@ inline void route_notification(db::sqlite_db &conn, const NotificationEvent &ev)
                 if (project_id <= 0) project_id = stmt.column_int(4);
                 assignee_id = stmt.column_int(5);
                 reporter_id = stmt.column_int(6);
+                security_level_id = stmt.column_int(7);
             }
         }
 
@@ -297,20 +299,26 @@ inline void route_notification(db::sqlite_db &conn, const NotificationEvent &ev)
                     }
                 }
             } else if (r_type == "role" && !r_param.empty() && project_id > 0) {
-                int role_id = std::atoi(r_param.c_str());
-                std::string sql_ra = (role_id > 0) ?
-                    "SELECT user_id FROM project_role_actors WHERE project_id = ? AND role_id = ? AND user_id IS NOT NULL;" :
-                    "SELECT pra.user_id FROM project_role_actors pra JOIN project_roles pr ON pra.role_id = pr.id WHERE pra.project_id = ? AND pr.name = ? AND pra.user_id IS NOT NULL;";
-                auto stmt_r = conn.prepare(sql_ra);
+                auto stmt_r = conn.prepare(R"SQL(
+                    SELECT user_id FROM project_role_members
+                    WHERE project_id = ? AND lower(role_name) = lower(?) AND user_id IS NOT NULL
+                    UNION
+                    SELECT id FROM users WHERE lower(role) = lower(?);
+                )SQL");
                 stmt_r.bind_int(1, project_id);
-                if (role_id > 0) stmt_r.bind_int(2, role_id);
-                else stmt_r.bind_text(2, r_param);
+                stmt_r.bind_text(2, r_param);
+                stmt_r.bind_text(3, r_param);
                 while (stmt_r.step() == SQLITE_ROW) {
                     recipient_ids.insert(stmt_r.column_int(0));
                 }
             } else if (r_type == "group" && !r_param.empty()) {
-                auto stmt_g = conn.prepare("SELECT user_id FROM user_group_members WHERE group_name = ?;");
-                stmt_g.bind_text(1, r_param);
+                int gid = std::atoi(r_param.c_str());
+                std::string sql_g = (gid > 0) ?
+                    "SELECT user_id FROM user_group_members WHERE group_id = ?;" :
+                    "SELECT ugm.user_id FROM user_group_members ugm JOIN user_groups ug ON ug.id = ugm.group_id WHERE lower(ug.name) = lower(?);";
+                auto stmt_g = conn.prepare(sql_g);
+                if (gid > 0) stmt_g.bind_int(1, gid);
+                else stmt_g.bind_text(1, r_param);
                 while (stmt_g.step() == SQLITE_ROW) {
                     recipient_ids.insert(stmt_g.column_int(0));
                 }
@@ -322,12 +330,15 @@ inline void route_notification(db::sqlite_db &conn, const NotificationEvent &ev)
         }
 
         std::string title_line = "[" + current_key + "] " + (!ev.summary_text.empty() ? ev.summary_text : current_title);
-        std::string link_url = "/" + current_key;
+        std::string link_url = "/items/" + current_key;
         std::string now_iso = get_current_iso8601();
 
         for (int uid : recipient_ids) {
             // Permission check: ensure user can browse project & view this issue (Step 11 security schemes)
             if (!security::has_permission(conn, uid, project_id, "BROWSE_PROJECT", reporter_id, assignee_id)) {
+                continue;
+            }
+            if (!security::can_access_security_level(conn, uid, project_id, security_level_id, reporter_id, assignee_id)) {
                 continue;
             }
 

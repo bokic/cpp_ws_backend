@@ -283,6 +283,7 @@ export class DatabaseAdminComponent implements OnInit {
     a.href = url;
     a.download = `${this.selectedTable()}_export.json`;
     a.click();
+    URL.revokeObjectURL(url);
   }
 
   isPrimaryKey(colName: string): boolean {

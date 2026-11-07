@@ -2572,36 +2572,6 @@ static void handle_custom_field_options(backend::wsworker *worker,
     send_json(worker, header, "201 Created", res);
 }
 
-// DELETE /api/custom-field-options/([0-9]+)
-static void handle_delete_custom_field_option(backend::wsworker *worker,
-                                              const std::map<std::string, std::string> &header,
-                                              const std::list<std::string> &uri_params) {
-    if (uri_params.empty()) {
-        send_error(worker, header, "400 Bad Request", "Missing option ID");
-        return;
-    }
-    int opt_id = std::atoi(uri_params.front().c_str());
-
-    auto conn = acquire_db_connection();
-    auto u_auth = get_authenticated_user(conn, worker, header);
-    if (!u_auth.authenticated) {
-        send_error(worker, header, "401 Unauthorized", "Authentication required");
-        return;
-    }
-
-    {
-        db::sqlite_transaction tx(conn);
-        auto del = conn.prepare("DELETE FROM custom_field_options WHERE id = ?;");
-        del.bind_int(1, opt_id);
-        del.step_done();
-        tx.commit();
-    }
-
-    auto res = json::json_value::make_object();
-    res.add_bool("deleted", true);
-    send_json(worker, header, "200 OK", res);
-}
-
 // GET | POST /api/field-configurations
 static void handle_field_configurations(backend::wsworker *worker,
                                         const std::map<std::string, std::string> &header,
@@ -4207,36 +4177,6 @@ static void handle_workflow_schemes(backend::wsworker *worker,
     res.add_str("issue_type", issue_type);
     res.add_int("workflow_id", workflow_id);
     res.add_bool("is_default", is_default);
-    send_json(worker, header, "200 OK", res);
-}
-
-// DELETE /api/workflow-schemes/([0-9]+)
-static void handle_delete_workflow_scheme(backend::wsworker *worker,
-                                           const std::map<std::string, std::string> &header,
-                                           const std::list<std::string> &uri_params) {
-    if (uri_params.empty()) {
-        send_error(worker, header, "400 Bad Request", "Missing workflow scheme ID");
-        return;
-    }
-    int sid = std::atoi(uri_params.front().c_str());
-
-    auto conn = acquire_db_connection();
-    auto u_auth = get_authenticated_user(conn, worker, header);
-    if (!u_auth.authenticated) {
-        send_error(worker, header, "401 Unauthorized", "Authentication required");
-        return;
-    }
-
-    {
-        db::sqlite_transaction tx(conn);
-        auto del = conn.prepare("DELETE FROM workflow_schemes WHERE id = ?;");
-        del.bind_int(1, sid);
-        del.step_done();
-        tx.commit();
-    }
-
-    auto res = json::json_value::make_object();
-    res.add_bool("deleted", true);
     send_json(worker, header, "200 OK", res);
 }
 
@@ -11581,6 +11521,12 @@ static void handle_worklog_detail(backend::wsworker *worker,
         send_error(worker, header, "400 Bad Request", "Invalid time_spent: " + dur_err);
         return;
     }
+    if (!body.has_key("time_spent_seconds") && !body.has_key("time_spent") && body.has_key("duration")) {
+        if (!time_tracking::parse_duration_to_seconds(body.get_string("duration"), ts_sec, dur_err)) {
+            send_error(worker, header, "400 Bad Request", "Invalid duration: " + dur_err);
+            return;
+        }
+    }
     int new_wl_spent = static_cast<int>(ts_sec);
     if (new_wl_spent <= 0) {
         send_error(worker, header, "400 Bad Request", "time_spent must be greater than zero");
@@ -16045,6 +15991,7 @@ static void handle_vcs_repositories(backend::wsworker *worker,
     auto u_auth = get_authenticated_user(conn, worker, header);
 
     if (method == "GET") {
+        bool is_admin = u_auth.authenticated && security::user_is_admin(conn, u_auth.id, u_auth.role);
         auto stmt = conn.prepare(R"SQL(
             SELECT r.id, r.name, r.provider, r.repo_url, r.webhook_secret, r.is_active, r.created_at, r.updated_at,
                    (SELECT COUNT(*) FROM git_branches b WHERE b.repository_id = r.id OR b.repository_name = r.name) AS branches_count,
@@ -16062,7 +16009,7 @@ static void handle_vcs_repositories(backend::wsworker *worker,
             obj.add_str("name", stmt.column_str(1));
             obj.add_str("provider", stmt.column_str(2));
             obj.add_str("repo_url", stmt.column_str(3));
-            obj.add_str("webhook_secret", stmt.column_str(4));
+            obj.add_str("webhook_secret", is_admin ? stmt.column_str(4) : "••••••••");
             obj.add_bool("is_active", stmt.column_int(5) != 0);
             obj.add_str("created_at", stmt.column_str(6));
             obj.add_str("updated_at", stmt.column_str(7));
@@ -16136,6 +16083,7 @@ static void handle_vcs_repository_detail(backend::wsworker *worker,
     auto u_auth = get_authenticated_user(conn, worker, header);
 
     if (method == "GET") {
+        bool is_admin = u_auth.authenticated && security::user_is_admin(conn, u_auth.id, u_auth.role);
         auto stmt = conn.prepare("SELECT id, name, provider, repo_url, webhook_secret, is_active, created_at, updated_at FROM git_repositories WHERE id = ?;");
         stmt.bind_int(1, rid);
         if (stmt.step() != SQLITE_ROW) {
@@ -16147,7 +16095,7 @@ static void handle_vcs_repository_detail(backend::wsworker *worker,
         obj.add_str("name", stmt.column_str(1));
         obj.add_str("provider", stmt.column_str(2));
         obj.add_str("repo_url", stmt.column_str(3));
-        obj.add_str("webhook_secret", stmt.column_str(4));
+        obj.add_str("webhook_secret", is_admin ? stmt.column_str(4) : "••••••••");
         obj.add_bool("is_active", stmt.column_int(5) != 0);
         obj.add_str("created_at", stmt.column_str(6));
         obj.add_str("updated_at", stmt.column_str(7));
@@ -18367,7 +18315,7 @@ static void handle_events_live(backend::wsworker *worker,
             break;
         }
 
-        realtime::get_engine().wait_for_events(since_id, std::chrono::milliseconds(5000));
+        realtime::get_engine().wait_for_events(since_id, std::chrono::milliseconds(1000));
         if (realtime::get_engine().is_shutdown()) break;
 
         auto events = realtime::get_engine().get_events_since(since_id);
@@ -18581,6 +18529,12 @@ static void handle_rate_limits(backend::wsworker *worker,
         send_json(worker, header, "200 OK", g_rate_limiter.get_status(header));
         return;
     } else if (method == "PUT") {
+        auto conn = acquire_db_connection();
+        auto u_auth = get_authenticated_user(conn, worker, header);
+        if (!u_auth.authenticated || u_auth.role != "Admin") {
+            send_error(worker, header, "403 Forbidden", "Admin privileges required");
+            return;
+        }
         json::json_value body;
         try {
             body = json::json_value::parse(worker->body());
@@ -18604,6 +18558,12 @@ static void handle_rate_limits(backend::wsworker *worker,
 static void handle_rate_limits_reset(backend::wsworker *worker,
                                      const std::map<std::string, std::string> &header,
                                      const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated || u_auth.role != "Admin") {
+        send_error(worker, header, "403 Forbidden", "Admin privileges required");
+        return;
+    }
     std::string client_key, entity_type, raw_id;
     g_rate_limiter.extract_client_info(header, client_key, entity_type, raw_id);
 
@@ -18674,7 +18634,7 @@ static std::atomic<backend::wsserver *> g_server{nullptr};
 
 static void signal_handler(int sig) {
     (void)sig;
-    realtime::get_engine().shutdown();
+    realtime::get_engine().request_shutdown();
     backend::wsserver *server = g_server.load();
     if (server) {
         server->shutdown();

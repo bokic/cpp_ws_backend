@@ -290,6 +290,11 @@ inline bool process_sso_callback(db::sqlite_db &conn, const sso_claims &claims,
     }
 
     sso_config cfg = get_sso_config(conn);
+    if (!cfg.is_enabled) {
+        out_error = "Enterprise SSO is currently disabled";
+        return false;
+    }
+
     // Domain validation if configured
     if (!cfg.email_domain.empty() && cfg.email_domain != "*") {
         std::string req_suffix = "@" + cfg.email_domain;
@@ -303,9 +308,8 @@ inline bool process_sso_callback(db::sqlite_db &conn, const sso_claims &claims,
     int user_id = 0;
     std::string existing_username;
     {
-        auto stmt = conn.prepare("SELECT id, username FROM users WHERE email = ? OR username = ?;");
+        auto stmt = conn.prepare("SELECT id, username FROM users WHERE LOWER(email) = LOWER(?);");
         stmt.bind_text(1, claims.email);
-        stmt.bind_text(2, claims.username);
         if (stmt.step() == SQLITE_ROW) {
             user_id = stmt.column_int(0);
             existing_username = stmt.column_str(1);
@@ -330,7 +334,7 @@ inline bool process_sso_callback(db::sqlite_db &conn, const sso_claims &claims,
             final_username = claims.username + std::to_string(suffix++);
         }
 
-        std::string role = (claims.role.empty() || claims.role == "Developer") ? cfg.default_role : claims.role;
+        std::string role = cfg.default_role.empty() ? "Developer" : cfg.default_role;
         std::string fake_pwd = utils::hash_password(utils::generate_random_hex(24));
         std::string avatar_color = "#" + utils::generate_random_hex(3);
 

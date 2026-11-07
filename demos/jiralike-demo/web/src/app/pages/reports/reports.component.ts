@@ -1436,10 +1436,13 @@ export class ReportsComponent implements OnInit {
   }
 
   getBurnupIdealPath(bd: BurndownReport): string {
+    const isHours = this.estimationUnit() === 'hours';
     return bd.timeline
       .map((dp, i) => {
         const x = this.getTimelineX(i, bd.timeline.length);
-        const idealDone = Math.max(0, dp.total_scope_points - dp.ideal_points);
+        const scope = isHours ? dp.total_scope_hours : dp.total_scope_points;
+        const ideal = isHours ? dp.ideal_hours : dp.ideal_points;
+        const idealDone = Math.max(0, scope - ideal);
         const y = this.getBurndownY(idealDone, bd);
         return `${i === 0 ? 'M' : 'L'} ${x} ${y}`;
       })
@@ -1447,10 +1450,12 @@ export class ReportsComponent implements OnInit {
   }
 
   getBurnupCompletedPath(bd: BurndownReport): string {
+    const isHours = this.estimationUnit() === 'hours';
     return bd.timeline
       .map((dp, i) => {
         const x = this.getTimelineX(i, bd.timeline.length);
-        const y = this.getBurndownY(dp.completed_points, bd);
+        const completed = isHours ? dp.completed_hours : dp.completed_points;
+        const y = this.getBurndownY(completed, bd);
         return `${i === 0 ? 'M' : 'L'} ${x} ${y}`;
       })
       .join(' ');

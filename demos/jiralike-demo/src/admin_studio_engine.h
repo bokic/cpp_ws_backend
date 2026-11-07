@@ -537,13 +537,14 @@ static void handle_admin_table_row(backend::wsworker *worker,
         }
 
         // Fallback to query args if body had no keys
+        std::vector<json::json_value> owned_where_vals;
         if (where_cols.empty()) {
             auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
             for (const auto &[k, v] : args) {
                 if (valid_cols.count(k)) {
                     where_cols.push_back(k);
-                    // allocate temporary json string
-                    where_vals.push_back(json_object_new_string(v.c_str()));
+                    owned_where_vals.push_back(json::json_value::make_string(v));
+                    where_vals.push_back(owned_where_vals.back().get());
                 }
             }
         }
@@ -747,10 +748,9 @@ static void handle_project_detail(backend::wsworker *worker,
 
         std::string name = body.get_string("name");
         std::string key = body.get_string("key");
+        bool has_desc = body.has_key("description");
         std::string description = body.get_string("description");
         int lead_user_id = body.get_int("lead_user_id", 0);
-        std::string url = body.get_string("url");
-        std::string category = body.get_string("project_category");
 
         try {
             db::sqlite_transaction tx(conn);
@@ -758,11 +758,8 @@ static void handle_project_detail(backend::wsworker *worker,
                 UPDATE projects SET
                     name = CASE WHEN ? != '' THEN ? ELSE name END,
                     key = CASE WHEN ? != '' THEN ? ELSE key END,
-                    description = CASE WHEN ? != '' THEN ? ELSE description END,
-                    lead_user_id = CASE WHEN ? > 0 THEN ? ELSE lead_user_id END,
-                    url = CASE WHEN ? != '' THEN ? ELSE url END,
-                    project_category = CASE WHEN ? != '' THEN ? ELSE project_category END,
-                    updated_at = datetime('now')
+                    description = CASE WHEN ? != 0 THEN ? ELSE description END,
+                    lead_user_id = CASE WHEN ? > 0 THEN ? ELSE lead_user_id END
                 WHERE id = ?;
             )SQL";
 
@@ -771,15 +768,11 @@ static void handle_project_detail(backend::wsworker *worker,
             upd.bind_text(2, name);
             upd.bind_text(3, key);
             upd.bind_text(4, key);
-            upd.bind_text(5, description);
+            upd.bind_int(5, has_desc ? 1 : 0);
             upd.bind_text(6, description);
             upd.bind_int(7, lead_user_id);
             upd.bind_int(8, lead_user_id);
-            upd.bind_text(9, url);
-            upd.bind_text(10, url);
-            upd.bind_text(11, category);
-            upd.bind_text(12, category);
-            upd.bind_int(13, proj_id);
+            upd.bind_int(9, proj_id);
             upd.step_done();
             tx.commit();
 
@@ -816,11 +809,23 @@ static void handle_project_detail(backend::wsworker *worker,
         try {
             db::sqlite_transaction tx(conn);
             // Cascade delete project dependencies
-            conn.prepare("DELETE FROM components WHERE project_id = ?;").bind_int(1, proj_id);
-            conn.prepare("DELETE FROM versions WHERE project_id = ?;").bind_int(1, proj_id);
-            conn.prepare("DELETE FROM sprints WHERE project_id = ?;").bind_int(1, proj_id);
-            conn.prepare("DELETE FROM boards WHERE project_id = ?;").bind_int(1, proj_id);
-            conn.prepare("DELETE FROM work_items WHERE project_id = ?;").bind_int(1, proj_id);
+            {
+                auto s1 = conn.prepare("DELETE FROM components WHERE project_id = ?;");
+                s1.bind_int(1, proj_id);
+                s1.step_done();
+                auto s2 = conn.prepare("DELETE FROM versions WHERE project_id = ?;");
+                s2.bind_int(1, proj_id);
+                s2.step_done();
+                auto s3 = conn.prepare("DELETE FROM sprints WHERE project_id = ?;");
+                s3.bind_int(1, proj_id);
+                s3.step_done();
+                auto s4 = conn.prepare("DELETE FROM boards WHERE project_id = ?;");
+                s4.bind_int(1, proj_id);
+                s4.step_done();
+                auto s5 = conn.prepare("DELETE FROM work_items WHERE project_id = ?;");
+                s5.bind_int(1, proj_id);
+                s5.step_done();
+            }
             
             auto del = conn.prepare("DELETE FROM projects WHERE id = ?;");
             del.bind_int(1, proj_id);
@@ -1161,8 +1166,8 @@ static void handle_custom_field_option_detail(backend::wsworker *worker,
 
     auto conn = acquire_db_connection();
     auto u_auth = get_authenticated_user(conn, worker, header);
-    if (!u_auth.authenticated) {
-        send_error(worker, header, "401 Unauthorized", "Authentication required");
+    if (!u_auth.authenticated || u_auth.role != "Admin") {
+        send_error(worker, header, "403 Forbidden", "Admin privileges required");
         return;
     }
 
@@ -1177,8 +1182,11 @@ static void handle_custom_field_option_detail(backend::wsworker *worker,
 
         std::string val = body.get_string("value");
         std::string color = body.get_string("color");
+        bool has_sort = body.has_key("sort_order");
         int sort_order = body.get_int("sort_order", 0);
+        bool has_active = body.has_key("is_active");
         bool is_active = body.get_bool("is_active", true);
+        bool has_default = body.has_key("is_default");
         bool is_default = body.get_bool("is_default", false);
 
         try {
@@ -1187,19 +1195,22 @@ static void handle_custom_field_option_detail(backend::wsworker *worker,
                 UPDATE custom_field_options SET
                     value = CASE WHEN ? != '' THEN ? ELSE value END,
                     color = CASE WHEN ? != '' THEN ? ELSE color END,
-                    sort_order = ?,
-                    is_active = ?,
-                    is_default = ?
+                    sort_order = CASE WHEN ? != 0 THEN ? ELSE sort_order END,
+                    is_active = CASE WHEN ? != 0 THEN ? ELSE is_active END,
+                    is_default = CASE WHEN ? != 0 THEN ? ELSE is_default END
                 WHERE id = ?;
             )SQL");
             upd.bind_text(1, val);
             upd.bind_text(2, val);
             upd.bind_text(3, color);
             upd.bind_text(4, color);
-            upd.bind_int(5, sort_order);
-            upd.bind_int(6, is_active ? 1 : 0);
-            upd.bind_int(7, is_default ? 1 : 0);
-            upd.bind_int(8, opt_id);
+            upd.bind_int(5, has_sort ? 1 : 0);
+            upd.bind_int(6, sort_order);
+            upd.bind_int(7, has_active ? 1 : 0);
+            upd.bind_int(8, is_active ? 1 : 0);
+            upd.bind_int(9, has_default ? 1 : 0);
+            upd.bind_int(10, is_default ? 1 : 0);
+            upd.bind_int(11, opt_id);
             upd.step_done();
             tx.commit();
 

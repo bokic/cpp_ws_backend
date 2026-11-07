@@ -1293,6 +1293,7 @@ export class ServiceDeskAgentComponent implements OnInit {
       .createServiceDeskSla(this.selectedDeskId(), {
         name,
         metric_key: name.toLowerCase().replace(/[^a-z0-9]+/g, '_'),
+        target_duration_seconds: targetSec,
         description: 'Target ' + targetHours + ' hours SLA metric',
         calendar_id: 1,
       })

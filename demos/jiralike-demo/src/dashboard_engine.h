@@ -364,7 +364,8 @@ inline json::json_value compute_created_vs_resolved(db::sqlite_db &conn,
     if (days != 14 && days != 30 && days != 60 && days != 90) {
         days = 30;
     }
-    int project_id = prefs.get_int("project_id", 0);
+    int project_id = prefs.get_int("project_id", 1);
+    if (project_id <= 0) project_id = 1;
 
     auto report = analytics::calculate_created_vs_resolved(conn, project_id, days);
     return report.to_json();

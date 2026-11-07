@@ -525,6 +525,28 @@ inline bool restore_item_from_trash(db::sqlite_db &conn,
             }
         }
 
+        // Restore links
+        auto lnk_arr = root.get_child("links");
+        if (lnk_arr) {
+            size_t len = lnk_arr.array_length();
+            auto ins_lnk = conn.prepare("INSERT OR IGNORE INTO work_item_links (source_item_id, target_item_id, link_type) VALUES (?, ?, ?);");
+            for (size_t i = 0; i < len; ++i) {
+                auto lnk = lnk_arr.array_get(i);
+                if (!lnk) continue;
+                int src = lnk.get_int("source_item_id", 0);
+                int tgt = lnk.get_int("target_item_id", 0);
+                if (src == orig_id) src = target_id;
+                if (tgt == orig_id) tgt = target_id;
+                if (src > 0 && tgt > 0) {
+                    ins_lnk.bind_int(1, src);
+                    ins_lnk.bind_int(2, tgt);
+                    ins_lnk.bind_text(3, lnk.get_string("link_type", "relates to"));
+                    ins_lnk.step_done();
+                    ins_lnk.clear_and_reset();
+                }
+            }
+        }
+
         // Remove from trash_bin
         auto del_t = conn.prepare("DELETE FROM trash_bin WHERE id = ?;");
         del_t.bind_int(1, trash_id);
@@ -838,16 +860,28 @@ inline int clone_work_item(db::sqlite_db &conn,
             }
         }
 
-        // Clone subtasks if requested
+        // Collect subtask IDs before committing outer transaction
+        std::vector<int> subtask_ids;
         if (clone_subtasks) {
-            std::vector<int> subtask_ids;
-            {
-                auto s_stmt = conn.prepare("SELECT id FROM work_items WHERE parent_id = ?;");
-                s_stmt.bind_int(1, orig_id);
-                while (s_stmt.step() == SQLITE_ROW) {
-                    subtask_ids.push_back(s_stmt.column_int(0));
-                }
+            auto s_stmt = conn.prepare("SELECT id FROM work_items WHERE parent_id = ?;");
+            s_stmt.bind_int(1, orig_id);
+            while (s_stmt.step() == SQLITE_ROW) {
+                subtask_ids.push_back(s_stmt.column_int(0));
             }
+        }
+
+        // Workflow history
+        auto hist = conn.prepare("INSERT INTO workflow_history (work_item_id, from_status, to_status, changed_by, comment) VALUES (?, 'New', ?, ?, ?);");
+        hist.bind_int(1, new_item_id);
+        hist.bind_text(2, o_status);
+        hist.bind_optional_int(3, user_id > 0 ? user_id : 1);
+        hist.bind_text(4, "Cloned from " + o_key);
+        hist.step_done();
+
+        tx.commit();
+
+        // Clone subtasks after committing parent transaction to avoid nested SQLite transactions
+        if (clone_subtasks) {
             for (int sub_id : subtask_ids) {
                 std::string sub_key, sub_err;
                 auto sub_opts = json::json_value::make_object();
@@ -864,16 +898,6 @@ inline int clone_work_item(db::sqlite_db &conn,
                 }
             }
         }
-
-        // Workflow history
-        auto hist = conn.prepare("INSERT INTO workflow_history (work_item_id, from_status, to_status, changed_by, comment) VALUES (?, 'New', ?, ?, ?);");
-        hist.bind_int(1, new_item_id);
-        hist.bind_text(2, o_status);
-        hist.bind_optional_int(3, user_id > 0 ? user_id : 1);
-        hist.bind_text(4, "Cloned from " + o_key);
-        hist.step_done();
-
-        tx.commit();
     } catch (const std::exception &ex) {
         err_msg = ex.what();
         return 0;

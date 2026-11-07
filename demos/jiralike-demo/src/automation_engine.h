@@ -318,7 +318,15 @@ inline bool evaluate_condition(db::sqlite_db &conn,
                                 !ev.user_username.empty() ? ev.user_username : "admin",
                                 !ev.user_display_name.empty() ? ev.user_display_name : "System Administrator");
             std::string where_sql = ast.to_where_sql(ctx);
-            std::string test_sql = "SELECT 1 FROM work_items w WHERE w.id = ? AND (" + where_sql + ") LIMIT 1;";
+            std::string test_sql = R"SQL(
+                SELECT 1 FROM work_items w
+                LEFT JOIN users ua ON ua.id = w.assignee_id
+                LEFT JOIN users ur ON ur.id = w.reporter_id
+                LEFT JOIN work_items wp ON wp.id = w.parent_id
+                LEFT JOIN sprints sp ON sp.id = w.sprint_id
+                LEFT JOIN resolutions res ON res.id = w.resolution_id
+                LEFT JOIN issue_security_levels isl ON isl.id = w.security_level_id
+                WHERE w.id = ? AND ()SQL" + where_sql + ") LIMIT 1;";
             auto stmt = conn.prepare(test_sql);
             stmt.bind_int(1, eff_issue_id);
             for (size_t i = 0; i < ctx.params.size(); ++i) {
@@ -588,9 +596,9 @@ inline bool execute_action(db::sqlite_db &conn,
         else if (field == "title" || field == "summary") sql = "UPDATE work_items SET title = ?, updated_at = datetime('now') WHERE id = ?;";
         else if (field == "severity") sql = "UPDATE work_items SET severity = ?, updated_at = datetime('now') WHERE id = ?;";
         else if (field == "assignee_id") {
-            int ass_id = std::stoi(val);
+            int ass_id = std::atoi(val.c_str());
             auto upd = conn.prepare("UPDATE work_items SET assignee_id = ?, updated_at = datetime('now') WHERE id = ?;");
-            upd.bind_int(1, ass_id);
+            upd.bind_optional_int(1, ass_id);
             upd.bind_int(2, eff_issue_id);
             upd.step_done();
             collaboration::record_changelog(conn, eff_issue_id, ev.user_id > 0 ? ev.user_id : 1, "assignee", "", val);
@@ -808,7 +816,15 @@ inline bool execute_action(db::sqlite_db &conn,
                                     !ev.user_username.empty() ? ev.user_username : "admin",
                                     !ev.user_display_name.empty() ? ev.user_display_name : "System Administrator");
                 std::string where_sql = ast.to_where_sql(ctx);
-                std::string q_sql = "SELECT w.id, w.key FROM work_items w WHERE " + where_sql + " LIMIT 50;";
+                std::string q_sql = R"SQL(
+                    SELECT w.id, w.key FROM work_items w
+                    LEFT JOIN users ua ON ua.id = w.assignee_id
+                    LEFT JOIN users ur ON ur.id = w.reporter_id
+                    LEFT JOIN work_items wp ON wp.id = w.parent_id
+                    LEFT JOIN sprints sp ON sp.id = w.sprint_id
+                    LEFT JOIN resolutions res ON res.id = w.resolution_id
+                    LEFT JOIN issue_security_levels isl ON isl.id = w.security_level_id
+                    WHERE )SQL" + where_sql + " LIMIT 50;";
                 auto stmt = conn.prepare(q_sql);
                 for (size_t i = 0; i < ctx.params.size(); ++i) {
                     stmt.bind_text(static_cast<int>(i + 1), ctx.params[i]);
@@ -951,7 +967,7 @@ inline void dispatch_event(db::sqlite_db &conn, const AutomationEvent &ev) {
             SELECT id, name, trigger_type, trigger_config, conditions_json, actions_json
             FROM automation_rules
             WHERE is_enabled = 1
-              AND (trigger_type = ? OR trigger_type = 'manual')
+              AND trigger_type = ?
               AND (project_id IS NULL OR ? = 0 OR project_id = ?);
         )SQL";
         auto stmt = conn.prepare(sql);

@@ -907,7 +907,7 @@ export class ServiceDeskPortalComponent implements OnInit {
   readonly myRequests = signal<any[]>([]);
   readonly activeTicket = signal<CustomerTicketDetail | null>(null);
 
-  readonly searchFilter = '';
+  searchFilter = '';
   customerEmail = '';
   replyText = '';
   readonly feedback = signal<{ type: 'success' | 'error'; message: string } | null>(null);
