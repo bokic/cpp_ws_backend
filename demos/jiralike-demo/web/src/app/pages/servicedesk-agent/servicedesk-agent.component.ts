@@ -5,10 +5,13 @@ import { Router, RouterLink } from '@angular/router';
 import { ApiService } from '../../services/api.service';
 import {
   CannedResponse,
+  CustomerOrganization,
+  CustomerOrganizationMember,
   ServiceDesk,
   ServiceDeskQueue,
   SlaCalendar,
   SlaMetric,
+  User,
   WorkItem,
   WorkItemSla,
 } from '../../models/jira.models';
@@ -108,6 +111,16 @@ import {
               <span class="queue-icon">💬</span>
               <span class="queue-name">Canned Responses</span>
               <span class="queue-count">{{ cannedResponses().length }}</span>
+            </button>
+            <button
+              type="button"
+              class="queue-nav-item"
+              [class.active]="activeSubView() === 'organizations'"
+              (click)="switchToOrganizations()"
+            >
+              <span class="queue-icon">🏢</span>
+              <span class="queue-name">Customer Organizations</span>
+              <span class="queue-count">{{ organizations().length }}</span>
             </button>
           </div>
         </aside>
@@ -397,6 +410,130 @@ import {
               </div>
             </div>
           }
+
+          <!-- --------------------------------------------------------------- -->
+          <!-- SUBVIEW 4: CUSTOMER ORGANIZATIONS                               -->
+          <!-- --------------------------------------------------------------- -->
+          @else if (activeSubView() === 'organizations') {
+            <div class="organizations-view">
+              <div class="queue-view-header">
+                <div>
+                  <h2>Customer Organizations &amp; Multi-Tenant Segregation</h2>
+                  <p class="queue-desc">Manage external client accounts, auto-join email domains, and shared portal ticket visibility.</p>
+                </div>
+                <div class="queue-header-actions">
+                  <button type="button" class="btn btn-primary btn-sm" (click)="openCreateOrgModal()">
+                    + Add Organization
+                  </button>
+                </div>
+              </div>
+
+              <div class="orgs-layout" style="display: grid; grid-template-columns: 320px 1fr; gap: 20px; align-items: start;">
+                <!-- Left: Organizations list -->
+                <div class="orgs-list-card" style="background: #ffffff; border: 1px solid #dfe1e6; border-radius: 6px; overflow: hidden;">
+                  <div style="padding: 12px 16px; border-bottom: 1px solid #dfe1e6; background: #fafbfc; font-weight: 700; font-size: 13px;">
+                    Organizations ({{ organizations().length }})
+                  </div>
+                  <div class="orgs-nav-list" style="display: flex; flex-direction: column;">
+                    @for (org of organizations(); track org.id) {
+                      <div
+                        (click)="selectOrganization(org)"
+                        style="padding: 12px 16px; border-bottom: 1px solid #f4f5f7; cursor: pointer; display: flex; justify-content: space-between; align-items: center;"
+                        [style.background]="activeOrg()?.id === org.id ? '#ebf2ff' : 'transparent'"
+                        [style.border-left]="activeOrg()?.id === org.id ? '3px solid #0052cc' : '3px solid transparent'"
+                      >
+                        <div>
+                          <div style="font-weight: 600; font-size: 13px; color: #172b4d;">🏢 {{ org.name }}</div>
+                          @if (org.domain) {
+                            <div style="font-size: 11px; color: #5e6c84;">Domain: &#64;{{ org.domain }}</div>
+                          }
+                        </div>
+                        <span class="badge" style="background: #dfe1e6; color: #172b4d; font-size: 11px;">
+                          {{ org.member_count || 0 }} members
+                        </span>
+                      </div>
+                    } @empty {
+                      <div style="padding: 24px; text-align: center; color: #5e6c84; font-size: 13px;">
+                        No organizations created for this desk yet.
+                      </div>
+                    }
+                  </div>
+                </div>
+
+                <!-- Right: Active Organization Detail & Members -->
+                @if (activeOrg()) {
+                  <div class="org-detail-card" style="background: #ffffff; border: 1px solid #dfe1e6; border-radius: 6px; padding: 20px;">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; border-bottom: 1px solid #ebecf0; padding-bottom: 16px;">
+                      <div>
+                        <h3 style="margin: 0 0 6px 0; font-size: 18px;">🏢 {{ activeOrg()!.name }}</h3>
+                        <div style="font-size: 12px; color: #5e6c84; display: flex; gap: 16px;">
+                          @if (activeOrg()!.domain) {
+                            <span>Domain: <strong style="color: #0052cc;">&#64;{{ activeOrg()!.domain }}</strong> (Auto-enrolls incoming emails)</span>
+                          }
+                          <span>Created: {{ activeOrg()!.created_at }}</span>
+                        </div>
+                      </div>
+                      <div style="display: flex; gap: 8px;">
+                        <button type="button" class="btn btn-primary btn-sm" (click)="openAddMemberModal()">
+                          + Add Member
+                        </button>
+                        <button type="button" class="btn btn-danger btn-sm" (click)="deleteSelectedOrg()">
+                          Delete Org
+                        </button>
+                      </div>
+                    </div>
+
+                    <h4 style="margin: 0 0 12px 0; font-size: 14px;">Organization Members</h4>
+                    <div class="table-container" style="border: 1px solid #ebecf0; border-radius: 4px; overflow: hidden;">
+                      <table class="triage-table" style="margin: 0;">
+                        <thead>
+                          <tr>
+                            <th>User</th>
+                            <th>Email</th>
+                            <th>User Type</th>
+                            <th>Added At</th>
+                            <th>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          @for (m of activeOrgMembers(); track (m.user_id || m.id)) {
+                            <tr>
+                              <td>
+                                <strong style="color: #172b4d;">{{ m.display_name }}</strong>
+                                <span style="font-size: 11px; color: #6b778c; margin-left: 4px;">(&#64;{{ m.username }})</span>
+                              </td>
+                              <td>{{ m.email }}</td>
+                              <td>
+                                <span class="badge" [style.background]="m.user_type === 'PORTAL_CUSTOMER' ? '#deebff' : '#eae6ff'" [style.color]="m.user_type === 'PORTAL_CUSTOMER' ? '#0747a6' : '#403294'">
+                                  {{ m.user_type || 'PORTAL_CUSTOMER' }}
+                                </span>
+                              </td>
+                              <td style="font-size: 12px; color: #5e6c84;">{{ m.added_at }}</td>
+                              <td>
+                                <button type="button" class="btn btn-danger btn-xs" (click)="removeOrgMember(m.user_id || m.id)">
+                                  Remove
+                                </button>
+                              </td>
+                            </tr>
+                          } @empty {
+                            <tr>
+                              <td colspan="5" style="text-align: center; padding: 24px; color: #5e6c84;">
+                                No members in this organization yet. Add users to allow them to view each other's tickets.
+                              </td>
+                            </tr>
+                          }
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                } @else {
+                  <div style="background: #ffffff; border: 1px solid #dfe1e6; border-radius: 6px; padding: 40px; text-align: center; color: #5e6c84;">
+                    Select an organization from the list or create a new one.
+                  </div>
+                }
+              </div>
+            </div>
+          }
         </main>
       </div>
 
@@ -536,6 +673,99 @@ import {
               <button type="button" class="btn btn-secondary" (click)="showCannedModal.set(false)">Cancel</button>
               <button type="button" class="btn btn-primary" [disabled]="!cannedForm.title.trim() || !cannedForm.content.trim()" (click)="saveNewCanned()">
                 Save Template
+              </button>
+            </div>
+          </div>
+        </div>
+      }
+
+      <!-- ------------------------------------------------------------------- -->
+      <!-- MODAL: CREATE CUSTOMER ORGANIZATION                                 -->
+      <!-- ------------------------------------------------------------------- -->
+      @if (showCreateOrgModal()) {
+        <div class="agent-modal-backdrop" (click)="closeCreateOrgModal()">
+          <div class="agent-modal" (click)="$event.stopPropagation()">
+            <div class="agent-modal-header">
+              <h3>+ Add Customer Organization</h3>
+              <button type="button" class="close-modal-btn" (click)="closeCreateOrgModal()">&times;</button>
+            </div>
+            <div class="agent-modal-body">
+              <div class="form-group">
+                <label>Organization Name *</label>
+                <input
+                  type="text"
+                  [(ngModel)]="orgForm.name"
+                  class="form-control"
+                  placeholder="e.g., Acme Corporation"
+                />
+              </div>
+              <div class="form-group">
+                <label>Email Domain (Optional)</label>
+                <input
+                  type="text"
+                  [(ngModel)]="orgForm.domain"
+                  class="form-control"
+                  placeholder="e.g., acme.com (auto-assigns incoming email senders)"
+                />
+                <small class="text-muted">Customers sending emails from this domain will automatically join this organization.</small>
+              </div>
+            </div>
+            <div class="agent-modal-footer">
+              <button type="button" class="btn btn-secondary" (click)="closeCreateOrgModal()">Cancel</button>
+              <button
+                type="button"
+                class="btn btn-primary"
+                [disabled]="!orgForm.name.trim() || savingOrg()"
+                (click)="submitCreateOrg()"
+              >
+                {{ savingOrg() ? 'Saving...' : 'Create Organization' }}
+              </button>
+            </div>
+          </div>
+        </div>
+      }
+
+      <!-- ------------------------------------------------------------------- -->
+      <!-- MODAL: ADD ORGANIZATION MEMBER                                      -->
+      <!-- ------------------------------------------------------------------- -->
+      @if (showAddMemberModal() && activeOrg()) {
+        <div class="agent-modal-backdrop" (click)="closeAddMemberModal()">
+          <div class="agent-modal" (click)="$event.stopPropagation()">
+            <div class="agent-modal-header">
+              <h3>+ Add Member to {{ activeOrg()!.name }}</h3>
+              <button type="button" class="close-modal-btn" (click)="closeAddMemberModal()">&times;</button>
+            </div>
+            <div class="agent-modal-body">
+              <div class="form-group">
+                <label>Select User:</label>
+                <select [(ngModel)]="newMemberUserId" class="form-control">
+                  <option [value]="0">-- Choose user by name/email --</option>
+                  @for (u of availableUsersToAdd(); track u.id) {
+                    <option [value]="u.id">
+                      {{ u.display_name }} ({{ u.email }}) [{{ u.user_type || 'INTERNAL' }}]
+                    </option>
+                  }
+                </select>
+              </div>
+              <div class="form-group">
+                <label>Or Enter User Email Address:</label>
+                <input
+                  type="email"
+                  [(ngModel)]="newMemberEmail"
+                  class="form-control"
+                  placeholder="user@example.com"
+                />
+              </div>
+            </div>
+            <div class="agent-modal-footer">
+              <button type="button" class="btn btn-secondary" (click)="closeAddMemberModal()">Cancel</button>
+              <button
+                type="button"
+                class="btn btn-primary"
+                [disabled]="(!newMemberUserId && !newMemberEmail.trim()) || addingMember()"
+                (click)="submitAddMember()"
+              >
+                {{ addingMember() ? 'Adding...' : 'Add Member' }}
               </button>
             </div>
           </div>
@@ -1010,9 +1240,22 @@ export class ServiceDeskAgentComponent implements OnInit {
   readonly calendars = signal<SlaCalendar[]>([]);
   readonly cannedResponses = signal<CannedResponse[]>([]);
 
-  readonly activeSubView = signal<'tickets' | 'slas' | 'canned'>('tickets');
+  readonly activeSubView = signal<'tickets' | 'slas' | 'canned' | 'organizations'>('tickets');
   readonly evaluatingSlas = signal<boolean>(false);
   readonly feedback = signal<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // Organizations
+  readonly organizations = signal<CustomerOrganization[]>([]);
+  readonly activeOrg = signal<CustomerOrganization | null>(null);
+  readonly activeOrgMembers = signal<CustomerOrganizationMember[]>([]);
+  readonly showCreateOrgModal = signal<boolean>(false);
+  readonly savingOrg = signal<boolean>(false);
+  orgForm = { name: '', domain: '' };
+
+  readonly showAddMemberModal = signal<boolean>(false);
+  readonly addingMember = signal<boolean>(false);
+  newMemberUserId = 0;
+  newMemberEmail = '';
 
   // Reply Modal
   readonly showReplyModal = signal<boolean>(false);
@@ -1070,6 +1313,8 @@ export class ServiceDeskAgentComponent implements OnInit {
 
       const slaList = await this.api.getServiceDeskSlas(deskId);
       this.slas.set(slaList);
+
+      await this.loadOrganizations(deskId);
     } catch (err: any) {
       this.feedback.set({ type: 'error', message: 'Failed to load desk queues: ' + (err.message || err) });
     }
@@ -1322,6 +1567,140 @@ export class ServiceDeskAgentComponent implements OnInit {
         this.loadCalendars();
         this.feedback.set({ type: 'success', message: 'Calendar created.' });
       });
+  }
+
+  availableUsersToAdd(): User[] {
+    const existing = new Set(this.activeOrgMembers().map((m) => m.user_id || m.id));
+    return this.api.users().filter((u) => !existing.has(u.id));
+  }
+
+  async loadOrganizations(deskId: number): Promise<void> {
+    try {
+      const orgs = await this.api.getServiceDeskOrganizations(deskId);
+      this.organizations.set(orgs);
+      if (orgs.length > 0) {
+        if (!this.activeOrg() || !orgs.some((o) => o.id === this.activeOrg()!.id)) {
+          await this.selectOrganization(orgs[0]);
+        } else {
+          await this.loadOrgMembers(this.activeOrg()!.id);
+        }
+      } else {
+        this.activeOrg.set(null);
+        this.activeOrgMembers.set([]);
+      }
+    } catch {
+      this.organizations.set([]);
+    }
+  }
+
+  async switchToOrganizations(): Promise<void> {
+    this.activeSubView.set('organizations');
+    await this.loadOrganizations(this.selectedDeskId());
+  }
+
+  async selectOrganization(org: CustomerOrganization): Promise<void> {
+    this.activeOrg.set(org);
+    await this.loadOrgMembers(org.id);
+  }
+
+  async loadOrgMembers(orgId: number): Promise<void> {
+    try {
+      const members = await this.api.getOrganizationMembers(orgId);
+      this.activeOrgMembers.set(members);
+    } catch {
+      this.activeOrgMembers.set([]);
+    }
+  }
+
+  openCreateOrgModal(): void {
+    this.orgForm.name = '';
+    this.orgForm.domain = '';
+    this.showCreateOrgModal.set(true);
+  }
+
+  closeCreateOrgModal(): void {
+    this.showCreateOrgModal.set(false);
+  }
+
+  async submitCreateOrg(): Promise<void> {
+    if (!this.orgForm.name.trim()) return;
+    this.savingOrg.set(true);
+    try {
+      const created = await this.api.createServiceDeskOrganization(
+        this.selectedDeskId(),
+        this.orgForm.name.trim(),
+        this.orgForm.domain.trim() || undefined
+      );
+      this.closeCreateOrgModal();
+      await this.loadOrganizations(this.selectedDeskId());
+      await this.selectOrganization(created);
+      this.feedback.set({ type: 'success', message: `Organization "${created.name}" created successfully.` });
+    } catch (err: any) {
+      this.feedback.set({ type: 'error', message: 'Failed to create organization: ' + (err.message || err) });
+    } finally {
+      this.savingOrg.set(false);
+    }
+  }
+
+  async deleteSelectedOrg(): Promise<void> {
+    const org = this.activeOrg();
+    if (!org) return;
+    if (!confirm(`Are you sure you want to delete organization "${org.name}"?`)) return;
+    try {
+      await this.api.deleteOrganization(org.id);
+      this.activeOrg.set(null);
+      await this.loadOrganizations(this.selectedDeskId());
+      this.feedback.set({ type: 'success', message: `Organization "${org.name}" deleted.` });
+    } catch (err: any) {
+      this.feedback.set({ type: 'error', message: 'Failed to delete organization: ' + (err.message || err) });
+    }
+  }
+
+  async openAddMemberModal(): Promise<void> {
+    this.newMemberUserId = 0;
+    this.newMemberEmail = '';
+    if (this.api.users().length === 0) {
+      await this.api.getUsers();
+    }
+    this.showAddMemberModal.set(true);
+  }
+
+  closeAddMemberModal(): void {
+    this.showAddMemberModal.set(false);
+  }
+
+  async submitAddMember(): Promise<void> {
+    const org = this.activeOrg();
+    if (!org) return;
+    this.addingMember.set(true);
+    try {
+      await this.api.addOrganizationMember(org.id, {
+        user_id: this.newMemberUserId ? Number(this.newMemberUserId) : undefined,
+        email: this.newMemberEmail.trim() || undefined,
+      });
+      this.closeAddMemberModal();
+      await this.loadOrgMembers(org.id);
+      await this.loadOrganizations(this.selectedDeskId());
+      this.feedback.set({ type: 'success', message: 'Member added to organization.' });
+    } catch (err: any) {
+      this.feedback.set({ type: 'error', message: 'Failed to add member: ' + (err.message || err) });
+    } finally {
+      this.addingMember.set(false);
+    }
+  }
+
+  async removeOrgMember(userId: number): Promise<void> {
+    const org = this.activeOrg();
+    if (!org) return;
+    if (!confirm('Are you sure you want to remove this member from the organization?')) return;
+    try {
+      await this.api.removeOrganizationMember(org.id, userId);
+      await this.loadOrgMembers(org.id);
+      await this.loadOrganizations(this.selectedDeskId());
+      this.feedback.set({ type: 'success', message: 'Member removed from organization.' });
+    } catch (err: any) {
+      this.feedback.set({ type: 'error', message: 'Failed to remove member: ' + (err.message || err) });
+    }
   }
 
   getIcon(icon: string): string {

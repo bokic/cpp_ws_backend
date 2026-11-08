@@ -24,6 +24,16 @@ inline std::string to_lower_ascii(std::string_view str) {
 
 inline bool user_is_admin(db::sqlite_db &conn, int user_id, const std::string &given_role = "") {
     if (user_id <= 0) return false;
+
+    // Portal customers are strictly segregated and can never hold admin privileges
+    {
+        auto tstmt = conn.prepare("SELECT COALESCE(user_type, 'INTERNAL') FROM users WHERE id = ?;");
+        tstmt.bind_int(1, user_id);
+        if (tstmt.step() == SQLITE_ROW && tstmt.column_text(0) == "PORTAL_CUSTOMER") {
+            return false;
+        }
+    }
+
     std::string role = given_role;
     if (role.empty()) {
         auto stmt = conn.prepare("SELECT role FROM users WHERE id = ?;");
@@ -168,12 +178,19 @@ inline bool has_permission(db::sqlite_db &conn,
     if (user_id <= 0) return false;
 
     std::string user_role;
+    std::string user_type = "INTERNAL";
     {
-        auto ustmt = conn.prepare("SELECT role FROM users WHERE id = ?;");
+        auto ustmt = conn.prepare("SELECT role, COALESCE(user_type, 'INTERNAL') FROM users WHERE id = ?;");
         ustmt.bind_int(1, user_id);
         if (ustmt.step() == SQLITE_ROW) {
             user_role = ustmt.column_text(0);
+            user_type = ustmt.column_text(1);
         }
+    }
+
+    // Segregated portal customers have zero access to internal project permission schemes
+    if (user_type == "PORTAL_CUSTOMER") {
+        return false;
     }
 
     if (user_is_admin(conn, user_id, user_role)) {
@@ -223,12 +240,18 @@ inline bool can_access_security_level(db::sqlite_db &conn,
     if (user_id <= 0) return false;
 
     std::string user_role;
+    std::string user_type = "INTERNAL";
     {
-        auto ustmt = conn.prepare("SELECT role FROM users WHERE id = ?;");
+        auto ustmt = conn.prepare("SELECT role, COALESCE(user_type, 'INTERNAL') FROM users WHERE id = ?;");
         ustmt.bind_int(1, user_id);
         if (ustmt.step() == SQLITE_ROW) {
             user_role = ustmt.column_text(0);
+            user_type = ustmt.column_text(1);
         }
+    }
+
+    if (user_type == "PORTAL_CUSTOMER") {
+        return false;
     }
 
     if (user_is_admin(conn, user_id, user_role)) {

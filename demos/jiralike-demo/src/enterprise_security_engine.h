@@ -1063,7 +1063,7 @@ inline bool process_inbound_email(db::sqlite_db &conn, const std::string &blobs_
         return false;
     }
 
-    // 3. Sender user matching
+    // 3. Sender user matching & Inbound Customer Auto-Enrollment
     int reporter_id = 0;
     std::string reporter_name = "Email User";
     {
@@ -1075,12 +1075,76 @@ inline bool process_inbound_email(db::sqlite_db &conn, const std::string &blobs_
         }
     }
     if (reporter_id == 0) {
-        reporter_id = handler.default_reporter_id;
-        // Lookup default reporter name
-        auto d_stmt = conn.prepare("SELECT display_name FROM users WHERE id = ?;");
-        d_stmt.bind_int(1, reporter_id);
-        if (d_stmt.step() == SQLITE_ROW) {
-            reporter_name = d_stmt.column_str(0);
+        // Auto-enroll unrecognized external email as PORTAL_CUSTOMER
+        std::string base_username = em.from;
+        auto at_pos = base_username.find('@');
+        if (at_pos != std::string::npos) {
+            base_username = base_username.substr(0, at_pos);
+        }
+        std::string candidate_uname;
+        for (char ch : base_username) {
+            if (std::isalnum(static_cast<unsigned char>(ch)) || ch == '_' || ch == '-' || ch == '.') {
+                candidate_uname += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+            }
+        }
+        if (candidate_uname.empty()) candidate_uname = "customer";
+
+        std::string final_uname = candidate_uname;
+        int u_suffix = 1;
+        while (true) {
+            auto chk = conn.prepare("SELECT id FROM users WHERE username = ?;");
+            chk.bind_text(1, final_uname);
+            if (chk.step() != SQLITE_ROW) break;
+            final_uname = candidate_uname + std::to_string(u_suffix++);
+        }
+
+        std::string disp_name = !em.from.empty() ? em.from : final_uname;
+        std::string fake_pwd = utils::hash_password(utils::generate_random_hex(24));
+        std::string avatar_color = "#" + utils::generate_random_hex(3);
+
+        try {
+            db::sqlite_transaction tx(conn);
+            auto ins = conn.prepare(R"SQL(
+                INSERT INTO users (username, email, password_hash, display_name, role, avatar_color, user_type)
+                VALUES (?, ?, ?, ?, 'Customer', ?, 'PORTAL_CUSTOMER');
+            )SQL");
+            ins.bind_text(1, final_uname);
+            ins.bind_text(2, em.from);
+            ins.bind_text(3, fake_pwd);
+            ins.bind_text(4, disp_name);
+            ins.bind_text(5, avatar_color);
+            ins.step_done();
+            reporter_id = static_cast<int>(conn.last_insert_rowid());
+            reporter_name = disp_name;
+
+            // If user's domain matches a customer organization, auto-enroll as organization member
+            if (at_pos != std::string::npos && at_pos + 1 < em.from.size()) {
+                std::string domain = em.from.substr(at_pos + 1);
+                auto o_stmt = conn.prepare(R"SQL(
+                    SELECT co.id FROM customer_organizations co
+                    LEFT JOIN service_desks sd ON sd.id = co.service_desk_id
+                    WHERE LOWER(co.domain) = LOWER(?)
+                    ORDER BY CASE WHEN sd.project_id = ? THEN 0 ELSE 1 END, co.id ASC
+                    LIMIT 1;
+                )SQL");
+                o_stmt.bind_text(1, domain);
+                o_stmt.bind_int(2, handler.target_project_id);
+                if (o_stmt.step() == SQLITE_ROW) {
+                    int org_id = o_stmt.column_int(0);
+                    auto m_ins = conn.prepare("INSERT OR IGNORE INTO customer_organization_members (organization_id, user_id, added_at) VALUES (?, ?, datetime('now'));");
+                    m_ins.bind_int(1, org_id);
+                    m_ins.bind_int(2, reporter_id);
+                    m_ins.step_done();
+                }
+            }
+            tx.commit();
+        } catch (...) {
+            reporter_id = handler.default_reporter_id;
+            auto d_stmt = conn.prepare("SELECT display_name FROM users WHERE id = ?;");
+            d_stmt.bind_int(1, reporter_id);
+            if (d_stmt.step() == SQLITE_ROW) {
+                reporter_name = d_stmt.column_str(0);
+            }
         }
     }
 
@@ -1105,8 +1169,8 @@ inline bool process_inbound_email(db::sqlite_db &conn, const std::string &blobs_
         {
             db::sqlite_transaction tx(conn);
             auto c_ins = conn.prepare(R"SQL(
-                INSERT INTO comments (work_item_id, author_id, body)
-                VALUES (?, ?, ?);
+                INSERT INTO comments (work_item_id, author_id, body, is_internal)
+                VALUES (?, ?, ?, 0);
             )SQL");
             c_ins.bind_int(1, existing_item_id);
             c_ins.bind_int(2, reporter_id);
@@ -1226,12 +1290,37 @@ inline bool process_inbound_email(db::sqlite_db &conn, const std::string &blobs_
 
     int new_work_item_id = 0;
     {
+        // Check for service desk and matching customer organization
+        int s_desk_id = 0;
+        auto sd_chk = conn.prepare("SELECT id FROM service_desks WHERE project_id = ? LIMIT 1;");
+        sd_chk.bind_int(1, handler.target_project_id);
+        if (sd_chk.step() == SQLITE_ROW) {
+            s_desk_id = sd_chk.column_int(0);
+        }
+
+        int cust_org_id = 0;
+        auto o_chk = conn.prepare(R"SQL(
+            SELECT com.organization_id
+            FROM customer_organization_members com
+            INNER JOIN customer_organizations co ON co.id = com.organization_id
+            WHERE com.user_id = ? AND (? <= 0 OR co.service_desk_id = ?)
+            ORDER BY com.organization_id ASC
+            LIMIT 1;
+        )SQL");
+        o_chk.bind_int(1, reporter_id);
+        o_chk.bind_int(2, s_desk_id);
+        o_chk.bind_int(3, s_desk_id);
+        if (o_chk.step() == SQLITE_ROW) {
+            cust_org_id = o_chk.column_int(0);
+        }
+
         db::sqlite_transaction tx(conn);
         auto w_ins = conn.prepare(R"SQL(
             INSERT INTO work_items (
                 project_id, key, type, category, status, priority, title, description,
-                reporter_id, board_order, created_at, updated_at
-            ) VALUES (?, ?, ?, 'Core', 'To Do', 'Medium', ?, ?, ?, 0, datetime('now'), datetime('now'));
+                reporter_id, board_order, customer_reporter_name, customer_reporter_email,
+                is_customer_request, service_desk_id, customer_organization_id, created_at, updated_at
+            ) VALUES (?, ?, ?, 'Core', 'To Do', 'Medium', ?, ?, ?, 0, ?, ?, 1, ?, ?, datetime('now'), datetime('now'));
         )SQL");
         w_ins.bind_int(1, handler.target_project_id);
         w_ins.bind_text(2, new_key);
@@ -1239,6 +1328,10 @@ inline bool process_inbound_email(db::sqlite_db &conn, const std::string &blobs_
         w_ins.bind_text(4, title);
         w_ins.bind_text(5, em.body_plain.empty() ? "(No description provided)" : em.body_plain);
         w_ins.bind_int(6, reporter_id);
+        w_ins.bind_text(7, reporter_name);
+        w_ins.bind_text(8, em.from);
+        w_ins.bind_optional_int(9, s_desk_id);
+        w_ins.bind_optional_int(10, cust_org_id);
         w_ins.step_done();
         new_work_item_id = static_cast<int>(conn.last_insert_rowid());
 

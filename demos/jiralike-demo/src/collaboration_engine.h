@@ -52,7 +52,8 @@ inline void process_mentions_and_links(db::sqlite_db &conn,
                                        int work_item_id,
                                        int comment_id,
                                        int author_id,
-                                       const std::string &text) {
+                                       const std::string &text,
+                                       bool is_internal = false) {
     if (text.empty() || work_item_id <= 0) {
         return;
     }
@@ -69,12 +70,16 @@ inline void process_mentions_and_links(db::sqlite_db &conn,
         if (uname.empty()) continue;
 
         auto u_stmt = conn.prepare(R"SQL(
-            SELECT id, display_name FROM users WHERE LOWER(username) = LOWER(?) OR LOWER(display_name) = LOWER(?);
+            SELECT id, display_name, COALESCE(user_type, 'INTERNAL') FROM users WHERE LOWER(username) = LOWER(?) OR LOWER(display_name) = LOWER(?);
         )SQL");
         u_stmt.bind_text(1, uname);
         u_stmt.bind_text(2, uname);
         if (u_stmt.step() == SQLITE_ROW) {
             int mentioned_id = u_stmt.column_int(0);
+            std::string mentioned_type = u_stmt.column_str(2);
+            if (is_internal && mentioned_type == "PORTAL_CUSTOMER") {
+                continue;
+            }
             if (mentioned_id > 0 && mentioned_id != author_id) {
                 // Check if mention already recorded for this comment or item
                 bool exists = false;

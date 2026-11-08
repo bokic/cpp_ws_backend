@@ -776,4 +776,128 @@ inline std::string substitute_canned_response(
     return result;
 }
 
+// ----------------------------------------------------------------------------
+// Customer Organizations & Directory Segregation
+// ----------------------------------------------------------------------------
+
+struct customer_organization {
+    int id = 0;
+    int service_desk_id = 0;
+    std::string name;
+    std::string domain;
+    std::string created_at;
+    int member_count = 0;
+};
+
+inline std::vector<customer_organization> list_customer_organizations(db::sqlite_db &conn, int service_desk_id = 0) {
+    std::vector<customer_organization> list;
+    std::string sql = R"SQL(
+        SELECT o.id, o.service_desk_id, o.name, o.domain, o.created_at,
+               (SELECT COUNT(*) FROM customer_organization_members m WHERE m.organization_id = o.id) AS member_count
+        FROM customer_organizations o
+    )SQL";
+    if (service_desk_id > 0) {
+        sql += " WHERE o.service_desk_id = ? ORDER BY o.name ASC;";
+    } else {
+        sql += " ORDER BY o.name ASC;";
+    }
+
+    auto stmt = conn.prepare(sql);
+    if (service_desk_id > 0) {
+        stmt.bind_int(1, service_desk_id);
+    }
+    while (stmt.step() == SQLITE_ROW) {
+        customer_organization org;
+        org.id = stmt.column_int(0);
+        org.service_desk_id = stmt.column_int(1);
+        org.name = stmt.column_str(2);
+        org.domain = stmt.column_str(3);
+        org.created_at = stmt.column_str(4);
+        org.member_count = stmt.column_int(5);
+        list.push_back(std::move(org));
+    }
+    return list;
+}
+
+inline bool user_is_organization_member(db::sqlite_db &conn, int user_id, int organization_id) {
+    if (user_id <= 0 || organization_id <= 0) return false;
+    auto stmt = conn.prepare("SELECT 1 FROM customer_organization_members WHERE organization_id = ? AND user_id = ? LIMIT 1;");
+    stmt.bind_int(1, organization_id);
+    stmt.bind_int(2, user_id);
+    return stmt.step() == SQLITE_ROW;
+}
+
+inline std::vector<int> get_user_organization_ids(db::sqlite_db &conn, int user_id) {
+    std::vector<int> org_ids;
+    if (user_id <= 0) return org_ids;
+    auto stmt = conn.prepare("SELECT organization_id FROM customer_organization_members WHERE user_id = ?;");
+    stmt.bind_int(1, user_id);
+    while (stmt.step() == SQLITE_ROW) {
+        org_ids.push_back(stmt.column_int(0));
+    }
+    return org_ids;
+}
+
+inline bool user_can_access_ticket(db::sqlite_db &conn,
+                                   int user_id,
+                                   const std::string &user_type,
+                                   const std::string &user_email,
+                                   int work_item_id) {
+    if (work_item_id <= 0) return false;
+    if (user_type != "PORTAL_CUSTOMER") {
+        return true; // Internal users follow standard scheme authorization
+    }
+
+    auto stmt = conn.prepare(R"SQL(
+        SELECT reporter_id, COALESCE(customer_reporter_email, ''), COALESCE(customer_organization_id, 0),
+               COALESCE(is_customer_request, 0), COALESCE(service_desk_id, 0)
+        FROM work_items
+        WHERE id = ?;
+    )SQL");
+    stmt.bind_int(1, work_item_id);
+    if (stmt.step() != SQLITE_ROW) {
+        return false;
+    }
+
+    int rep_id = stmt.column_int(0);
+    std::string rep_email = stmt.column_str(1);
+    int cust_org_id = stmt.column_int(2);
+    int is_cust_req = stmt.column_int(3);
+    int s_desk_id = stmt.column_int(4);
+
+    if (is_cust_req == 0 && s_desk_id <= 0) {
+        return false;
+    }
+
+    if (user_id > 0 && rep_id == user_id) return true;
+    if (!user_email.empty() && !rep_email.empty()) {
+        std::string u1 = user_email, u2 = rep_email;
+        std::transform(u1.begin(), u1.end(), u1.begin(), ::tolower);
+        std::transform(u2.begin(), u2.end(), u2.begin(), ::tolower);
+        if (u1 == u2) return true;
+    }
+
+    if (user_id > 0) {
+        if (cust_org_id > 0 && user_is_organization_member(conn, user_id, cust_org_id)) {
+            return true;
+        }
+
+        if (rep_id > 0) {
+            auto shared_stmt = conn.prepare(R"SQL(
+                SELECT 1 FROM customer_organization_members m1
+                INNER JOIN customer_organization_members m2 ON m1.organization_id = m2.organization_id
+                WHERE m1.user_id = ? AND m2.user_id = ?
+                LIMIT 1;
+            )SQL");
+            shared_stmt.bind_int(1, user_id);
+            shared_stmt.bind_int(2, rep_id);
+            if (shared_stmt.step() == SQLITE_ROW) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 } // namespace itsm

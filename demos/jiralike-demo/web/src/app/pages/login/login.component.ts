@@ -209,10 +209,18 @@ export class LoginComponent implements OnInit {
         return;
       }
       if (this.api.currentUser()) {
-        await this.router.navigate(['/board']);
+        await this.navigateAfterLogin();
       }
     } catch {
       // ignore
+    }
+  }
+
+  private async navigateAfterLogin(): Promise<void> {
+    if (this.api.currentUser()?.user_type === 'PORTAL_CUSTOMER') {
+      await this.router.navigate(['/servicedesk']);
+    } else {
+      await this.router.navigate(['/board']);
     }
   }
 
@@ -235,7 +243,7 @@ export class LoginComponent implements OnInit {
         this.totpCode = '';
         this.recoveryCode = '';
       } else if (res.user) {
-        await this.router.navigate(['/board']);
+        await this.navigateAfterLogin();
       }
     } catch (err) {
       this.errorMsg.set((err as Error).message);
@@ -250,7 +258,7 @@ export class LoginComponent implements OnInit {
     this.errorMsg.set('');
     try {
       await this.api.verify2faLogin(this.mfaToken(), this.totpCode.trim());
-      await this.router.navigate(['/board']);
+      await this.navigateAfterLogin();
     } catch (err) {
       this.errorMsg.set((err as Error).message);
     } finally {
@@ -264,7 +272,7 @@ export class LoginComponent implements OnInit {
     this.errorMsg.set('');
     try {
       await this.api.recovery2faLogin(this.mfaToken(), this.recoveryCode.trim());
-      await this.router.navigate(['/board']);
+      await this.navigateAfterLogin();
     } catch (err) {
       this.errorMsg.set((err as Error).message);
     } finally {
@@ -311,7 +319,7 @@ export class LoginComponent implements OnInit {
         role: 'Developer',
       };
       await this.api.ssoCallback(mockClaims);
-      await this.router.navigate(['/board']);
+      await this.navigateAfterLogin();
     } catch (err) {
       this.errorMsg.set((err as Error).message);
     } finally {

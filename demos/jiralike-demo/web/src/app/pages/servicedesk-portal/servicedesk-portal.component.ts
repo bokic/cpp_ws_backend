@@ -6,6 +6,7 @@ import { ApiService } from '../../services/api.service';
 import {
   CustomerPortalHome,
   CustomerTicketDetail,
+  CustomerOrganization,
   RequestType,
   ServiceDesk,
 } from '../../models/jira.models';
@@ -86,6 +87,9 @@ import {
                 <div>
                   <span class="ticket-key-badge">{{ activeTicket()!.key }}</span>
                   <span class="ticket-req-type">{{ activeTicket()!.request_type_name }}</span>
+                  @if (activeTicket()!.organization_name) {
+                    <span class="badge" style="background: #ebecf0; color: #172b4d; border: 1px solid #dfe1e6; font-size: 11px; margin-left: 6px;">🏢 {{ activeTicket()!.organization_name }}</span>
+                  }
                   <h2 class="ticket-title">{{ activeTicket()!.title }}</h2>
                 </div>
                 <div class="ticket-date-info">
@@ -228,15 +232,35 @@ import {
         @else if (viewMode() === 'my-requests') {
           <div class="my-requests-view">
             <div class="my-requests-header">
-              <h2>My Submitted Requests</h2>
+              <div>
+                <h2>My Submitted &amp; Organization Requests</h2>
+                <p style="margin: 0; font-size: 13px; color: #5e6c84;">
+                  Tickets raised by you or shared with your customer organizations
+                </p>
+              </div>
               <div class="email-filter-box">
-                <input
-                  type="email"
-                  [(ngModel)]="customerEmail"
-                  placeholder="Filter by customer email..."
-                  class="form-control"
-                  (keyup.enter)="loadMyRequests()"
-                />
+                @if (myOrganizations().length > 0) {
+                  <select
+                    [ngModel]="selectedOrgFilter()"
+                    (ngModelChange)="selectedOrgFilter.set($event)"
+                    class="form-control"
+                    style="font-size: 12px; height: 32px; width: auto;"
+                  >
+                    <option value="ALL">All Organizations &amp; Personal</option>
+                    @for (org of myOrganizations(); track org.id) {
+                      <option [value]="org.id">🏢 {{ org.name }}</option>
+                    }
+                  </select>
+                }
+                @if (!api.currentUser()) {
+                  <input
+                    type="email"
+                    [(ngModel)]="customerEmail"
+                    placeholder="Filter by customer email..."
+                    class="form-control"
+                    (keyup.enter)="loadMyRequests()"
+                  />
+                }
                 <button type="button" class="btn btn-secondary btn-sm" (click)="loadMyRequests()">
                   Refresh
                 </button>
@@ -251,18 +275,36 @@ import {
                     <th>Summary</th>
                     <th>Request Type</th>
                     <th>Service Desk</th>
+                    <th>Organization / Share</th>
+                    <th>Reporter</th>
                     <th>Status</th>
                     <th>Last Updated</th>
                     <th>Action</th>
                   </tr>
                 </thead>
                 <tbody>
-                  @for (req of myRequests(); track req.id) {
+                  @for (req of filteredRequests(); track req.id) {
                     <tr class="clickable-row" (click)="viewTicket(req.key)">
                       <td><strong class="ticket-link">{{ req.key }}</strong></td>
                       <td>{{ req.title }}</td>
                       <td><span class="badge badge-info">{{ req.request_type_name }}</span></td>
                       <td>{{ req.service_desk_name }}</td>
+                      <td>
+                        @if (req.organization_name) {
+                          <span class="badge" style="background: #e6fcff; color: #006580; border: 1px solid #b3f5ff; font-size: 11px;">
+                            🏢 {{ req.organization_name }}
+                          </span>
+                        } @else {
+                          <span style="color: #8993a4; font-size: 12px;">Private</span>
+                        }
+                      </td>
+                      <td>
+                        @if (req.is_my_request) {
+                          <span class="badge" style="background: #e3fcef; color: #006644; font-size: 11px;">You</span>
+                        } @else {
+                          <span style="font-size: 12px;">{{ req.customer_name || 'Organization Member' }}</span>
+                        }
+                      </td>
                       <td>
                         <span class="status-pill" [class.pill-done]="req.status === 'Done'" [class.pill-wait]="req.status.includes('Waiting')">
                           {{ req.status }}
@@ -277,8 +319,8 @@ import {
                     </tr>
                   } @empty {
                     <tr>
-                      <td colspan="7" class="text-center" style="padding: 30px; color: #5e6c84;">
-                        No requests found for this customer.
+                      <td colspan="9" class="text-center" style="padding: 30px; color: #5e6c84;">
+                        No requests found for this customer or organization.
                       </td>
                     </tr>
                   }
@@ -360,6 +402,18 @@ import {
                   <option value="Highest">Highest - Critical system outage</option>
                 </select>
               </div>
+
+              @if (organizationsForSelectedDesk().length > 0) {
+                <div class="form-group">
+                  <label>Share with Organization (Optional)</label>
+                  <select [(ngModel)]="requestForm.customer_organization_id" class="form-control">
+                    <option [ngValue]="null">Private (Visible only to me and support)</option>
+                    @for (org of organizationsForSelectedDesk(); track org.id) {
+                      <option [ngValue]="org.id">🏢 {{ org.name }} (Visible to all organization members)</option>
+                    }
+                  </select>
+                </div>
+              }
             </div>
 
             <div class="portal-modal-footer">
@@ -898,13 +952,15 @@ import {
   `],
 })
 export class ServiceDeskPortalComponent implements OnInit {
-  private readonly api = inject(ApiService);
+  readonly api = inject(ApiService);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
 
   readonly viewMode = signal<'catalog' | 'my-requests' | 'ticket-detail'>('catalog');
   readonly portalData = signal<CustomerPortalHome | null>(null);
   readonly myRequests = signal<any[]>([]);
+  readonly myOrganizations = signal<CustomerOrganization[]>([]);
+  readonly selectedOrgFilter = signal<number | 'ALL'>('ALL');
   readonly activeTicket = signal<CustomerTicketDetail | null>(null);
 
   searchFilter = '';
@@ -924,6 +980,7 @@ export class ServiceDeskPortalComponent implements OnInit {
     customer_name: '',
     customer_email: '',
     priority: 'Medium',
+    customer_organization_id: null as number | null,
   };
 
   async ngOnInit(): Promise<void> {
@@ -932,6 +989,7 @@ export class ServiceDeskPortalComponent implements OnInit {
       this.customerEmail = user.email;
       this.requestForm.customer_name = user.display_name;
       this.requestForm.customer_email = user.email;
+      await this.loadMyOrganizations();
     }
 
     await this.loadPortalData();
@@ -954,13 +1012,30 @@ export class ServiceDeskPortalComponent implements OnInit {
     }
   }
 
+  async loadMyOrganizations(): Promise<void> {
+    try {
+      const orgs = await this.api.getPortalMyOrganizations();
+      this.myOrganizations.set(orgs);
+    } catch {
+      this.myOrganizations.set([]);
+    }
+  }
+
   async loadMyRequests(): Promise<void> {
     try {
-      const list = await this.api.getPortalRequests(this.customerEmail);
+      const user = this.api.currentUser();
+      const list = user ? await this.api.getPortalMyRequests() : await this.api.getPortalRequests(this.customerEmail);
       this.myRequests.set(list);
     } catch (err: any) {
       this.feedback.set({ type: 'error', message: 'Failed to load requests: ' + (err.message || err) });
     }
+  }
+
+  filteredRequests(): any[] {
+    const list = this.myRequests();
+    const filter = this.selectedOrgFilter();
+    if (filter === 'ALL') return list;
+    return list.filter((r) => r.customer_organization_id === filter);
   }
 
   filteredDesks(): Array<ServiceDesk & { request_types: RequestType[] }> {
@@ -991,6 +1066,9 @@ export class ServiceDeskPortalComponent implements OnInit {
   async switchToMyRequests(): Promise<void> {
     this.viewMode.set('my-requests');
     this.activeTicket.set(null);
+    if (this.api.currentUser()) {
+      await this.loadMyOrganizations();
+    }
     await this.loadMyRequests();
   }
 
@@ -1004,11 +1082,20 @@ export class ServiceDeskPortalComponent implements OnInit {
     }
   }
 
+  organizationsForSelectedDesk(): CustomerOrganization[] {
+    const desk = this.selectedDesk();
+    const orgs = this.myOrganizations();
+    if (!desk) return orgs;
+    return orgs.filter((o) => !o.service_desk_id || o.service_desk_id === desk.id);
+  }
+
   openCreateModal(desk: ServiceDesk, rt: RequestType): void {
     this.selectedDesk.set(desk);
     this.selectedRequestType.set(rt);
     this.requestForm.summary = '';
     this.requestForm.description = '';
+    const deskOrgs = this.organizationsForSelectedDesk();
+    this.requestForm.customer_organization_id = deskOrgs.length > 0 ? deskOrgs[0].id : null;
     const user = this.api.currentUser();
     if (user) {
       this.requestForm.customer_name = user.display_name;
@@ -1038,6 +1125,7 @@ export class ServiceDeskPortalComponent implements OnInit {
         customer_name: this.requestForm.customer_name.trim(),
         customer_email: this.requestForm.customer_email.trim(),
         priority: this.requestForm.priority,
+        customer_organization_id: this.requestForm.customer_organization_id,
       });
 
       this.closeCreateModal();

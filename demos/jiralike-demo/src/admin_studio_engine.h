@@ -623,6 +623,7 @@ static void handle_user_detail(backend::wsworker *worker,
         std::string role = body.get_string("role");
         std::string color = body.get_string("avatar_color");
         std::string pw = body.get_string("password");
+        std::string user_type = body.get_string("user_type");
 
         try {
             db::sqlite_transaction tx(conn);
@@ -632,7 +633,8 @@ static void handle_user_detail(backend::wsworker *worker,
                     display_name = CASE WHEN ? != '' THEN ? ELSE display_name END,
                     role = CASE WHEN ? != '' THEN ? ELSE role END,
                     avatar_color = CASE WHEN ? != '' THEN ? ELSE avatar_color END,
-                    password_hash = CASE WHEN ? != '' THEN ? ELSE password_hash END
+                    password_hash = CASE WHEN ? != '' THEN ? ELSE password_hash END,
+                    user_type = CASE WHEN ? != '' THEN ? ELSE user_type END
                 WHERE id = ?;
             )SQL";
 
@@ -648,11 +650,13 @@ static void handle_user_detail(backend::wsworker *worker,
             upd.bind_text(8, color);
             upd.bind_text(9, p_hash);
             upd.bind_text(10, p_hash);
-            upd.bind_int(11, uid);
+            upd.bind_text(11, user_type);
+            upd.bind_text(12, user_type);
+            upd.bind_int(13, uid);
             upd.step_done();
             tx.commit();
 
-            auto sel = conn.prepare("SELECT id, username, email, display_name, role, avatar_color, created_at FROM users WHERE id = ?;");
+            auto sel = conn.prepare("SELECT id, username, email, display_name, role, avatar_color, created_at, COALESCE(user_type, 'INTERNAL') FROM users WHERE id = ?;");
             sel.bind_int(1, uid);
             if (sel.step() == SQLITE_ROW) {
                 auth_user updated_u{
@@ -662,6 +666,7 @@ static void handle_user_detail(backend::wsworker *worker,
                     sel.column_str(3),
                     sel.column_str(4),
                     sel.column_str(5),
+                    sel.column_str(7),
                     true
                 };
                 send_json(worker, header, "200 OK", user_to_json(updated_u));
@@ -912,11 +917,27 @@ static void handle_comment_detail(backend::wsworker *worker,
             upd.bind_int(2, comment_id);
             upd.step_done();
 
+            if (body.has_key("is_internal")) {
+                bool is_int = body.get_bool("is_internal", false) || (body.get_int("is_internal", 0) != 0);
+                auto upd_int = conn.prepare("UPDATE comments SET is_internal = ? WHERE id = ?;");
+                upd_int.bind_int(1, is_int ? 1 : 0);
+                upd_int.bind_int(2, comment_id);
+                upd_int.step_done();
+            }
+
             // Refresh mentions
+            bool eff_is_internal = false;
+            {
+                auto q_int = conn.prepare("SELECT COALESCE(is_internal, 0) FROM comments WHERE id = ?;");
+                q_int.bind_int(1, comment_id);
+                if (q_int.step() == SQLITE_ROW) {
+                    eff_is_internal = (q_int.column_int(0) != 0);
+                }
+            }
             auto del_m = conn.prepare("DELETE FROM work_item_mentions WHERE comment_id = ?;");
             del_m.bind_int(1, comment_id);
             del_m.step_done();
-            collaboration::process_mentions_and_links(conn, work_item_id, comment_id, u_auth.id, new_body);
+            collaboration::process_mentions_and_links(conn, work_item_id, comment_id, u_auth.id, new_body, eff_is_internal);
 
             tx.commit();
 

@@ -104,6 +104,8 @@ import {
   CannedResponse,
   CustomerPortalHome,
   CustomerTicketDetail,
+  CustomerOrganization,
+  CustomerOrganizationMember,
   DensityMode,
   LiveEventMessage,
   PresenceUser,
@@ -1019,12 +1021,16 @@ export class ApiService {
     await this.request(`/api/items/${encodeURIComponent(String(idOrKey))}`, { method: 'DELETE' });
   }
 
-  async addComment(itemIdOrKey: string | number, body: string): Promise<CommentItem> {
+  async addComment(
+    itemIdOrKey: string | number,
+    body: string,
+    is_internal: boolean = false
+  ): Promise<CommentItem> {
     return this.request<CommentItem>(
       `/api/items/${encodeURIComponent(String(itemIdOrKey))}/comments`,
       {
         method: 'POST',
-        body: JSON.stringify({ body }),
+        body: JSON.stringify({ body, is_internal }),
       }
     );
   }
@@ -2590,6 +2596,7 @@ export class ApiService {
     customer_name?: string;
     customer_email?: string;
     priority?: string;
+    customer_organization_id?: number | null;
   }): Promise<{
     id: number;
     key: string;
@@ -2620,6 +2627,77 @@ export class ApiService {
       method: 'POST',
       body: JSON.stringify(payload),
     });
+  }
+
+  async getPortalMyRequests(): Promise<any[]> {
+    return this.request<any[]>('/api/portal/my-requests');
+  }
+
+  async getServiceDeskOrganizations(deskId: number): Promise<CustomerOrganization[]> {
+    return this.request<CustomerOrganization[]>(`/api/servicedesk/desks/${deskId}/organizations`);
+  }
+
+  async createServiceDeskOrganization(
+    deskId: number,
+    name: string,
+    domain?: string
+  ): Promise<CustomerOrganization> {
+    return this.request<CustomerOrganization>(`/api/servicedesk/desks/${deskId}/organizations`, {
+      method: 'POST',
+      body: JSON.stringify({ name, domain: domain || '' }),
+    });
+  }
+
+  async getOrganizationDetail(orgId: number): Promise<CustomerOrganization> {
+    return this.request<CustomerOrganization>(`/api/servicedesk/organizations/${orgId}`);
+  }
+
+  async updateOrganization(
+    orgId: number,
+    name: string,
+    domain?: string
+  ): Promise<{ id: number; updated: boolean }> {
+    return this.request<{ id: number; updated: boolean }>(`/api/servicedesk/organizations/${orgId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ name, domain: domain || '' }),
+    });
+  }
+
+  async deleteOrganization(orgId: number): Promise<{ id: number; deleted: boolean }> {
+    return this.request<{ id: number; deleted: boolean }>(`/api/servicedesk/organizations/${orgId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getOrganizationMembers(orgId: number): Promise<CustomerOrganizationMember[]> {
+    return this.request<CustomerOrganizationMember[]>(`/api/servicedesk/organizations/${orgId}/members`);
+  }
+
+  async addOrganizationMember(
+    orgId: number,
+    payload: { user_id?: number; email?: string }
+  ): Promise<{ organization_id: number; user_id: number; added: boolean }> {
+    return this.request(`/api/servicedesk/organizations/${orgId}/members`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async removeOrganizationMember(
+    orgId: number,
+    userId: number
+  ): Promise<{ organization_id: number; user_id: number; removed: boolean }> {
+    return this.request(`/api/servicedesk/organizations/${orgId}/members/${userId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getMyCustomerOrganizations(): Promise<CustomerOrganization[]> {
+    return this.request<CustomerOrganization[]>('/api/portal/organizations');
+  }
+
+  async getPortalMyOrganizations(): Promise<CustomerOrganization[]> {
+    return this.getMyCustomerOrganizations();
   }
 
   // =========================================================================

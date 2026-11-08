@@ -426,6 +426,56 @@ inline const std::string &get_openapi_json() {
         "responses": { "201": { "description": "Ticket raised in customer portal" } }
       }
     },
+    "/api/portal/my-requests": {
+      "get": {
+        "tags": ["ITSM & Service Desk"],
+        "summary": "Get Portal Requests Shared With Customer or Organization",
+        "responses": { "200": { "description": "Customer tickets with customer organization segregation" } }
+      }
+    },
+    "/api/portal/requests": {
+      "post": {
+        "tags": ["ITSM & Service Desk"],
+        "summary": "Submit Customer Portal Request",
+        "responses": { "201": { "description": "Created customer ticket" } }
+      }
+    },
+    "/api/portal/requests/{id}/comments": {
+      "post": {
+        "tags": ["ITSM & Service Desk"],
+        "summary": "Submit Public Comment on Customer Request",
+        "responses": { "201": { "description": "Customer comment created with is_internal=0" } }
+      }
+    },
+    "/api/servicedesk/desks/{id}/organizations": {
+      "get": {
+        "tags": ["ITSM & Service Desk"],
+        "summary": "List Customer Organizations for Service Desk",
+        "responses": { "200": { "description": "Customer organizations" } }
+      },
+      "post": {
+        "tags": ["ITSM & Service Desk"],
+        "summary": "Create Customer Organization",
+        "responses": { "201": { "description": "Created customer organization" } }
+      }
+    },
+    "/api/servicedesk/organizations/{id}": {
+      "get": {
+        "tags": ["ITSM & Service Desk"],
+        "summary": "Get Customer Organization Details and Members",
+        "responses": { "200": { "description": "Organization details" } }
+      },
+      "put": {
+        "tags": ["ITSM & Service Desk"],
+        "summary": "Update Customer Organization",
+        "responses": { "200": { "description": "Updated organization" } }
+      },
+      "delete": {
+        "tags": ["ITSM & Service Desk"],
+        "summary": "Delete Customer Organization",
+        "responses": { "200": { "description": "Deleted organization" } }
+      }
+    },
     "/api/events/live": {
       "get": {
         "tags": ["Real-Time Sync"],

@@ -76,6 +76,7 @@ export interface User {
   display_name: string;
   role: string;
   avatar_color: string;
+  user_type?: 'INTERNAL' | 'PORTAL_CUSTOMER' | 'SERVICE_ACCOUNT';
   created_at?: string;
   preferences?: UserPreferences;
 }
@@ -669,6 +670,7 @@ export interface CommentItem {
   author_color: string;
   body: string;
   created_at: string;
+  is_internal?: boolean;
 }
 
 export interface AttachmentItem {
@@ -1884,14 +1886,39 @@ export interface CustomerTicketDetail {
   service_desk_id?: number | null;
   request_type_id?: number | null;
   first_response_at?: string;
+  customer_organization_id?: number | null;
+  organization_name?: string;
   comments: Array<{
     id: number;
     body: string;
     created_at: string;
     author_name: string;
     author_id?: number | null;
+    is_internal?: boolean;
   }>;
   slas: WorkItemSla[];
+}
+
+export interface CustomerOrganization {
+  id: number;
+  service_desk_id: number;
+  name: string;
+  domain?: string;
+  created_at?: string;
+  service_desk_name?: string;
+  member_count?: number;
+  members?: CustomerOrganizationMember[];
+}
+
+export interface CustomerOrganizationMember {
+  id: number;
+  user_id?: number;
+  username: string;
+  email: string;
+  display_name: string;
+  avatar_color?: string;
+  user_type?: string;
+  added_at?: string;
 }
 
 export type ThemeMode = 'light' | 'dark' | 'auto';

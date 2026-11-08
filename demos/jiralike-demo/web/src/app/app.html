@@ -8,31 +8,36 @@
         </a>
 
         <nav class="nav-links">
-          <a routerLink="/dashboards" routerLinkActive="active">{{ 'nav.dashboards' | i18n }}</a>
-          <a routerLink="/board" routerLinkActive="active">{{ 'nav.boards' | i18n }}</a>
-          <a routerLink="/backlog" routerLinkActive="active">{{ 'nav.backlog' | i18n }}</a>
-          <a routerLink="/search" routerLinkActive="active">{{ 'nav.search' | i18n }}</a>
-          <a routerLink="/reports" routerLinkActive="active">{{ 'nav.reports' | i18n }}</a>
-          <a routerLink="/roadmap/advanced" routerLinkActive="active" title="Advanced Roadmaps, Gantt Dependencies &amp; Critical Path">{{ 'nav.roadmaps' | i18n }}</a>
-          <a routerLink="/gantt" routerLinkActive="active">{{ 'nav.gantt' | i18n }}</a>
-          <a routerLink="/states" routerLinkActive="active">{{ 'nav.states' | i18n }}</a>
-          <a routerLink="/workflows" routerLinkActive="active">{{ 'nav.workflows' | i18n }}</a>
-          <a routerLink="/project-settings" routerLinkActive="active">{{ 'nav.releases' | i18n }}</a>
-          <a routerLink="/custom-fields" routerLinkActive="active">{{ 'nav.customFields' | i18n }}</a>
-          <a routerLink="/permissions" routerLinkActive="active">{{ 'nav.permissions' | i18n }}</a>
-          <a routerLink="/automation" routerLinkActive="active">{{ 'nav.automation' | i18n }}</a>
-          <a routerLink="/notifications" routerLinkActive="active">{{ 'nav.webhooks' | i18n }}</a>
-          <a routerLink="/settings/mail-handlers" routerLinkActive="active" title="Inbound Email-to-Issue Handlers &amp; Mailhooks">{{ 'nav.mailHandlers' | i18n }}</a>
-          <a routerLink="/servicedesk/agent" routerLinkActive="active">{{ 'nav.serviceDesk' | i18n }}</a>
-          <a routerLink="/servicedesk" routerLinkActive="active" target="_blank" title="Customer Help Center Portal">{{ 'nav.customerPortal' | i18n }} ↗</a>
-          <a routerLink="/trash" routerLinkActive="active" title="Trash Bin (30-day retention)">{{ 'nav.trashBin' | i18n }}</a>
-          <a routerLink="/developer/docs" routerLinkActive="active" title="OpenAPI 3.0 Documentation &amp; Rate Limiting Governance">{{ 'nav.developerDocs' | i18n }}</a>
-          @if (user.role === 'Admin') {
-            <a routerLink="/users" routerLinkActive="active" title="User Management">👥 Users</a>
-            <a routerLink="/database" routerLinkActive="active" title="Universal Database Studio">🗄️ Database</a>
-            <a routerLink="/sprints" routerLinkActive="active">{{ 'nav.sprintEditor' | i18n }}</a>
+          @if (user.user_type === 'PORTAL_CUSTOMER') {
+            <a routerLink="/servicedesk" routerLinkActive="active" title="Customer Help Center Portal">🎫 {{ 'nav.customerPortal' | i18n }}</a>
+            <span class="badge" style="background: #e6fcff; color: #006644; border: 1px solid #79f2c0; font-size: 11px; padding: 3px 8px; border-radius: 12px; font-weight: 600;">Customer Portal Account</span>
+          } @else {
+            <a routerLink="/dashboards" routerLinkActive="active">{{ 'nav.dashboards' | i18n }}</a>
+            <a routerLink="/board" routerLinkActive="active">{{ 'nav.boards' | i18n }}</a>
+            <a routerLink="/backlog" routerLinkActive="active">{{ 'nav.backlog' | i18n }}</a>
+            <a routerLink="/search" routerLinkActive="active">{{ 'nav.search' | i18n }}</a>
+            <a routerLink="/reports" routerLinkActive="active">{{ 'nav.reports' | i18n }}</a>
+            <a routerLink="/roadmap/advanced" routerLinkActive="active" title="Advanced Roadmaps, Gantt Dependencies &amp; Critical Path">{{ 'nav.roadmaps' | i18n }}</a>
+            <a routerLink="/gantt" routerLinkActive="active">{{ 'nav.gantt' | i18n }}</a>
+            <a routerLink="/states" routerLinkActive="active">{{ 'nav.states' | i18n }}</a>
+            <a routerLink="/workflows" routerLinkActive="active">{{ 'nav.workflows' | i18n }}</a>
+            <a routerLink="/project-settings" routerLinkActive="active">{{ 'nav.releases' | i18n }}</a>
+            <a routerLink="/custom-fields" routerLinkActive="active">{{ 'nav.customFields' | i18n }}</a>
+            <a routerLink="/permissions" routerLinkActive="active">{{ 'nav.permissions' | i18n }}</a>
+            <a routerLink="/automation" routerLinkActive="active">{{ 'nav.automation' | i18n }}</a>
+            <a routerLink="/notifications" routerLinkActive="active">{{ 'nav.webhooks' | i18n }}</a>
+            <a routerLink="/settings/mail-handlers" routerLinkActive="active" title="Inbound Email-to-Issue Handlers &amp; Mailhooks">{{ 'nav.mailHandlers' | i18n }}</a>
+            <a routerLink="/servicedesk/agent" routerLinkActive="active">{{ 'nav.serviceDesk' | i18n }}</a>
+            <a routerLink="/servicedesk" routerLinkActive="active" target="_blank" title="Customer Help Center Portal">{{ 'nav.customerPortal' | i18n }} ↗</a>
+            <a routerLink="/trash" routerLinkActive="active" title="Trash Bin (30-day retention)">{{ 'nav.trashBin' | i18n }}</a>
+            <a routerLink="/developer/docs" routerLinkActive="active" title="OpenAPI 3.0 Documentation &amp; Rate Limiting Governance">{{ 'nav.developerDocs' | i18n }}</a>
+            @if (user.role === 'Admin') {
+              <a routerLink="/users" routerLinkActive="active" title="User Management">👥 Users</a>
+              <a routerLink="/database" routerLinkActive="active" title="Universal Database Studio">🗄️ Database</a>
+              <a routerLink="/sprints" routerLinkActive="active">{{ 'nav.sprintEditor' | i18n }}</a>
+            }
+            <button type="button" class="nav-create-btn" (click)="openCreateModal()" title="Create Issue (Press 'c')">{{ 'nav.create' | i18n }}</button>
           }
-          <button type="button" class="nav-create-btn" (click)="openCreateModal()" title="Create Issue (Press 'c')">{{ 'nav.create' | i18n }}</button>
         </nav>
       </div>
 

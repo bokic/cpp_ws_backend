@@ -1004,15 +1004,18 @@ import {
               @if (activeTab() === 'comments') {
                 <div class="comments-list">
                   @for (c of it.comments; track c.id) {
-                    <div class="comment-item">
+                    <div class="comment-item" [style.background]="c.is_internal ? '#fffbf0' : 'transparent'" [style.border]="c.is_internal ? '1px solid #ffe380' : '1px solid var(--border-color)'" [style.border-radius]="'6px'" [style.padding]="c.is_internal ? '10px' : '8px'">
                       <div class="avatar-circle" [style.background]="c.author_color">
                         {{ c.author_name.slice(0, 2).toUpperCase() }}
                       </div>
                       <div class="comment-content" style="flex: 1;">
                         <div class="comment-header" style="display: flex; justify-content: space-between; align-items: center;">
-                          <div>
+                          <div style="display: flex; align-items: center; gap: 8px;">
                             <strong>{{ c.author_name }}</strong>
-                            <span class="text-muted" style="margin-left: 8px;">{{ c.created_at }}</span>
+                            <span class="text-muted">{{ c.created_at }}</span>
+                            @if (c.is_internal) {
+                              <span class="badge" style="background: #fff0b3; color: #7f5f01; border: 1px solid #ffe380; font-size: 11px; padding: 2px 6px; border-radius: 4px; font-weight: 600;">🔒 Internal Note</span>
+                            }
                           </div>
                           <div style="display: flex; gap: 4px;">
                             <button type="button" class="btn btn-ghost btn-xs" (click)="startEditComment(c)" title="Edit comment">✏️</button>
@@ -1056,14 +1059,20 @@ import {
                         </select>
                       }
                     </div>
-                    <button
-                      type="button"
-                      class="btn btn-primary"
-                      [disabled]="!newCommentText.trim()"
-                      (click)="postComment()"
-                    >
-                      Post Comment
-                    </button>
+                    <div style="display: flex; gap: 10px; align-items: center;">
+                      <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; user-select: none;">
+                        <input type="checkbox" [(ngModel)]="isInternalComment" />
+                        <span>🔒 Internal worknote (hidden from customer portal)</span>
+                      </label>
+                      <button
+                        type="button"
+                        class="btn btn-primary"
+                        [disabled]="!newCommentText.trim()"
+                        (click)="postComment()"
+                      >
+                        {{ isInternalComment ? 'Save Internal Note' : 'Post Comment' }}
+                      </button>
+                    </div>
                   </div>
                 </div>
               } @else if (activeTab() === 'worklogs') {
@@ -2793,11 +2802,14 @@ export class ItemDetailComponent implements OnInit, OnDestroy {
     this.showToast('Attachment removed from blobs/');
   }
 
+  isInternalComment = false;
+
   async postComment(): Promise<void> {
     const cur = this.item();
     if (!cur || !this.newCommentText.trim()) return;
-    await this.api.addComment(cur.key, this.newCommentText.trim());
+    await this.api.addComment(cur.key, this.newCommentText.trim(), this.isInternalComment);
     this.newCommentText = '';
+    this.isInternalComment = false;
     await this.reloadDetail(cur.key);
   }
 

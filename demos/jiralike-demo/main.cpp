@@ -148,6 +148,7 @@ struct auth_user {
     std::string display_name;
     std::string role;
     std::string avatar_color;
+    std::string user_type = "INTERNAL";
     bool authenticated = false;
 };
 
@@ -175,7 +176,7 @@ static auth_user get_authenticated_user(db::sqlite_db &conn,
     if (token.empty()) return u;
 
     auto stmt = conn.prepare(R"SQL(
-        SELECT u.id, u.username, u.email, u.display_name, u.role, u.avatar_color
+        SELECT u.id, u.username, u.email, u.display_name, u.role, u.avatar_color, COALESCE(u.user_type, 'INTERNAL')
         FROM sessions s
         INNER JOIN users u ON u.id = s.user_id
         WHERE s.token = ? AND s.expires_at > datetime('now');
@@ -188,10 +189,11 @@ static auth_user get_authenticated_user(db::sqlite_db &conn,
         u.display_name = stmt.column_str(3);
         u.role = stmt.column_str(4);
         u.avatar_color = stmt.column_str(5);
+        u.user_type = stmt.column_str(6);
         u.authenticated = true;
     } else {
         auto pat_stmt = conn.prepare(R"SQL(
-            SELECT u.id, u.username, u.email, u.display_name, u.role, u.avatar_color
+            SELECT u.id, u.username, u.email, u.display_name, u.role, u.avatar_color, COALESCE(u.user_type, 'INTERNAL')
             FROM personal_access_tokens p
             INNER JOIN users u ON u.id = p.user_id
             WHERE p.token = ? AND (p.expires_at IS NULL OR p.expires_at = '' OR p.expires_at > datetime('now'));
@@ -204,6 +206,7 @@ static auth_user get_authenticated_user(db::sqlite_db &conn,
             u.display_name = pat_stmt.column_str(3);
             u.role = pat_stmt.column_str(4);
             u.avatar_color = pat_stmt.column_str(5);
+            u.user_type = pat_stmt.column_str(6);
             u.authenticated = true;
             try {
                 auto upd = conn.prepare("UPDATE personal_access_tokens SET last_used_at = datetime('now') WHERE token = ?;");
@@ -223,6 +226,7 @@ static json::json_value user_to_json(const auth_user &u) {
     obj.add_str("display_name", u.display_name);
     obj.add_str("role", u.role);
     obj.add_str("avatar_color", u.avatar_color);
+    obj.add_str("user_type", u.user_type.empty() ? "INTERNAL" : u.user_type);
     return obj;
 }
 
@@ -964,7 +968,7 @@ static void handle_setup_init(backend::wsworker *worker,
         return;
     }
 
-    auth_user u{admin_id, admin_username, admin_email, admin_display_name, "Admin", "#0052CC", true};
+    auth_user u{admin_id, admin_username, admin_email, admin_display_name, "Admin", "#0052CC", "INTERNAL", true};
     auto res = json::json_value::make_object();
     res.add_bool("setup_complete", true);
     res.add_str("instance_name", instance_name);
@@ -993,7 +997,7 @@ static void handle_auth_login(backend::wsworker *worker,
 
     auto conn = acquire_db_connection();
     auto stmt = conn.prepare(R"SQL(
-        SELECT id, username, email, password_hash, display_name, role, avatar_color
+        SELECT id, username, email, password_hash, display_name, role, avatar_color, COALESCE(user_type, 'INTERNAL')
         FROM users
         WHERE username = ? OR email = ?;
     )SQL");
@@ -1018,6 +1022,7 @@ static void handle_auth_login(backend::wsworker *worker,
     u.display_name = stmt.column_str(4);
     u.role = stmt.column_str(5);
     u.avatar_color = stmt.column_str(6);
+    u.user_type = stmt.column_str(7);
     u.authenticated = true;
     stmt.reset();
 
@@ -1151,10 +1156,23 @@ static void handle_users(backend::wsworker *worker,
     std::string method = get_header(header, "REQUEST_METHOD");
 
     if (method == "GET") {
-        auto stmt = conn.prepare(R"SQL(
-            SELECT id, username, email, display_name, role, avatar_color, created_at
-            FROM users ORDER BY display_name ASC;
-        )SQL");
+        auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
+        std::string filter_type = args["user_type"];
+
+        std::string sql = R"SQL(
+            SELECT id, username, email, display_name, role, avatar_color, created_at, COALESCE(user_type, 'INTERNAL')
+            FROM users
+        )SQL";
+        if (!filter_type.empty()) {
+            sql += " WHERE UPPER(COALESCE(user_type, 'INTERNAL')) = UPPER(?)";
+        }
+        sql += " ORDER BY display_name ASC;";
+
+        auto stmt = conn.prepare(sql);
+        if (!filter_type.empty()) {
+            stmt.bind_text(1, filter_type);
+        }
+
         auto arr = json::json_value::make_array();
         while (stmt.step() == SQLITE_ROW) {
             auto u = json::json_value::make_object();
@@ -1165,6 +1183,7 @@ static void handle_users(backend::wsworker *worker,
             u.add_str("role", stmt.column_str(4));
             u.add_str("avatar_color", stmt.column_str(5));
             u.add_str("created_at", stmt.column_str(6));
+            u.add_str("user_type", stmt.column_str(7));
             arr.add(std::move(u));
         }
         send_json(worker, header, "200 OK", arr);
@@ -1189,6 +1208,7 @@ static void handle_users(backend::wsworker *worker,
     std::string pw = body.get_string("password", "welcome123");
     std::string role = body.get_string("role", "Developer");
     std::string color = body.get_string("avatar_color", "#0052CC");
+    std::string user_type = body.get_string("user_type", "INTERNAL");
 
     if (uname.empty() || dname.empty()) {
         send_error(worker, header, "400 Bad Request", "username and display_name are required");
@@ -1200,8 +1220,8 @@ static void handle_users(backend::wsworker *worker,
     {
         db::sqlite_transaction tx(conn);
         auto ins = conn.prepare(R"SQL(
-            INSERT INTO users (username, email, password_hash, display_name, role, avatar_color)
-            VALUES (?, ?, ?, ?, ?, ?);
+            INSERT INTO users (username, email, password_hash, display_name, role, avatar_color, user_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?);
         )SQL");
         ins.bind_text(1, uname);
         ins.bind_text(2, email);
@@ -1209,12 +1229,13 @@ static void handle_users(backend::wsworker *worker,
         ins.bind_text(4, dname);
         ins.bind_text(5, role);
         ins.bind_text(6, color);
+        ins.bind_text(7, user_type);
         ins.step_done();
         new_id = static_cast<int>(conn.last_insert_rowid());
         tx.commit();
     }
 
-    auth_user created{new_id, uname, email, dname, role, color, true};
+    auth_user created{new_id, uname, email, dname, role, color, user_type, true};
     send_json(worker, header, "201 Created", user_to_json(created));
 }
 
@@ -8544,7 +8565,7 @@ static void handle_item_detail(backend::wsworker *worker,
         // Comments
         auto c_stmt = conn.prepare(R"SQL(
             SELECT c.id, c.work_item_id, c.author_id, COALESCE(u.display_name, 'User'),
-                   COALESCE(u.avatar_color, '#0052CC'), c.body, c.created_at
+                   COALESCE(u.avatar_color, '#0052CC'), c.body, c.created_at, COALESCE(c.is_internal, 0)
             FROM comments c
             LEFT JOIN users u ON u.id = c.author_id
             WHERE c.work_item_id = ?
@@ -8561,6 +8582,7 @@ static void handle_item_detail(backend::wsworker *worker,
             cm.add_str("author_color", c_stmt.column_str(4));
             cm.add_str("body", c_stmt.column_str(5));
             cm.add_str("created_at", c_stmt.column_str(6));
+            cm.add_bool("is_internal", c_stmt.column_int(7) != 0);
             comments.add(std::move(cm));
         }
         item.add("comments", std::move(comments));
@@ -9725,7 +9747,7 @@ static void handle_sso_callback(backend::wsworker *worker,
     }
 
     auth_user u;
-    auto u_stmt = conn.prepare("SELECT id, username, email, display_name, role, avatar_color FROM users WHERE id = ?;");
+    auto u_stmt = conn.prepare("SELECT id, username, email, display_name, role, avatar_color, COALESCE(user_type, 'INTERNAL') FROM users WHERE id = ?;");
     u_stmt.bind_int(1, user_id);
     if (u_stmt.step() == SQLITE_ROW) {
         u.id = u_stmt.column_int(0);
@@ -9734,6 +9756,7 @@ static void handle_sso_callback(backend::wsworker *worker,
         u.display_name = u_stmt.column_str(3);
         u.role = u_stmt.column_str(4);
         u.avatar_color = u_stmt.column_str(5);
+        u.user_type = u_stmt.column_str(6);
         u.authenticated = true;
     }
 
@@ -9814,7 +9837,7 @@ static void handle_2fa_verify(backend::wsworker *worker,
         }
 
         auth_user u;
-        auto u_stmt = conn.prepare("SELECT id, username, email, display_name, role, avatar_color FROM users WHERE id = ?;");
+        auto u_stmt = conn.prepare("SELECT id, username, email, display_name, role, avatar_color, COALESCE(user_type, 'INTERNAL') FROM users WHERE id = ?;");
         u_stmt.bind_int(1, user_id);
         if (u_stmt.step() == SQLITE_ROW) {
             u.id = u_stmt.column_int(0);
@@ -9823,6 +9846,7 @@ static void handle_2fa_verify(backend::wsworker *worker,
             u.display_name = u_stmt.column_str(3);
             u.role = u_stmt.column_str(4);
             u.avatar_color = u_stmt.column_str(5);
+            u.user_type = u_stmt.column_str(6);
             u.authenticated = true;
         }
 
@@ -9885,7 +9909,7 @@ static void handle_2fa_recovery(backend::wsworker *worker,
     }
 
     auth_user u;
-    auto u_stmt = conn.prepare("SELECT id, username, email, display_name, role, avatar_color FROM users WHERE id = ?;");
+    auto u_stmt = conn.prepare("SELECT id, username, email, display_name, role, avatar_color, COALESCE(user_type, 'INTERNAL') FROM users WHERE id = ?;");
     u_stmt.bind_int(1, user_id);
     if (u_stmt.step() == SQLITE_ROW) {
         u.id = u_stmt.column_int(0);
@@ -9894,6 +9918,7 @@ static void handle_2fa_recovery(backend::wsworker *worker,
         u.display_name = u_stmt.column_str(3);
         u.role = u_stmt.column_str(4);
         u.avatar_color = u_stmt.column_str(5);
+        u.user_type = u_stmt.column_str(6);
         u.authenticated = true;
     }
 
@@ -10638,48 +10663,55 @@ static void handle_item_comments(backend::wsworker *worker,
         send_error(worker, header, "400 Bad Request", "Comment body is required");
         return;
     }
+    bool is_internal = body.get_bool("is_internal", false) || (body.get_int("is_internal", 0) != 0);
 
     int cid = 0;
     {
         db::sqlite_transaction tx(conn);
-        auto ins = conn.prepare("INSERT INTO comments (work_item_id, author_id, body) VALUES (?, ?, ?);");
+        auto ins = conn.prepare("INSERT INTO comments (work_item_id, author_id, body, is_internal) VALUES (?, ?, ?, ?);");
         ins.bind_int(1, item_id);
         ins.bind_int(2, u_auth.id);
         ins.bind_text(3, text);
+        ins.bind_int(4, is_internal ? 1 : 0);
         ins.step_done();
         cid = static_cast<int>(conn.last_insert_rowid());
 
         // Step 10: Rich text mentions, auto-links, changelog and default watcher subscription
-        collaboration::process_mentions_and_links(conn, item_id, cid, u_auth.id, text);
-        collaboration::record_changelog(conn, item_id, u_auth.id, "comment", "", "Added comment #" + std::to_string(cid));
+        collaboration::process_mentions_and_links(conn, item_id, cid, u_auth.id, text, is_internal);
+        collaboration::record_changelog(conn, item_id, u_auth.id, "comment", "",
+            is_internal ? ("Added internal note #" + std::to_string(cid)) : ("Added comment #" + std::to_string(cid)));
         auto wstmt = conn.prepare("INSERT OR IGNORE INTO work_item_watchers (work_item_id, user_id) VALUES (?, ?);");
         wstmt.bind_int(1, item_id);
         wstmt.bind_int(2, u_auth.id);
         wstmt.step_done();
 
-        // Step 15: ITSM first response check & SLA clock
-        itsm::on_item_comment_added(conn, item_id, u_auth.id);
+        // Step 15: ITSM first response check & SLA clock (only public agent comments count as customer response)
+        if (!is_internal) {
+            itsm::on_item_comment_added(conn, item_id, u_auth.id);
+        }
 
         tx.commit();
 
-        // Step 12: Dispatch comment_added automation event
+        // Step 12: Dispatch comment_added automation event (skip external/customer notifications on internal worknotes)
         std::string cur_item_key;
         {
             auto kq = conn.prepare("SELECT key FROM work_items WHERE id = ?;");
             kq.bind_int(1, item_id);
             if (kq.step() == SQLITE_ROW) cur_item_key = kq.column_str(0);
         }
-        automation::AutomationEvent a_ev;
-        a_ev.type = automation::EventType::CommentAdded;
-        a_ev.project_id = proj_id;
-        a_ev.issue_id = item_id;
-        a_ev.issue_key = cur_item_key;
-        a_ev.user_id = u_auth.id;
-        a_ev.user_username = u_auth.username;
-        a_ev.user_display_name = u_auth.display_name;
-        a_ev.comment_id = cid;
-        a_ev.comment_body = text;
-        automation::dispatch_event(conn, a_ev);
+        if (!is_internal) {
+            automation::AutomationEvent a_ev;
+            a_ev.type = automation::EventType::CommentAdded;
+            a_ev.project_id = proj_id;
+            a_ev.issue_id = item_id;
+            a_ev.issue_key = cur_item_key;
+            a_ev.user_id = u_auth.id;
+            a_ev.user_username = u_auth.username;
+            a_ev.user_display_name = u_auth.display_name;
+            a_ev.comment_id = cid;
+            a_ev.comment_body = text;
+            automation::dispatch_event(conn, a_ev);
+        }
 
         auto cm_payload = json::json_value::make_object();
         cm_payload.add_int("id", cid);
@@ -10696,6 +10728,7 @@ static void handle_item_comments(backend::wsworker *worker,
     res.add_str("author_color", u_auth.avatar_color);
     res.add_str("body", text);
     res.add_str("created_at", "just now");
+    res.add_bool("is_internal", is_internal);
     send_json(worker, header, "201 Created", res);
 }
 
@@ -18010,7 +18043,7 @@ static void handle_servicedesk_portal_home(backend::wsworker *worker,
     send_json(worker, header, "200 OK", out);
 }
 
-// GET | POST /api/servicedesk/portal/requests
+// GET | POST /api/servicedesk/portal/requests & /api/portal/my-requests
 static void handle_servicedesk_portal_requests(backend::wsworker *worker,
                                                const std::map<std::string, std::string> &header,
                                                const std::list<std::string> &) {
@@ -18025,46 +18058,113 @@ static void handle_servicedesk_portal_requests(backend::wsworker *worker,
             email = u_auth.email;
         }
 
-        std::string sql = R"SQL(
-            SELECT w.id, w.key, w.title, w.status, w.created_at, w.updated_at,
-                   COALESCE(w.customer_reporter_name, ''),
-                   COALESCE(rt.name, 'Customer Request'),
-                   COALESCE(sd.name, 'Service Desk')
-            FROM work_items w
-            LEFT JOIN request_types rt ON rt.id = w.request_type_id
-            LEFT JOIN service_desks sd ON sd.id = w.service_desk_id
-            WHERE (w.is_customer_request = 1 OR w.service_desk_id IS NOT NULL)
-        )SQL";
-        if (!email.empty()) {
-            sql += " AND (w.customer_reporter_email = ? OR w.reporter_id = (SELECT id FROM users WHERE email = ?))";
-        }
-        sql += " ORDER BY w.id DESC;";
-
-        auto q = conn.prepare(sql);
-        if (!email.empty()) {
-            q.bind_text(1, email);
-            q.bind_text(2, email);
-        }
-
         auto arr = json::json_value::make_array();
-        while (q.step() == SQLITE_ROW) {
-            auto obj = json::json_value::make_object();
-            obj.add_int("id", q.column_int(0));
-            obj.add_str("key", q.column_str(1));
-            obj.add_str("title", q.column_str(2));
-            obj.add_str("status", q.column_str(3));
-            obj.add_str("created_at", q.column_str(4));
-            obj.add_str("updated_at", q.column_str(5));
-            obj.add_str("customer_name", q.column_str(6));
-            obj.add_str("request_type_name", q.column_str(7));
-            obj.add_str("service_desk_name", q.column_str(8));
-            arr.add(std::move(obj));
+        if (u_auth.authenticated) {
+            std::string sql = R"SQL(
+                SELECT DISTINCT w.id, w.key, w.title, w.status, w.priority, w.created_at, w.updated_at,
+                       COALESCE(w.customer_reporter_name, u_rep.display_name, 'Customer'),
+                       COALESCE(w.customer_reporter_email, u_rep.email, ''),
+                       COALESCE(rt.name, 'Customer Request'),
+                       COALESCE(sd.name, 'Help Center'),
+                       COALESCE(sd.id, 0),
+                       COALESCE(w.customer_organization_id, 0),
+                       COALESCE(co.name, ''),
+                       COALESCE(w.reporter_id, 0)
+                FROM work_items w
+                LEFT JOIN request_types rt ON rt.id = w.request_type_id
+                LEFT JOIN service_desks sd ON sd.id = w.service_desk_id
+                LEFT JOIN customer_organizations co ON co.id = w.customer_organization_id
+                LEFT JOIN users u_rep ON u_rep.id = w.reporter_id
+                WHERE (w.is_customer_request = 1 OR w.service_desk_id IS NOT NULL)
+                  AND (
+                      w.reporter_id = ?
+                      OR (w.customer_reporter_email != '' AND LOWER(w.customer_reporter_email) = LOWER(?))
+                      OR (w.customer_organization_id > 0 AND w.customer_organization_id IN (
+                          SELECT organization_id FROM customer_organization_members WHERE user_id = ?
+                      ))
+                      OR (w.reporter_id > 0 AND w.reporter_id IN (
+                          SELECT m2.user_id FROM customer_organization_members m1
+                          JOIN customer_organization_members m2 ON m1.organization_id = m2.organization_id
+                          WHERE m1.user_id = ?
+                      ))
+                  )
+                ORDER BY w.id DESC;
+            )SQL";
+
+            auto q = conn.prepare(sql);
+            q.bind_int(1, u_auth.id);
+            q.bind_text(2, u_auth.email);
+            q.bind_int(3, u_auth.id);
+            q.bind_int(4, u_auth.id);
+
+            while (q.step() == SQLITE_ROW) {
+                auto obj = json::json_value::make_object();
+                int id = q.column_int(0);
+                std::string rep_email = q.column_str(8);
+                int rep_id = q.column_int(14);
+                bool is_mine = (rep_id == u_auth.id) || (!u_auth.email.empty() && strcasecmp(rep_email.c_str(), u_auth.email.c_str()) == 0);
+
+                obj.add_int("id", id);
+                obj.add_str("key", q.column_str(1));
+                obj.add_str("title", q.column_str(2));
+                obj.add_str("status", q.column_str(3));
+                obj.add_str("priority", q.column_str(4));
+                obj.add_str("created_at", q.column_str(5));
+                obj.add_str("updated_at", q.column_str(6));
+                obj.add_str("customer_name", q.column_str(7));
+                obj.add_str("customer_email", rep_email);
+                obj.add_str("request_type_name", q.column_str(9));
+                obj.add_str("service_desk_name", q.column_str(10));
+                obj.add_int("service_desk_id", q.column_int(11));
+                obj.add_nullable_int("customer_organization_id", q.column_int(12));
+                obj.add_str("organization_name", q.column_str(13));
+                obj.add_bool("is_my_request", is_mine);
+                arr.add(std::move(obj));
+            }
+        } else {
+            std::string sql = R"SQL(
+                SELECT w.id, w.key, w.title, w.status, w.priority, w.created_at, w.updated_at,
+                       COALESCE(w.customer_reporter_name, ''),
+                       COALESCE(rt.name, 'Customer Request'),
+                       COALESCE(sd.name, 'Service Desk')
+                FROM work_items w
+                LEFT JOIN request_types rt ON rt.id = w.request_type_id
+                LEFT JOIN service_desks sd ON sd.id = w.service_desk_id
+                WHERE (w.is_customer_request = 1 OR w.service_desk_id IS NOT NULL)
+            )SQL";
+            if (!email.empty()) {
+                sql += " AND (w.customer_reporter_email = ? OR w.reporter_id = (SELECT id FROM users WHERE email = ?))";
+            }
+            sql += " ORDER BY w.id DESC;";
+
+            auto q = conn.prepare(sql);
+            if (!email.empty()) {
+                q.bind_text(1, email);
+                q.bind_text(2, email);
+            }
+
+            while (q.step() == SQLITE_ROW) {
+                auto obj = json::json_value::make_object();
+                obj.add_int("id", q.column_int(0));
+                obj.add_str("key", q.column_str(1));
+                obj.add_str("title", q.column_str(2));
+                obj.add_str("status", q.column_str(3));
+                obj.add_str("priority", q.column_str(4));
+                obj.add_str("created_at", q.column_str(5));
+                obj.add_str("updated_at", q.column_str(6));
+                obj.add_str("customer_name", q.column_str(7));
+                obj.add_str("request_type_name", q.column_str(8));
+                obj.add_str("service_desk_name", q.column_str(9));
+                obj.add_bool("is_my_request", true);
+                arr.add(std::move(obj));
+            }
         }
+
         send_json(worker, header, "200 OK", arr);
         return;
     }
 
-    // POST /api/servicedesk/portal/requests
+    // POST /api/servicedesk/portal/requests & /api/portal/requests
     auto body = json::json_value::parse(worker->body());
     if (!body) {
         send_error(worker, header, "400 Bad Request", "Invalid JSON body");
@@ -18080,6 +18180,7 @@ static void handle_servicedesk_portal_requests(backend::wsworker *worker,
     std::string cust_name = body.get_string("customer_name");
     std::string cust_email = body.get_string("customer_email");
     std::string priority = body.get_string("priority", "Medium");
+    int cust_org_id = body.get_int("customer_organization_id", body.get_int("organization_id", 0));
 
     if (summary.empty()) {
         send_error(worker, header, "400 Bad Request", "Ticket summary is required");
@@ -18134,8 +18235,13 @@ static void handle_servicedesk_portal_requests(backend::wsworker *worker,
         }
     }
 
+    auto u_auth = get_authenticated_user(conn, worker, header);
     int reporter_user_id = 0;
-    if (!cust_email.empty()) {
+    if (u_auth.authenticated) {
+        reporter_user_id = u_auth.id;
+        if (cust_name.empty() || cust_name == "Customer") cust_name = u_auth.display_name;
+        if (cust_email.empty()) cust_email = u_auth.email;
+    } else if (!cust_email.empty()) {
         auto uq = conn.prepare("SELECT id, display_name FROM users WHERE email = ?;");
         uq.bind_text(1, cust_email);
         if (uq.step() == SQLITE_ROW) {
@@ -18144,6 +18250,33 @@ static void handle_servicedesk_portal_requests(backend::wsworker *worker,
         }
     }
     if (cust_name.empty()) cust_name = "Customer";
+
+    // Validate or auto-detect customer organization
+    if (cust_org_id > 0) {
+        auto o_val = conn.prepare(R"SQL(
+            SELECT service_desk_id FROM customer_organizations WHERE id = ?;
+        )SQL");
+        o_val.bind_int(1, cust_org_id);
+        if (o_val.step() != SQLITE_ROW || o_val.column_int(0) != desk_id) {
+            cust_org_id = 0;
+        } else if (reporter_user_id > 0 && u_auth.authenticated && u_auth.user_type == "PORTAL_CUSTOMER") {
+            if (!itsm::user_is_organization_member(conn, reporter_user_id, cust_org_id)) {
+                cust_org_id = 0;
+            }
+        }
+    } else if (!body.has_key("customer_organization_id") && !body.has_key("organization_id") && reporter_user_id > 0) {
+        auto o_stmt = conn.prepare(R"SQL(
+            SELECT co.id FROM customer_organizations co
+            INNER JOIN customer_organization_members com ON com.organization_id = co.id
+            WHERE co.service_desk_id = ? AND com.user_id = ?
+            LIMIT 1;
+        )SQL");
+        o_stmt.bind_int(1, desk_id);
+        o_stmt.bind_int(2, reporter_user_id);
+        if (o_stmt.step() == SQLITE_ROW) {
+            cust_org_id = o_stmt.column_int(0);
+        }
+    }
 
     int new_item_id = 0;
     std::string new_key;
@@ -18163,8 +18296,9 @@ static void handle_servicedesk_portal_requests(backend::wsworker *worker,
             INSERT INTO work_items (
                 project_id, key, type, status, priority, title, description,
                 reporter_id, service_desk_id, request_type_id,
-                customer_reporter_name, customer_reporter_email, is_customer_request
-            ) VALUES (?, ?, ?, 'To Do', ?, ?, ?, ?, ?, ?, ?, ?, 1);
+                customer_reporter_name, customer_reporter_email, is_customer_request,
+                customer_organization_id
+            ) VALUES (?, ?, ?, 'To Do', ?, ?, ?, ?, ?, ?, ?, ?, 1, ?);
         )SQL");
         ins.bind_int(1, proj_id);
         ins.bind_text(2, new_key);
@@ -18177,6 +18311,7 @@ static void handle_servicedesk_portal_requests(backend::wsworker *worker,
         ins.bind_optional_int(9, req_type_id);
         ins.bind_text(10, cust_name);
         ins.bind_text(11, cust_email);
+        ins.bind_optional_int(12, cust_org_id);
         ins.step_done();
 
         new_item_id = static_cast<int>(conn.last_insert_rowid());
@@ -18207,11 +18342,12 @@ static void handle_servicedesk_portal_requests(backend::wsworker *worker,
     res.add_str("customer_email", cust_email);
     res.add_int("service_desk_id", desk_id);
     res.add_nullable_int("request_type_id", req_type_id);
+    res.add_nullable_int("customer_organization_id", cust_org_id);
     res.add_str("created_at", itsm::current_utc_timestamp());
     send_json(worker, header, "201 Created", res);
 }
 
-// GET /api/servicedesk/portal/requests/([^/]+)
+// GET /api/servicedesk/portal/requests/([^/]+) & /api/portal/requests/([^/]+)
 static void handle_servicedesk_portal_request_detail(backend::wsworker *worker,
                                                      const std::map<std::string, std::string> &header,
                                                      const std::list<std::string> &uri_params) {
@@ -18226,16 +18362,38 @@ static void handle_servicedesk_portal_request_detail(backend::wsworker *worker,
         return;
     }
 
+    // Ensure target is a valid customer portal request
+    {
+        auto chk_q = conn.prepare("SELECT 1 FROM work_items WHERE id = ? AND (is_customer_request = 1 OR service_desk_id IS NOT NULL);");
+        chk_q.bind_int(1, wid);
+        if (chk_q.step() != SQLITE_ROW) {
+            send_error(worker, header, "404 Not Found", "Ticket not found");
+            return;
+        }
+    }
+
+    // Portal customer security segregation check
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (u_auth.authenticated && u_auth.user_type == "PORTAL_CUSTOMER") {
+        if (!itsm::user_can_access_ticket(conn, u_auth.id, u_auth.user_type, u_auth.email, wid)) {
+            send_error(worker, header, "403 Forbidden", "Access denied: Request does not belong to your account or customer organization");
+            return;
+        }
+    }
+
     auto q = conn.prepare(R"SQL(
         SELECT w.id, w.key, w.title, w.description, w.status, w.priority, w.created_at, w.updated_at,
                COALESCE(w.customer_reporter_name, ''), COALESCE(w.customer_reporter_email, ''),
                COALESCE(rt.name, 'Customer Request'), COALESCE(sd.name, 'Help Center'),
                w.service_desk_id, w.request_type_id,
-               COALESCE(w.first_response_at, '')
+               COALESCE(w.first_response_at, ''),
+               COALESCE(w.customer_organization_id, 0),
+               COALESCE(co.name, '')
         FROM work_items w
         LEFT JOIN request_types rt ON rt.id = w.request_type_id
         LEFT JOIN service_desks sd ON sd.id = w.service_desk_id
-        WHERE w.id = ?;
+        LEFT JOIN customer_organizations co ON co.id = w.customer_organization_id
+        WHERE w.id = ? AND (w.is_customer_request = 1 OR w.service_desk_id IS NOT NULL);
     )SQL");
     q.bind_int(1, wid);
     if (q.step() != SQLITE_ROW) {
@@ -18259,13 +18417,15 @@ static void handle_servicedesk_portal_request_detail(backend::wsworker *worker,
     out.add_nullable_int("service_desk_id", q.column_int(12));
     out.add_nullable_int("request_type_id", q.column_int(13));
     out.add_str("first_response_at", q.column_str(14));
+    out.add_nullable_int("customer_organization_id", q.column_int(15));
+    out.add_str("organization_name", q.column_str(16));
 
-    // Customer-visible comments
+    // Response sanitization: strictly filter out internal comments (is_internal = 1)
     auto cq = conn.prepare(R"SQL(
         SELECT c.id, c.body, c.created_at, COALESCE(u.display_name, 'Support Agent'), c.author_id
         FROM comments c
         LEFT JOIN users u ON u.id = c.author_id
-        WHERE c.work_item_id = ?
+        WHERE c.work_item_id = ? AND COALESCE(c.is_internal, 0) = 0
         ORDER BY c.id ASC;
     )SQL");
     cq.bind_int(1, wid);
@@ -18287,7 +18447,7 @@ static void handle_servicedesk_portal_request_detail(backend::wsworker *worker,
     send_json(worker, header, "200 OK", out);
 }
 
-// POST /api/servicedesk/portal/requests/([^/]+)/comments
+// POST /api/servicedesk/portal/requests/([^/]+)/comments & /api/portal/requests/([^/]+)/comments
 static void handle_servicedesk_portal_request_comment(backend::wsworker *worker,
                                                       const std::map<std::string, std::string> &header,
                                                       const std::list<std::string> &uri_params) {
@@ -18300,6 +18460,25 @@ static void handle_servicedesk_portal_request_comment(backend::wsworker *worker,
     if (wid <= 0) {
         send_error(worker, header, "404 Not Found", "Ticket not found");
         return;
+    }
+
+    // Ensure target is a valid customer portal request
+    {
+        auto chk_q = conn.prepare("SELECT 1 FROM work_items WHERE id = ? AND (is_customer_request = 1 OR service_desk_id IS NOT NULL);");
+        chk_q.bind_int(1, wid);
+        if (chk_q.step() != SQLITE_ROW) {
+            send_error(worker, header, "404 Not Found", "Ticket not found");
+            return;
+        }
+    }
+
+    // Portal customer security segregation check
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (u_auth.authenticated && u_auth.user_type == "PORTAL_CUSTOMER") {
+        if (!itsm::user_can_access_ticket(conn, u_auth.id, u_auth.user_type, u_auth.email, wid)) {
+            send_error(worker, header, "403 Forbidden", "Access denied: Request does not belong to your account or customer organization");
+            return;
+        }
     }
 
     auto body = json::json_value::parse(worker->body());
@@ -18317,7 +18496,6 @@ static void handle_servicedesk_portal_request_comment(backend::wsworker *worker,
         return;
     }
 
-    auto u_auth = get_authenticated_user(conn, worker, header);
     int author_id = u_auth.authenticated ? u_auth.id : 0;
     if (author_id == 0 && !author_email.empty()) {
         auto uq = conn.prepare("SELECT id FROM users WHERE email = ?;");
@@ -18330,7 +18508,8 @@ static void handle_servicedesk_portal_request_comment(backend::wsworker *worker,
     int cid = 0;
     {
         db::sqlite_transaction tx(conn);
-        auto ins = conn.prepare("INSERT INTO comments (work_item_id, author_id, body) VALUES (?, ?, ?);");
+        // Customer comments created via portal are ALWAYS public (is_internal = 0)
+        auto ins = conn.prepare("INSERT INTO comments (work_item_id, author_id, body, is_internal) VALUES (?, ?, ?, 0);");
         ins.bind_int(1, wid);
         ins.bind_optional_int(2, author_id);
         ins.bind_text(3, text);
@@ -18343,7 +18522,7 @@ static void handle_servicedesk_portal_request_comment(backend::wsworker *worker,
         upd.step_done();
 
         // If author is an agent, trigger first response check
-        if (u_auth.authenticated) {
+        if (u_auth.authenticated && u_auth.user_type != "PORTAL_CUSTOMER") {
             itsm::on_item_comment_added(conn, wid, u_auth.id);
         }
 
@@ -18352,10 +18531,389 @@ static void handle_servicedesk_portal_request_comment(backend::wsworker *worker,
 
     auto res = json::json_value::make_object();
     res.add_int("id", cid);
+    res.add_int("work_item_id", wid);
     res.add_str("body", text);
     res.add_str("author_name", author_name);
+    res.add_bool("is_internal", false);
     res.add_str("created_at", itsm::current_utc_timestamp());
     send_json(worker, header, "201 Created", res);
+}
+
+// ----------------------------------------------------------------------------
+// Customer Organizations Handlers
+// ----------------------------------------------------------------------------
+
+// GET | POST /api/servicedesk/desks/([0-9]+)/organizations
+static void handle_servicedesk_desk_organizations(backend::wsworker *worker,
+                                                  const std::map<std::string, std::string> &header,
+                                                  const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing service desk ID");
+        return;
+    }
+    int desk_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto orgs = itsm::list_customer_organizations(conn, desk_id);
+        auto arr = json::json_value::make_array();
+        for (const auto &o : orgs) {
+            auto obj = json::json_value::make_object();
+            obj.add_int("id", o.id);
+            obj.add_int("service_desk_id", o.service_desk_id);
+            obj.add_str("name", o.name);
+            obj.add_str("domain", o.domain);
+            obj.add_str("created_at", o.created_at);
+            obj.add_int("member_count", o.member_count);
+            arr.add(std::move(obj));
+        }
+        send_json(worker, header, "200 OK", arr);
+        return;
+    }
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    std::string name = body.get_string("name");
+    std::string domain = body.get_string("domain");
+    if (name.empty()) {
+        send_error(worker, header, "400 Bad Request", "Organization name is required");
+        return;
+    }
+
+    int org_id = 0;
+    {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare("INSERT INTO customer_organizations (service_desk_id, name, domain) VALUES (?, ?, ?);");
+        ins.bind_int(1, desk_id);
+        ins.bind_text(2, name);
+        ins.bind_text(3, domain);
+        ins.step_done();
+        org_id = static_cast<int>(conn.last_insert_rowid());
+        tx.commit();
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("id", org_id);
+    res.add_int("service_desk_id", desk_id);
+    res.add_str("name", name);
+    res.add_str("domain", domain);
+    res.add_int("member_count", 0);
+    res.add_str("created_at", itsm::current_utc_timestamp());
+    send_json(worker, header, "201 Created", res);
+}
+
+// GET | PUT | DELETE /api/servicedesk/organizations/([0-9]+)
+static void handle_servicedesk_organization_detail(backend::wsworker *worker,
+                                                   const std::map<std::string, std::string> &header,
+                                                   const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing organization ID");
+        return;
+    }
+    int org_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto stmt = conn.prepare(R"SQL(
+            SELECT o.id, o.service_desk_id, o.name, o.domain, o.created_at, sd.name,
+                   (SELECT COUNT(*) FROM customer_organization_members m WHERE m.organization_id = o.id) AS member_count
+            FROM customer_organizations o
+            LEFT JOIN service_desks sd ON sd.id = o.service_desk_id
+            WHERE o.id = ?;
+        )SQL");
+        stmt.bind_int(1, org_id);
+        if (stmt.step() != SQLITE_ROW) {
+            send_error(worker, header, "404 Not Found", "Organization not found");
+            return;
+        }
+
+        auto obj = json::json_value::make_object();
+        obj.add_int("id", stmt.column_int(0));
+        obj.add_int("service_desk_id", stmt.column_int(1));
+        obj.add_str("name", stmt.column_str(2));
+        obj.add_str("domain", stmt.column_str(3));
+        obj.add_str("created_at", stmt.column_str(4));
+        obj.add_str("service_desk_name", stmt.column_str(5));
+        obj.add_int("member_count", stmt.column_int(6));
+
+        auto m_stmt = conn.prepare(R"SQL(
+            SELECT u.id, u.username, u.email, u.display_name, u.avatar_color, COALESCE(u.user_type, 'INTERNAL'),
+                   COALESCE(com.added_at, '')
+            FROM customer_organization_members com
+            INNER JOIN users u ON u.id = com.user_id
+            WHERE com.organization_id = ?
+            ORDER BY u.display_name ASC;
+        )SQL");
+        m_stmt.bind_int(1, org_id);
+        auto m_arr = json::json_value::make_array();
+        while (m_stmt.step() == SQLITE_ROW) {
+            auto m_obj = json::json_value::make_object();
+            m_obj.add_int("id", m_stmt.column_int(0));
+            m_obj.add_int("user_id", m_stmt.column_int(0));
+            m_obj.add_str("username", m_stmt.column_str(1));
+            m_obj.add_str("email", m_stmt.column_str(2));
+            m_obj.add_str("display_name", m_stmt.column_str(3));
+            m_obj.add_str("avatar_color", m_stmt.column_str(4));
+            m_obj.add_str("user_type", m_stmt.column_str(5));
+            m_obj.add_str("added_at", m_stmt.column_str(6));
+            m_arr.add(std::move(m_obj));
+        }
+        obj.add("members", std::move(m_arr));
+
+        send_json(worker, header, "200 OK", obj);
+        return;
+    }
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    if (method == "PUT") {
+        auto body = json::json_value::parse(worker->body());
+        if (!body) {
+            send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+            return;
+        }
+
+        std::string name = body.get_string("name");
+        bool has_domain = body.has_key("domain");
+        std::string domain = body.get_string("domain");
+
+        db::sqlite_transaction tx(conn);
+        auto upd = conn.prepare(R"SQL(
+            UPDATE customer_organizations SET
+                name = CASE WHEN ? != '' THEN ? ELSE name END,
+                domain = CASE WHEN ? = 1 THEN ? ELSE domain END
+            WHERE id = ?;
+        )SQL");
+        upd.bind_text(1, name);
+        upd.bind_text(2, name);
+        upd.bind_int(3, has_domain ? 1 : 0);
+        upd.bind_text(4, domain);
+        upd.bind_int(5, org_id);
+        upd.step_done();
+        tx.commit();
+
+        auto res = json::json_value::make_object();
+        res.add_int("id", org_id);
+        res.add_bool("updated", true);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+
+    if (method == "DELETE") {
+        db::sqlite_transaction tx(conn);
+        auto del = conn.prepare("DELETE FROM customer_organizations WHERE id = ?;");
+        del.bind_int(1, org_id);
+        del.step_done();
+        tx.commit();
+
+        auto res = json::json_value::make_object();
+        res.add_bool("deleted", true);
+        res.add_int("id", org_id);
+        send_json(worker, header, "200 OK", res);
+        return;
+    }
+}
+
+// GET | POST /api/servicedesk/organizations/([0-9]+)/members
+static void handle_servicedesk_organization_members(backend::wsworker *worker,
+                                                    const std::map<std::string, std::string> &header,
+                                                    const std::list<std::string> &uri_params) {
+    if (uri_params.empty()) {
+        send_error(worker, header, "400 Bad Request", "Missing organization ID");
+        return;
+    }
+    int org_id = std::atoi(uri_params.front().c_str());
+    auto conn = acquire_db_connection();
+    std::string method = get_header(header, "REQUEST_METHOD");
+
+    if (method == "GET") {
+        auto m_stmt = conn.prepare(R"SQL(
+            SELECT u.id, u.username, u.email, u.display_name, u.avatar_color, COALESCE(u.user_type, 'INTERNAL'),
+                   COALESCE(com.added_at, '')
+            FROM customer_organization_members com
+            INNER JOIN users u ON u.id = com.user_id
+            WHERE com.organization_id = ?
+            ORDER BY u.display_name ASC;
+        )SQL");
+        m_stmt.bind_int(1, org_id);
+        auto m_arr = json::json_value::make_array();
+        while (m_stmt.step() == SQLITE_ROW) {
+            auto m_obj = json::json_value::make_object();
+            m_obj.add_int("id", m_stmt.column_int(0));
+            m_obj.add_int("user_id", m_stmt.column_int(0));
+            m_obj.add_str("username", m_stmt.column_str(1));
+            m_obj.add_str("email", m_stmt.column_str(2));
+            m_obj.add_str("display_name", m_stmt.column_str(3));
+            m_obj.add_str("avatar_color", m_stmt.column_str(4));
+            m_obj.add_str("user_type", m_stmt.column_str(5));
+            m_obj.add_str("added_at", m_stmt.column_str(6));
+            m_arr.add(std::move(m_obj));
+        }
+        send_json(worker, header, "200 OK", m_arr);
+        return;
+    }
+
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto body = json::json_value::parse(worker->body());
+    if (!body) {
+        send_error(worker, header, "400 Bad Request", "Invalid JSON body");
+        return;
+    }
+
+    int user_id = body.get_int("user_id", 0);
+    std::string email = body.get_string("email");
+
+    if (user_id <= 0 && !email.empty()) {
+        auto uq = conn.prepare("SELECT id FROM users WHERE LOWER(email) = LOWER(?);");
+        uq.bind_text(1, email);
+        if (uq.step() == SQLITE_ROW) {
+            user_id = uq.column_int(0);
+        } else {
+            // Auto-enroll new user as PORTAL_CUSTOMER
+            std::string uname = email;
+            auto at_pos = uname.find('@');
+            if (at_pos != std::string::npos) uname = uname.substr(0, at_pos);
+            std::string cand_uname;
+            for (char ch : uname) {
+                if (std::isalnum(static_cast<unsigned char>(ch)) || ch == '_' || ch == '-' || ch == '.') {
+                    cand_uname += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                }
+            }
+            if (cand_uname.empty()) cand_uname = "customer";
+            std::string final_uname = cand_uname;
+            int sfx = 1;
+            while (true) {
+                auto chk = conn.prepare("SELECT id FROM users WHERE username = ?;");
+                chk.bind_text(1, final_uname);
+                if (chk.step() != SQLITE_ROW) break;
+                final_uname = cand_uname + std::to_string(sfx++);
+            }
+
+            db::sqlite_transaction tx(conn);
+            auto ins_u = conn.prepare(R"SQL(
+                INSERT INTO users (username, email, password_hash, display_name, role, avatar_color, user_type)
+                VALUES (?, ?, ?, ?, 'Customer', '#0052CC', 'PORTAL_CUSTOMER');
+            )SQL");
+            ins_u.bind_text(1, final_uname);
+            ins_u.bind_text(2, email);
+            ins_u.bind_text(3, utils::hash_password(utils::generate_random_hex(24)));
+            ins_u.bind_text(4, final_uname);
+            ins_u.step_done();
+            user_id = static_cast<int>(conn.last_insert_rowid());
+            tx.commit();
+        }
+    }
+
+    if (user_id <= 0) {
+        send_error(worker, header, "400 Bad Request", "user_id or valid email is required");
+        return;
+    }
+
+    {
+        db::sqlite_transaction tx(conn);
+        auto ins = conn.prepare("INSERT OR IGNORE INTO customer_organization_members (organization_id, user_id, added_at) VALUES (?, ?, datetime('now'));");
+        ins.bind_int(1, org_id);
+        ins.bind_int(2, user_id);
+        ins.step_done();
+        tx.commit();
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_int("organization_id", org_id);
+    res.add_int("user_id", user_id);
+    res.add_bool("added", true);
+    send_json(worker, header, "201 Created", res);
+}
+
+// DELETE /api/servicedesk/organizations/([0-9]+)/members/([0-9]+)
+static void handle_servicedesk_organization_member_delete(backend::wsworker *worker,
+                                                          const std::map<std::string, std::string> &header,
+                                                          const std::list<std::string> &uri_params) {
+    if (uri_params.size() < 2) {
+        send_error(worker, header, "400 Bad Request", "Missing organization ID or user ID");
+        return;
+    }
+    auto it = uri_params.begin();
+    int org_id = std::atoi((it++)->c_str());
+    int uid = std::atoi(it->c_str());
+
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    {
+        db::sqlite_transaction tx(conn);
+        auto del = conn.prepare("DELETE FROM customer_organization_members WHERE organization_id = ? AND user_id = ?;");
+        del.bind_int(1, org_id);
+        del.bind_int(2, uid);
+        del.step_done();
+        tx.commit();
+    }
+
+    auto res = json::json_value::make_object();
+    res.add_bool("removed", true);
+    res.add_int("organization_id", org_id);
+    res.add_int("user_id", uid);
+    send_json(worker, header, "200 OK", res);
+}
+
+// GET /api/portal/organizations
+static void handle_portal_my_organizations(backend::wsworker *worker,
+                                           const std::map<std::string, std::string> &header,
+                                           const std::list<std::string> &) {
+    auto conn = acquire_db_connection();
+    auto u_auth = get_authenticated_user(conn, worker, header);
+    if (!u_auth.authenticated) {
+        send_error(worker, header, "401 Unauthorized", "Authentication required");
+        return;
+    }
+
+    auto stmt = conn.prepare(R"SQL(
+        SELECT co.id, co.service_desk_id, co.name, co.domain, co.created_at, sd.name
+        FROM customer_organizations co
+        INNER JOIN customer_organization_members com ON com.organization_id = co.id
+        LEFT JOIN service_desks sd ON sd.id = co.service_desk_id
+        WHERE com.user_id = ?
+        ORDER BY co.name ASC;
+    )SQL");
+    stmt.bind_int(1, u_auth.id);
+
+    auto arr = json::json_value::make_array();
+    while (stmt.step() == SQLITE_ROW) {
+        auto obj = json::json_value::make_object();
+        obj.add_int("id", stmt.column_int(0));
+        obj.add_int("service_desk_id", stmt.column_int(1));
+        obj.add_str("name", stmt.column_str(2));
+        obj.add_str("domain", stmt.column_str(3));
+        obj.add_str("created_at", stmt.column_str(4));
+        obj.add_str("service_desk_name", stmt.column_str(5));
+        arr.add(std::move(obj));
+    }
+    send_json(worker, header, "200 OK", arr);
 }
 
 // GET /api/events/live
@@ -19019,6 +19577,18 @@ int main(int argc, char *argv[]) {
         {"^/api/servicedesk/portal/requests$",          backend::GET | backend::POST,   handle_servicedesk_portal_requests},
         {"^/api/servicedesk/portal/requests/([^/]+)$",  backend::GET,                   handle_servicedesk_portal_request_detail},
         {"^/api/servicedesk/portal/requests/([^/]+)/comments$", backend::POST,          handle_servicedesk_portal_request_comment},
+        {"^/api/servicedesk/portal/my-requests$",       backend::GET,                   handle_servicedesk_portal_requests},
+        {"^/api/portal$",                               backend::GET,                   handle_servicedesk_portal_home},
+        {"^/api/portal/my-requests$",                   backend::GET,                   handle_servicedesk_portal_requests},
+        {"^/api/portal/requests$",                      backend::GET | backend::POST,   handle_servicedesk_portal_requests},
+        {"^/api/portal/requests/([^/]+)$",              backend::GET,                   handle_servicedesk_portal_request_detail},
+        {"^/api/portal/requests/([^/]+)/comments$",     backend::POST,                  handle_servicedesk_portal_request_comment},
+        {"^/api/servicedesk/desks/([0-9]+)/organizations$", backend::GET | backend::POST, handle_servicedesk_desk_organizations},
+        {"^/api/servicedesk/organizations/([0-9]+)$",   backend::GET | backend::PUT | backend::DELETE, handle_servicedesk_organization_detail},
+        {"^/api/servicedesk/organizations/([0-9]+)/members$", backend::GET | backend::POST, handle_servicedesk_organization_members},
+        {"^/api/servicedesk/organizations/([0-9]+)/members/([0-9]+)$", backend::DELETE, handle_servicedesk_organization_member_delete},
+        {"^/api/portal/organizations$",                 backend::GET,                   handle_portal_my_organizations},
+        {"^/api/portal/my-organizations$",              backend::GET,                   handle_portal_my_organizations},
         {"^/api/events/live$",                          backend::GET,                   handle_events_live          },
         {"^/api/events/poll$",                          backend::GET,                   handle_events_poll          },
         {"^/api/presence$",                             backend::GET | backend::POST,   handle_presence             },
@@ -19063,7 +19633,48 @@ int main(int argc, char *argv[]) {
     });
 
     server.use([](backend::wsworker *worker, const std::map<std::string, std::string> &header) -> bool {
-        return g_rate_limiter.process(worker, header);
+        // 1. Rate limiter
+        if (!g_rate_limiter.process(worker, header)) {
+            return false;
+        }
+
+        // 2. Portal-Only Customer Identity Segregation Guard
+        std::string path = get_header(header, "SCRIPT_NAME");
+        if (path.empty()) path = get_header(header, "DOCUMENT_URI");
+        if (path.empty()) {
+            path = get_header(header, "REQUEST_URI");
+            auto qp = path.find('?');
+            if (qp != std::string::npos) path = path.substr(0, qp);
+        }
+
+        bool is_portal_allowed = (
+            path == "/api/health" ||
+            path.starts_with("/api/setup") ||
+            path.starts_with("/api/auth") ||
+            path.starts_with("/api/servicedesk/portal") ||
+            path.starts_with("/api/portal") ||
+            path.starts_with("/api/blobs") ||
+            path.starts_with("/api/user/preferences") ||
+            path.starts_with("/api/events") ||
+            path.starts_with("/api/notifications") ||
+            path == "/api/docs" ||
+            path == "/api/openapi.json"
+        );
+
+        if (!is_portal_allowed) {
+            std::string token = extract_token(worker, header);
+            if (!token.empty()) {
+                auto conn = acquire_db_connection();
+                auto u = get_authenticated_user(conn, worker, header);
+                if (u.authenticated && u.user_type == "PORTAL_CUSTOMER") {
+                    send_error(worker, header, "403 Forbidden",
+                               "Access denied: Customer portal accounts are segregated and restricted from internal agile, board, project, and admin routes");
+                    return false;
+                }
+            }
+        }
+
+        return true;
     });
 
     server.init(socket_name.c_str(), backlog, worker_num);

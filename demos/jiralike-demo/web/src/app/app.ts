@@ -1,7 +1,8 @@
 import { Component, OnInit, OnDestroy, inject, signal, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
+import { Router, RouterLink, RouterLinkActive, RouterOutlet, NavigationEnd } from '@angular/router';
+import { Subscription } from 'rxjs';
 import { ApiService } from './services/api.service';
 import { I18nService, SUPPORTED_LANGUAGES, I18nPipe, LocaleDatePipe } from './services/i18n.service';
 import {
@@ -83,7 +84,27 @@ export class App implements OnInit, OnDestroy {
   }
 
   private pollInterval: any = null;
+  private navSub: Subscription | null = null;
   private keydownHandler = (e: KeyboardEvent) => this.handleGlobalKeydown(e);
+
+  private enforcePortalCustomerRoute(url: string): void {
+    if (this.api.currentUser()?.user_type === 'PORTAL_CUSTOMER') {
+      const cleanUrl = url.split('?')[0];
+      const isPortalRoute =
+        cleanUrl === '/servicedesk' ||
+        (cleanUrl.startsWith('/servicedesk/') && !cleanUrl.startsWith('/servicedesk/agent'));
+      const isAllowed =
+        isPortalRoute ||
+        cleanUrl.startsWith('/login') ||
+        cleanUrl.startsWith('/setup') ||
+        cleanUrl.startsWith('/profile') ||
+        cleanUrl.startsWith('/preferences') ||
+        cleanUrl.startsWith('/settings/preferences');
+      if (!isAllowed) {
+        this.router.navigate(['/servicedesk']);
+      }
+    }
+  }
 
   async ngOnInit(): Promise<void> {
     try {
@@ -96,13 +117,20 @@ export class App implements OnInit, OnDestroy {
       } else if (!this.api.currentUser()) {
         await this.router.navigate(['/login']);
       } else {
-        await this.api.loadReferenceData();
-        await this.api.refreshMentions();
+        this.enforcePortalCustomerRoute(this.router.url);
+
+        if (this.api.currentUser()?.user_type !== 'PORTAL_CUSTOMER') {
+          await this.api.loadReferenceData();
+          await this.api.refreshMentions();
+        }
         await this.api.refreshNotifications();
 
         this.pollInterval = setInterval(async () => {
-          if (this.api.currentUser()) {
-            await this.api.refreshMentions();
+          const cur = this.api.currentUser();
+          if (cur) {
+            if (cur.user_type !== 'PORTAL_CUSTOMER') {
+              await this.api.refreshMentions();
+            }
             await this.api.refreshNotifications();
           }
         }, 15000);
@@ -110,6 +138,12 @@ export class App implements OnInit, OnDestroy {
     } catch {
       // backend might not be reachable yet
     }
+
+    this.navSub = this.router.events.subscribe((event) => {
+      if (event instanceof NavigationEnd) {
+        this.enforcePortalCustomerRoute(event.urlAfterRedirects || event.url);
+      }
+    });
 
     if (typeof window !== 'undefined') {
       window.addEventListener('keydown', this.keydownHandler);
@@ -119,6 +153,9 @@ export class App implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     if (this.pollInterval) {
       clearInterval(this.pollInterval);
+    }
+    if (this.navSub) {
+      this.navSub.unsubscribe();
     }
     if (typeof window !== 'undefined') {
       window.removeEventListener('keydown', this.keydownHandler);
