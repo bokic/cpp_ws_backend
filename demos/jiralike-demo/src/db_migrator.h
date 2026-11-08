@@ -11,7 +11,7 @@
 
 namespace db {
 
-static constexpr int LATEST_SCHEMA_VERSION = 26;
+static constexpr int LATEST_SCHEMA_VERSION = 27;
 
 struct migration_step {
     int version;
@@ -2432,6 +2432,20 @@ CREATE INDEX IF NOT EXISTS idx_work_items_cust_org ON work_items(customer_organi
 ALTER TABLE comments ADD COLUMN is_internal INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_comments_is_internal ON comments(work_item_id, is_internal);
 )SQL"
+        },
+        {
+            27,
+            "db/migrations/027_custom_field_user_picker_grantees.sql",
+            "Custom Field User Picker Grantees and work_item_custom_fields view",
+            R"SQL(
+CREATE VIEW IF NOT EXISTS work_item_custom_fields AS
+SELECT id, work_item_id, custom_field_id,
+       CASE
+         WHEN user_value_id IS NOT NULL AND user_value_id > 0 THEN CAST(user_value_id AS TEXT)
+         ELSE COALESCE(text_value, '')
+       END AS value
+FROM custom_field_values;
+)SQL"
         }
     };
     return steps;
@@ -2523,6 +2537,12 @@ inline void ensure_storage_and_migrate(const std::string &db_path, const std::st
             conn.exec("ALTER TABLE customer_organization_members ADD COLUMN added_at TEXT NOT NULL DEFAULT '';");
             conn.exec("UPDATE customer_organization_members SET added_at = datetime('now') WHERE added_at = '';");
         }
+    } catch (...) {
+    }
+
+    // Ensure work_item_custom_fields view exists
+    try {
+        conn.exec("CREATE VIEW IF NOT EXISTS work_item_custom_fields AS SELECT id, work_item_id, custom_field_id, CASE WHEN user_value_id IS NOT NULL AND user_value_id > 0 THEN CAST(user_value_id AS TEXT) ELSE COALESCE(text_value, '') END AS value FROM custom_field_values;");
     } catch (...) {
     }
 }

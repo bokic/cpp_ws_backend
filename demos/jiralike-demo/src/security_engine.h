@@ -92,7 +92,8 @@ inline bool user_matches_grant(db::sqlite_db &conn,
                                int project_id,
                                int reporter_id = 0,
                                int assignee_id = 0,
-                               int project_lead_id = 0) {
+                               int project_lead_id = 0,
+                               int work_item_id = 0) {
     if (user_id <= 0) return false;
 
     if (grantee_type == "anyone") {
@@ -166,6 +167,62 @@ inline bool user_matches_grant(db::sqlite_db &conn,
         return lead > 0 && user_id == lead;
     }
 
+    if (grantee_type == "custom_field" && work_item_id > 0) {
+        // Query work_item_custom_fields for the custom field matching grantee_value
+        try {
+            auto cf_stmt = conn.prepare(R"SQL(
+                SELECT wicf.value FROM work_item_custom_fields wicf
+                INNER JOIN custom_fields cf ON cf.id = wicf.custom_field_id
+                WHERE wicf.work_item_id = ? AND (CAST(cf.id AS TEXT) = ? OR lower(cf.name) = lower(?) OR lower(cf.field_key) = lower(?))
+                LIMIT 1;
+            )SQL");
+            cf_stmt.bind_int(1, work_item_id);
+            cf_stmt.bind_text(2, grantee_value);
+            cf_stmt.bind_text(3, grantee_value);
+            cf_stmt.bind_text(4, grantee_value);
+            if (cf_stmt.step() == SQLITE_ROW) {
+                std::string val = cf_stmt.column_text(0);
+                if (val == std::to_string(user_id)) {
+                    return true;
+                }
+                auto ustmt = conn.prepare("SELECT username FROM users WHERE id = ?;");
+                ustmt.bind_int(1, user_id);
+                if (ustmt.step() == SQLITE_ROW) {
+                    if (to_lower_ascii(ustmt.column_text(0)) == to_lower_ascii(val)) {
+                        return true;
+                    }
+                }
+            }
+        } catch (...) {
+            try {
+                auto cf_stmt = conn.prepare(R"SQL(
+                    SELECT COALESCE(CASE WHEN cfv.user_value_id > 0 THEN CAST(cfv.user_value_id AS TEXT) ELSE cfv.text_value END, '')
+                    FROM custom_field_values cfv
+                    INNER JOIN custom_fields cf ON cf.id = cfv.custom_field_id
+                    WHERE cfv.work_item_id = ? AND (CAST(cf.id AS TEXT) = ? OR lower(cf.name) = lower(?) OR lower(cf.field_key) = lower(?))
+                    LIMIT 1;
+                )SQL");
+                cf_stmt.bind_int(1, work_item_id);
+                cf_stmt.bind_text(2, grantee_value);
+                cf_stmt.bind_text(3, grantee_value);
+                cf_stmt.bind_text(4, grantee_value);
+                if (cf_stmt.step() == SQLITE_ROW) {
+                    std::string val = cf_stmt.column_text(0);
+                    if (val == std::to_string(user_id)) {
+                        return true;
+                    }
+                    auto ustmt = conn.prepare("SELECT username FROM users WHERE id = ?;");
+                    ustmt.bind_int(1, user_id);
+                    if (ustmt.step() == SQLITE_ROW) {
+                        if (to_lower_ascii(ustmt.column_text(0)) == to_lower_ascii(val)) {
+                            return true;
+                        }
+                    }
+                }
+            } catch (...) {}
+        }
+    }
+
     return false;
 }
 
@@ -174,7 +231,8 @@ inline bool has_permission(db::sqlite_db &conn,
                            int project_id,
                            const std::string &perm_key,
                            int reporter_id = 0,
-                           int assignee_id = 0) {
+                           int assignee_id = 0,
+                           int work_item_id = 0) {
     if (user_id <= 0) return false;
 
     std::string user_role;
@@ -220,7 +278,7 @@ inline bool has_permission(db::sqlite_db &conn,
     while (stmt.step() == SQLITE_ROW) {
         std::string g_type = stmt.column_text(0);
         std::string g_val  = stmt.column_text(1);
-        if (user_matches_grant(conn, user_id, user_role, g_type, g_val, project_id, reporter_id, assignee_id, lead_id)) {
+        if (user_matches_grant(conn, user_id, user_role, g_type, g_val, project_id, reporter_id, assignee_id, lead_id, work_item_id)) {
             return true;
         }
     }
@@ -233,7 +291,8 @@ inline bool can_access_security_level(db::sqlite_db &conn,
                                       int project_id,
                                       int security_level_id,
                                       int reporter_id = 0,
-                                      int assignee_id = 0) {
+                                      int assignee_id = 0,
+                                      int work_item_id = 0) {
     if (security_level_id <= 0) {
         return true;
     }
@@ -279,7 +338,7 @@ inline bool can_access_security_level(db::sqlite_db &conn,
         has_grants = true;
         std::string g_type = stmt.column_text(0);
         std::string g_val  = stmt.column_text(1);
-        if (user_matches_grant(conn, user_id, user_role, g_type, g_val, project_id, reporter_id, assignee_id, lead_id)) {
+        if (user_matches_grant(conn, user_id, user_role, g_type, g_val, project_id, reporter_id, assignee_id, lead_id, work_item_id)) {
             return true;
         }
     }
@@ -293,12 +352,20 @@ inline std::string build_security_filter(db::sqlite_db &conn, int user_id, const
     }
 
     std::string user_role;
+    std::string user_type = "INTERNAL";
+    std::string username;
     {
-        auto ustmt = conn.prepare("SELECT role FROM users WHERE id = ?;");
+        auto ustmt = conn.prepare("SELECT role, COALESCE(user_type, 'INTERNAL'), COALESCE(username, '') FROM users WHERE id = ?;");
         ustmt.bind_int(1, user_id);
         if (ustmt.step() == SQLITE_ROW) {
             user_role = ustmt.column_text(0);
+            user_type = ustmt.column_text(1);
+            username  = ustmt.column_text(2);
         }
+    }
+
+    if (user_type == "PORTAL_CUSTOMER") {
+        return "(1=0)";
     }
 
     if (user_is_admin(conn, user_id, user_role)) {
@@ -311,10 +378,15 @@ inline std::string build_security_filter(db::sqlite_db &conn, int user_id, const
         if (c == '\'') u_role_esc += "''";
         else u_role_esc += c;
     }
+    std::string u_name_esc;
+    for (char c : username) {
+        if (c == '\'') u_name_esc += "''";
+        else u_name_esc += c;
+    }
 
     std::ostringstream sql;
     // 1. Project BROWSE_PROJECT check
-    sql << "(" << item_alias << ".project_id IN (SELECT p.id FROM projects p WHERE p.permission_scheme_id IS NULL OR p.permission_scheme_id IN ("
+    sql << "((" << item_alias << ".project_id IN (SELECT p.id FROM projects p WHERE p.permission_scheme_id IS NULL OR p.permission_scheme_id IN ("
         << "SELECT psg.scheme_id FROM permission_scheme_grants psg WHERE psg.permission_key = 'BROWSE_PROJECT' AND ("
         << "psg.grantee_type = 'anyone' "
         << "OR (psg.grantee_type = 'group' AND psg.grantee_value IN (SELECT g.name FROM user_groups g JOIN user_group_members ugm ON g.id = ugm.group_id WHERE ugm.user_id = " << uid_str << ")) "
@@ -327,8 +399,11 @@ inline std::string build_security_filter(db::sqlite_db &conn, int user_id, const
         << "OR (lower(psg.grantee_value) IN ('product managers','project manager') AND lower('" << u_role_esc << "') IN ('project manager','product manager')) "
         << "OR (lower(psg.grantee_value) IN ('viewers','viewer') AND lower('" << u_role_esc << "') = 'viewer')"
         << ")) "
-        << "OR (psg.grantee_type = 'user' AND psg.grantee_value = '" << uid_str << "')"
-        << ")))) AND ";
+        << "OR (psg.grantee_type = 'user' AND (psg.grantee_value = '" << uid_str << "' OR lower(psg.grantee_value) = lower('" << u_name_esc << "'))) "
+        << "OR ((psg.grantee_type = 'reporter' OR (psg.grantee_type = 'dynamic' AND lower(psg.grantee_value) = 'reporter')) AND " << item_alias << ".reporter_id = " << uid_str << ") "
+        << "OR ((psg.grantee_type = 'assignee' OR (psg.grantee_type = 'dynamic' AND lower(psg.grantee_value) = 'assignee')) AND " << item_alias << ".assignee_id = " << uid_str << ") "
+        << "OR ((psg.grantee_type = 'lead' OR (psg.grantee_type = 'dynamic' AND lower(psg.grantee_value) = 'lead')) AND p.lead_user_id = " << uid_str << ")"
+        << ")))) OR EXISTS (SELECT 1 FROM permission_scheme_grants psg JOIN projects p ON p.id = " << item_alias << ".project_id AND (p.permission_scheme_id = psg.scheme_id OR (p.permission_scheme_id IS NULL AND psg.scheme_id = 1)) JOIN custom_fields cf ON (CAST(cf.id AS TEXT) = psg.grantee_value OR lower(cf.name) = lower(psg.grantee_value) OR lower(cf.field_key) = lower(psg.grantee_value)) JOIN custom_field_values cfv ON cfv.custom_field_id = cf.id AND cfv.work_item_id = " << item_alias << ".id WHERE psg.permission_key = 'BROWSE_PROJECT' AND psg.grantee_type = 'custom_field' AND (cfv.user_value_id = " << uid_str << " OR cfv.text_value = '" << uid_str << "' OR ('" << u_name_esc << "' <> '' AND lower(cfv.text_value) = lower('" << u_name_esc << "'))))) AND ";
 
     // 2. Issue Security Level check
     sql << "("
@@ -347,10 +422,11 @@ inline std::string build_security_filter(db::sqlite_db &conn, int user_id, const
         << "OR (lower(slg.grantee_value) IN ('product managers','project manager') AND lower('" << u_role_esc << "') IN ('project manager','product manager')) "
         << "OR (lower(slg.grantee_value) IN ('viewers','viewer') AND lower('" << u_role_esc << "') = 'viewer')"
         << ")) "
-        << "OR (slg.grantee_type = 'user' AND slg.grantee_value = '" << uid_str << "') "
-        << "OR ((slg.grantee_type = 'reporter' OR (slg.grantee_type = 'dynamic' AND slg.grantee_value = 'reporter')) AND " << item_alias << ".reporter_id = " << uid_str << ") "
-        << "OR ((slg.grantee_type = 'assignee' OR (slg.grantee_type = 'dynamic' AND slg.grantee_value = 'assignee')) AND " << item_alias << ".assignee_id = " << uid_str << ") "
-        << "OR ((slg.grantee_type = 'lead' OR (slg.grantee_type = 'dynamic' AND slg.grantee_value = 'lead')) AND EXISTS (SELECT 1 FROM projects prj WHERE prj.id = " << item_alias << ".project_id AND prj.lead_user_id = " << uid_str << "))"
+        << "OR (slg.grantee_type = 'user' AND (slg.grantee_value = '" << uid_str << "' OR lower(slg.grantee_value) = lower('" << u_name_esc << "'))) "
+        << "OR ((slg.grantee_type = 'reporter' OR (slg.grantee_type = 'dynamic' AND lower(slg.grantee_value) = 'reporter')) AND " << item_alias << ".reporter_id = " << uid_str << ") "
+        << "OR ((slg.grantee_type = 'assignee' OR (slg.grantee_type = 'dynamic' AND lower(slg.grantee_value) = 'assignee')) AND " << item_alias << ".assignee_id = " << uid_str << ") "
+        << "OR ((slg.grantee_type = 'lead' OR (slg.grantee_type = 'dynamic' AND lower(slg.grantee_value) = 'lead')) AND EXISTS (SELECT 1 FROM projects prj WHERE prj.id = " << item_alias << ".project_id AND prj.lead_user_id = " << uid_str << ")) "
+        << "OR (slg.grantee_type = 'custom_field' AND EXISTS (SELECT 1 FROM custom_field_values cfv JOIN custom_fields cf ON cf.id = cfv.custom_field_id WHERE cfv.work_item_id = " << item_alias << ".id AND (CAST(cf.id AS TEXT) = slg.grantee_value OR lower(cf.name) = lower(slg.grantee_value) OR lower(cf.field_key) = lower(slg.grantee_value)) AND (cfv.user_value_id = " << uid_str << " OR cfv.text_value = '" << uid_str << "' OR ('" << u_name_esc << "' <> '' AND lower(cfv.text_value) = lower('" << u_name_esc << "')))))"
         << "))";
 
     return sql.str();

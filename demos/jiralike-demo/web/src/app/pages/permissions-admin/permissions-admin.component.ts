@@ -85,10 +85,11 @@ export class PermissionsAdminComponent implements OnInit {
   // Grant Modal
   showGrantModal = signal<boolean>(false);
   grantTargetPermKey = signal<string>('');
-  grantType = signal<'role' | 'group' | 'dynamic' | 'user' | 'anyone'>('role');
+  grantType = signal<'role' | 'group' | 'dynamic' | 'user' | 'anyone' | 'custom_field'>('role');
   grantRoleValue = signal<string>('Developers');
   grantGroupValue = signal<string>('jira-software-users');
   grantDynamicValue = signal<string>('assignee');
+  grantCustomFieldValue = signal<string>('');
   grantUserId = signal<number | null>(null);
 
   // Security Schemes
@@ -107,11 +108,22 @@ export class PermissionsAdminComponent implements OnInit {
   // Security Level Grant Modal
   showSecGrantModal = signal<boolean>(false);
   secGrantLevelId = signal<number | null>(null);
-  secGrantType = signal<'role' | 'group' | 'dynamic' | 'user' | 'anyone'>('role');
+  secGrantType = signal<'role' | 'group' | 'dynamic' | 'user' | 'anyone' | 'custom_field'>('role');
   secGrantRole = signal<string>('Developers');
   secGrantGroup = signal<string>('jira-software-users');
   secGrantDynamic = signal<string>('assignee');
+  secGrantCustomField = signal<string>('');
   secGrantUserId = signal<number | null>(null);
+
+  readonly userPickerCustomFields = computed(() =>
+    this.api.customFields().filter(
+      (cf) =>
+        cf.field_type === 'user_picker_single' ||
+        cf.field_type === 'user_picker_multi' ||
+        (cf as any).type === 'user_picker_single' ||
+        (cf as any).type === 'user_picker_multi'
+    )
+  );
 
   // User Groups
   userGroups = signal<UserGroup[]>([]);
@@ -153,6 +165,9 @@ export class PermissionsAdminComponent implements OnInit {
         this.loadUserGroups(),
         this.loadTokens(),
         this.loadProjectDetails(),
+        this.api.customFields().length === 0
+          ? this.api.getCustomFields().then((cfs) => this.api.customFields.set(cfs))
+          : Promise.resolve(),
       ]);
     } catch (err: any) {
       this.errorMsg.set(err?.message || 'Failed to load directory and security data');
@@ -219,6 +234,10 @@ export class PermissionsAdminComponent implements OnInit {
 
   openGrantModal(permKey: string): void {
     this.grantTargetPermKey.set(permKey);
+    const cfs = this.userPickerCustomFields();
+    if (cfs.length > 0 && !this.grantCustomFieldValue()) {
+      this.grantCustomFieldValue.set(cfs[0].name);
+    }
     this.showGrantModal.set(true);
   }
 
@@ -232,6 +251,7 @@ export class PermissionsAdminComponent implements OnInit {
     else if (type === 'group') val = this.grantGroupValue();
     else if (type === 'dynamic') val = this.grantDynamicValue();
     else if (type === 'user') val = String(this.grantUserId() || '');
+    else if (type === 'custom_field') val = this.grantCustomFieldValue();
     else if (type === 'anyone') val = '*';
 
     if (!val) return;
@@ -344,6 +364,10 @@ export class PermissionsAdminComponent implements OnInit {
 
   openSecGrantModal(levelId: number): void {
     this.secGrantLevelId.set(levelId);
+    const cfs = this.userPickerCustomFields();
+    if (cfs.length > 0 && !this.secGrantCustomField()) {
+      this.secGrantCustomField.set(cfs[0].name);
+    }
     this.showSecGrantModal.set(true);
   }
 
@@ -358,6 +382,7 @@ export class PermissionsAdminComponent implements OnInit {
     else if (type === 'group') val = this.secGrantGroup();
     else if (type === 'dynamic') val = this.secGrantDynamic();
     else if (type === 'user') val = String(this.secGrantUserId() || '');
+    else if (type === 'custom_field') val = this.secGrantCustomField();
     else if (type === 'anyone') val = '*';
 
     if (!val) return;
@@ -373,6 +398,24 @@ export class PermissionsAdminComponent implements OnInit {
     } catch (err: any) {
       this.errorMsg.set(err?.message || 'Failed to add security grant');
     }
+  }
+
+  formatGranteeDisplay(type: string, val: string): string {
+    if (type === 'custom_field') {
+      const cf = this.api.customFields().find(
+        (c) =>
+          String(c.id) === String(val) ||
+          c.name.toLowerCase() === String(val).toLowerCase() ||
+          c.field_key.toLowerCase() === String(val).toLowerCase()
+      );
+      if (cf) return cf.name;
+      return val;
+    }
+    if (type === 'user') {
+      const u = this.api.users().find((usr) => String(usr.id) === String(val) || usr.username === val);
+      if (u) return `${u.display_name} (@${u.username})`;
+    }
+    return val;
   }
 
   async revokeSecGrant(levelId: number, grant: IssueSecurityGrant): Promise<void> {

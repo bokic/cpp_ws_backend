@@ -152,8 +152,8 @@
                           <div class="grants-pill-list">
                             @for (g of getGrantsForPerm(pm.key); track g.id) {
                               <span class="grant-pill" [attr.data-type]="g.grantee_type">
-                                <span class="grant-type-label">{{ g.grantee_type }}:</span>
-                                <strong>{{ g.grantee_value }}</strong>
+                                <span class="grant-type-label">{{ g.grantee_type === 'custom_field' ? 'Custom Field' : g.grantee_type }}:</span>
+                                <strong>{{ formatGranteeDisplay(g.grantee_type, g.grantee_value) }}</strong>
                                 <button
                                   type="button"
                                   class="revoke-btn"
@@ -264,8 +264,8 @@
                   <span class="small-text text-muted" style="margin-right: 6px;">Permitted:</span>
                   @for (g of lvl.grants || []; track g.id) {
                     <span class="grant-pill" [attr.data-type]="g.grantee_type">
-                      <span class="grant-type-label">{{ g.grantee_type }}:</span>
-                      <strong>{{ g.grantee_value }}</strong>
+                      <span class="grant-type-label">{{ g.grantee_type === 'custom_field' ? 'Custom Field' : g.grantee_type }}:</span>
+                      <strong>{{ formatGranteeDisplay(g.grantee_type, g.grantee_value) }}</strong>
                       <button
                         type="button"
                         class="revoke-btn"
@@ -654,6 +654,7 @@
           <option value="role">Project Role</option>
           <option value="group">User Group</option>
           <option value="dynamic">Dynamic Role (Reporter, Assignee, Lead)</option>
+          <option value="custom_field">User Picker Custom Field</option>
           <option value="user">Specific User</option>
           <option value="anyone">Anyone Authenticated</option>
         </select>
@@ -688,6 +689,18 @@
             <option value="assignee">Current Assignee</option>
             <option value="reporter">Reporter</option>
             <option value="lead">Project Lead</option>
+          </select>
+        </div>
+      }
+
+      @if (grantType() === 'custom_field') {
+        <div class="form-group">
+          <label>Select User Picker Custom Field</label>
+          <select [(ngModel)]="grantCustomFieldValue">
+            <option value="">— Select User Picker Field —</option>
+            @for (cf of userPickerCustomFields(); track cf.id) {
+              <option [value]="cf.name">{{ cf.name }} ({{ cf.field_key }})</option>
+            }
           </select>
         </div>
       }
@@ -754,6 +767,7 @@
           <option value="role">Project Role</option>
           <option value="group">User Group</option>
           <option value="dynamic">Dynamic Role</option>
+          <option value="custom_field">User Picker Custom Field</option>
           <option value="user">Specific User</option>
         </select>
       </div>
@@ -787,6 +801,18 @@
             <option value="reporter">Reporter</option>
             <option value="assignee">Current Assignee</option>
             <option value="lead">Project Lead</option>
+          </select>
+        </div>
+      }
+
+      @if (secGrantType() === 'custom_field') {
+        <div class="form-group">
+          <label>User Picker Custom Field</label>
+          <select [(ngModel)]="secGrantCustomField">
+            <option value="">— Select User Picker Field —</option>
+            @for (cf of userPickerCustomFields(); track cf.id) {
+              <option [value]="cf.name">{{ cf.name }} ({{ cf.field_key }})</option>
+            }
           </select>
         </div>
       }

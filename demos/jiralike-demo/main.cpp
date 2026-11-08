@@ -4274,8 +4274,24 @@ static bool evaluate_transition_conditions(db::sqlite_db &conn,
         } else if (rtype == "permission") {
             if (!u_auth.authenticated) {
                 blocked_reasons.push_back("Condition failed (permission): User must have project permission '" + cfg + "'");
-            } else if (cfg == "Close Issues" && u_auth.role == "Reporter") {
-                blocked_reasons.push_back("Condition failed (permission): Role 'Reporter' does not have 'Close Issues' permission");
+            } else {
+                int p_id = 0, r_id = 0, a_id = item_assignee_id;
+                auto pi = conn.prepare("SELECT project_id, COALESCE(reporter_id, 0), COALESCE(assignee_id, 0) FROM work_items WHERE id = ?;");
+                pi.bind_int(1, item_id);
+                if (pi.step() == SQLITE_ROW) {
+                    p_id = pi.column_int(0);
+                    r_id = pi.column_int(1);
+                    a_id = pi.column_int(2);
+                }
+                std::string perm_key = cfg;
+                if (cfg == "Close Issues" || cfg == "Close Issue") perm_key = "CLOSE_ISSUE";
+                else if (cfg == "Resolve Issues" || cfg == "Resolve Issue") perm_key = "RESOLVE_ISSUE";
+                else if (cfg == "Edit Issues" || cfg == "Edit Issue") perm_key = "EDIT_ISSUE";
+                else if (cfg == "Transition Issues" || cfg == "Transition Issue") perm_key = "TRANSITION_ISSUES";
+
+                if (!security::has_permission(conn, u_auth.id, p_id, perm_key, r_id, a_id, item_id)) {
+                    blocked_reasons.push_back("Condition failed (permission): Role '" + (u_auth.role.empty() ? "User" : u_auth.role) + "' does not have '" + cfg + "' permission");
+                }
             }
         }
     }
@@ -8504,11 +8520,11 @@ static void handle_item_detail(backend::wsworker *worker,
             send_error(worker, header, "401 Unauthorized", "Invalid or expired authorization token");
             return;
         }
-        if (!security::has_permission(conn, u_viewer.id, proj_id, "BROWSE_PROJECT", rep_id, ass_id)) {
+        if (!security::has_permission(conn, u_viewer.id, proj_id, "BROWSE_PROJECT", rep_id, ass_id, item_id)) {
             send_error(worker, header, "403 Forbidden", "You do not have permission to browse this project");
             return;
         }
-        if (sec_id > 0 && !security::can_access_security_level(conn, u_viewer.id, proj_id, sec_id, rep_id, ass_id)) {
+        if (sec_id > 0 && !security::can_access_security_level(conn, u_viewer.id, proj_id, sec_id, rep_id, ass_id, item_id)) {
             send_error(worker, header, "403 Forbidden", "You do not have permission to view this secured issue");
             return;
         }
@@ -8674,7 +8690,7 @@ static void handle_item_detail(backend::wsworker *worker,
     }
 
     if (method == "DELETE") {
-        if (!security::has_permission(conn, u_auth.id, proj_id, "DELETE_ISSUE", rep_id, ass_id)) {
+        if (!security::has_permission(conn, u_auth.id, proj_id, "DELETE_ISSUE", rep_id, ass_id, item_id)) {
             send_error(worker, header, "403 Forbidden", "You do not have permission to delete this issue");
             return;
         }
@@ -8742,14 +8758,14 @@ static void handle_item_detail(backend::wsworker *worker,
         return;
     }
 
-    if (!security::has_permission(conn, u_auth.id, proj_id, "EDIT_ISSUE", rep_id, ass_id)) {
+    if (!security::has_permission(conn, u_auth.id, proj_id, "EDIT_ISSUE", rep_id, ass_id, item_id)) {
         send_error(worker, header, "403 Forbidden", "You do not have permission to edit this issue");
         return;
     }
 
     if (body.has_key("security_level_id")) {
         int new_sec_id = body.get_int("security_level_id", 0);
-        if (new_sec_id > 0 && !security::can_access_security_level(conn, u_auth.id, proj_id, new_sec_id, rep_id, ass_id)) {
+        if (new_sec_id > 0 && !security::can_access_security_level(conn, u_auth.id, proj_id, new_sec_id, rep_id, ass_id, item_id)) {
             send_error(worker, header, "403 Forbidden", "You do not have permission to assign this security level");
             return;
         }
@@ -10268,6 +10284,20 @@ static void handle_item_state_transition(backend::wsworker *worker,
                               : raw_comment;
     int new_res_id = body.has_key("resolution_id") ? body.get_int("resolution_id", 0) : old_res_id;
 
+    if (new_status != old_status) {
+        std::string new_lower = security::to_lower_ascii(new_status);
+        if ((new_lower == "resolved" || new_lower.find("resolve") != std::string::npos) &&
+            !security::has_permission(conn, u_auth.id, project_id, "RESOLVE_ISSUE", old_reporter_id, old_assignee_id, item_id)) {
+            send_error(worker, header, "403 Forbidden", "You do not have permission to resolve this issue");
+            return;
+        }
+        if ((new_lower == "closed" || new_lower.find("close") != std::string::npos) &&
+            !security::has_permission(conn, u_auth.id, project_id, "CLOSE_ISSUE", old_reporter_id, old_assignee_id, item_id)) {
+            send_error(worker, header, "403 Forbidden", "You do not have permission to close this issue");
+            return;
+        }
+    }
+
     // Step 1 & Step 2: Evaluate Conditions and Validators when transitioning state
     if (matched_transition_id > 0) {
         std::vector<std::string> blocked_reasons;
@@ -10644,11 +10674,11 @@ static void handle_item_comments(backend::wsworker *worker,
             ass_id = info_stmt.column_int(3);
         }
     }
-    if (sec_id > 0 && !security::can_access_security_level(conn, u_auth.id, proj_id, sec_id, rep_id, ass_id)) {
+    if (sec_id > 0 && !security::can_access_security_level(conn, u_auth.id, proj_id, sec_id, rep_id, ass_id, item_id)) {
         send_error(worker, header, "403 Forbidden", "You do not have permission to access this secured issue");
         return;
     }
-    if (!security::has_permission(conn, u_auth.id, proj_id, "ADD_COMMENTS", rep_id, ass_id)) {
+    if (!security::has_permission(conn, u_auth.id, proj_id, "ADD_COMMENTS", rep_id, ass_id, item_id)) {
         send_error(worker, header, "403 Forbidden", "You do not have permission to add comments");
         return;
     }
@@ -14433,6 +14463,20 @@ static void handle_my_permissions(backend::wsworker *worker,
 
     auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
     int project_id = args["project_id"].empty() ? 1 : std::atoi(args["project_id"].c_str());
+    int item_id = 0;
+    if (!args["work_item_id"].empty()) item_id = std::atoi(args["work_item_id"].c_str());
+    else if (!args["item_id"].empty()) item_id = std::atoi(args["item_id"].c_str());
+
+    int reporter_id = 0, assignee_id = 0;
+    if (item_id > 0) {
+        auto item_stmt = conn.prepare("SELECT project_id, COALESCE(reporter_id, 0), COALESCE(assignee_id, 0) FROM work_items WHERE id = ?;");
+        item_stmt.bind_int(1, item_id);
+        if (item_stmt.step() == SQLITE_ROW) {
+            project_id = item_stmt.column_int(0);
+            reporter_id = item_stmt.column_int(1);
+            assignee_id = item_stmt.column_int(2);
+        }
+    }
 
     bool is_admin = security::user_is_admin(conn, u_auth.id, u_auth.role);
 
@@ -14447,7 +14491,7 @@ static void handle_my_permissions(backend::wsworker *worker,
 
     auto perms_arr = json::json_value::make_array();
     for (const auto &p : standard_perms) {
-        if (is_admin || security::has_permission(conn, u_auth.id, project_id, p)) {
+        if (is_admin || security::has_permission(conn, u_auth.id, project_id, p, reporter_id, assignee_id, item_id)) {
             perms_arr.add(json::json_value::make_string(p));
         }
     }
@@ -15980,11 +16024,11 @@ static void handle_item_development(backend::wsworker *worker,
             ass_id = info_stmt.column_int(3);
         }
     }
-    if (sec_id > 0 && !security::can_access_security_level(conn, u_viewer.id, proj_id, sec_id, rep_id, ass_id)) {
+    if (sec_id > 0 && !security::can_access_security_level(conn, u_viewer.id, proj_id, sec_id, rep_id, ass_id, item_id)) {
         send_error(worker, header, "403 Forbidden", "You do not have permission to access this secured issue");
         return;
     }
-    if (u_viewer.authenticated && !security::has_permission(conn, u_viewer.id, proj_id, "BROWSE_PROJECT", rep_id, ass_id)) {
+    if (u_viewer.authenticated && !security::has_permission(conn, u_viewer.id, proj_id, "BROWSE_PROJECT", rep_id, ass_id, item_id)) {
         send_error(worker, header, "403 Forbidden", "You do not have BROWSE_PROJECT permission for this project");
         return;
     }

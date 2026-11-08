@@ -322,6 +322,37 @@ inline void route_notification(db::sqlite_db &conn, const NotificationEvent &ev)
                 while (stmt_g.step() == SQLITE_ROW) {
                     recipient_ids.insert(stmt_g.column_int(0));
                 }
+            } else if (r_type == "custom_field" && !r_param.empty() && ev.issue_id > 0) {
+                auto stmt_cf = conn.prepare(R"SQL(
+                    SELECT COALESCE(cfv.user_value_id, 0), COALESCE(cfv.text_value, '')
+                    FROM custom_field_values cfv
+                    INNER JOIN custom_fields cf ON cf.id = cfv.custom_field_id
+                    WHERE cfv.work_item_id = ?
+                      AND (CAST(cf.id AS TEXT) = ? OR lower(cf.name) = lower(?) OR lower(cf.field_key) = lower(?))
+                    LIMIT 1;
+                )SQL");
+                stmt_cf.bind_int(1, ev.issue_id);
+                stmt_cf.bind_text(2, r_param);
+                stmt_cf.bind_text(3, r_param);
+                stmt_cf.bind_text(4, r_param);
+                if (stmt_cf.step() == SQLITE_ROW) {
+                    int cf_uid = stmt_cf.column_int(0);
+                    std::string cf_txt = stmt_cf.column_str(1);
+                    if (cf_uid > 0) {
+                        recipient_ids.insert(cf_uid);
+                    } else if (!cf_txt.empty()) {
+                        int parsed_uid = std::atoi(cf_txt.c_str());
+                        if (parsed_uid > 0) {
+                            recipient_ids.insert(parsed_uid);
+                        } else {
+                            auto stmt_u = conn.prepare("SELECT id FROM users WHERE lower(username) = lower(?);");
+                            stmt_u.bind_text(1, cf_txt);
+                            if (stmt_u.step() == SQLITE_ROW) {
+                                recipient_ids.insert(stmt_u.column_int(0));
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -335,10 +366,10 @@ inline void route_notification(db::sqlite_db &conn, const NotificationEvent &ev)
 
         for (int uid : recipient_ids) {
             // Permission check: ensure user can browse project & view this issue (Step 11 security schemes)
-            if (!security::has_permission(conn, uid, project_id, "BROWSE_PROJECT", reporter_id, assignee_id)) {
+            if (!security::has_permission(conn, uid, project_id, "BROWSE_PROJECT", reporter_id, assignee_id, ev.issue_id)) {
                 continue;
             }
-            if (!security::can_access_security_level(conn, uid, project_id, security_level_id, reporter_id, assignee_id)) {
+            if (!security::can_access_security_level(conn, uid, project_id, security_level_id, reporter_id, assignee_id, ev.issue_id)) {
                 continue;
             }
 

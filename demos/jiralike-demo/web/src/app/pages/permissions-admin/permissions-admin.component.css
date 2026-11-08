@@ -137,6 +137,18 @@
   color: #172b4d;
 }
 
+.grant-pill[data-type="custom_field"] {
+  background: #f3e8ff;
+  border-color: #d8b4fe;
+  color: #6b21a8;
+}
+
+.grant-pill[data-type="user"] {
+  background: #deebff;
+  border-color: #b3d4ff;
+  color: #0747a6;
+}
+
 .grant-pill[data-type="anyone"] {
   background: #e3fcef;
   border-color: #abf5d1;

@@ -1378,7 +1378,7 @@ export interface PermissionGrant {
   id: number;
   scheme_id: number;
   permission_key: string;
-  grantee_type: string; // 'role' | 'group' | 'dynamic' | 'user' | 'anyone'
+  grantee_type: string; // 'role' | 'group' | 'dynamic' | 'custom_field' | 'user' | 'anyone'
   grantee_value: string;
   created_at?: string;
 }
