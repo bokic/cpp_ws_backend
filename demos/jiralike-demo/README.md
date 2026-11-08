@@ -8,6 +8,10 @@ A high-performance, full-featured, enterprise-grade Jira clone powered by a **`c
 
 `jiralike-demo` provides a comprehensive, production-ready implementation of Atlassian Jira workflows, combining the speed and low memory footprint of a native C++23 backend with an intuitive, responsive Angular user interface. It incorporates advanced issue tracking, agile boards, JQL search, workflow graphs, automation rules, ITSM service desks, developer tooling, Gantt roadmaps, enterprise security (SSO/2FA), internationalization (i18n), and rate-limiting governance.
 
+### Architectural Principles & Scope
+- **Free & Open Source**: Designed without artificial commercial licensing tiers, seat metering, or user caps. All accounts have unmetered access governed exclusively by role-based permissions.
+- **Single-Domain Workspace**: Engineered for self-hosted single-domain or intranet deployments. Multi-tenant SaaS organization hierarchies, cross-site domain verification challenges, and external billing administration are intentionally omitted in favor of a lean, high-performance architecture.
+
 ---
 
 ## Complete Feature Matrix
