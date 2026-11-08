@@ -11,7 +11,7 @@
 
 namespace db {
 
-static constexpr int LATEST_SCHEMA_VERSION = 24;
+static constexpr int LATEST_SCHEMA_VERSION = 25;
 
 struct migration_step {
     int version;
@@ -2381,6 +2381,24 @@ CREATE TABLE IF NOT EXISTS user_preferences (
 
 INSERT OR IGNORE INTO user_preferences (user_id, language, timezone, date_format, time_format)
 SELECT id, 'en', 'UTC', 'YYYY-MM-DD', '24h' FROM users;
+)SQL"
+        },
+        {
+            25,
+            "db/migrations/025_component_lead_and_project_default_assignee.sql",
+            "Component Lead and Project Default Assignee Routing",
+            R"SQL(
+ALTER TABLE projects ADD COLUMN default_assignee_type TEXT NOT NULL DEFAULT 'PROJECT_LEAD';
+
+UPDATE components
+SET default_assignee_type = CASE
+    WHEN upper(default_assignee_type) = 'COMPONENT_LEAD' THEN 'COMPONENT_LEAD'
+    WHEN upper(default_assignee_type) = 'PROJECT_DEFAULT' THEN 'PROJECT_DEFAULT'
+    WHEN upper(default_assignee_type) = 'PROJECT_LEAD' THEN 'PROJECT_LEAD'
+    WHEN upper(default_assignee_type) = 'UNASSIGNED' THEN 'UNASSIGNED'
+    ELSE 'PROJECT_DEFAULT'
+END
+WHERE default_assignee_type IS NOT NULL;
 )SQL"
         }
     };

@@ -751,6 +751,8 @@ static void handle_project_detail(backend::wsworker *worker,
         bool has_desc = body.has_key("description");
         std::string description = body.get_string("description");
         int lead_user_id = body.get_int("lead_user_id", 0);
+        bool has_def_assignee = body.has_key("default_assignee_type");
+        std::string default_assignee_type = body.get_string("default_assignee_type", "PROJECT_LEAD");
 
         try {
             db::sqlite_transaction tx(conn);
@@ -759,7 +761,8 @@ static void handle_project_detail(backend::wsworker *worker,
                     name = CASE WHEN ? != '' THEN ? ELSE name END,
                     key = CASE WHEN ? != '' THEN ? ELSE key END,
                     description = CASE WHEN ? != 0 THEN ? ELSE description END,
-                    lead_user_id = CASE WHEN ? > 0 THEN ? ELSE lead_user_id END
+                    lead_user_id = CASE WHEN ? > 0 THEN ? ELSE lead_user_id END,
+                    default_assignee_type = CASE WHEN ? != 0 THEN ? ELSE default_assignee_type END
                 WHERE id = ?;
             )SQL";
 
@@ -772,13 +775,16 @@ static void handle_project_detail(backend::wsworker *worker,
             upd.bind_text(6, description);
             upd.bind_int(7, lead_user_id);
             upd.bind_int(8, lead_user_id);
-            upd.bind_int(9, proj_id);
+            upd.bind_int(9, has_def_assignee ? 1 : 0);
+            upd.bind_text(10, default_assignee_type);
+            upd.bind_int(11, proj_id);
             upd.step_done();
             tx.commit();
 
             auto sel = conn.prepare(R"SQL(
                 SELECT p.id, p.key, p.name, p.description, p.lead_user_id,
-                       COALESCE(u.display_name, ''), p.created_at
+                       COALESCE(u.display_name, ''), p.created_at,
+                       COALESCE(p.default_assignee_type, 'PROJECT_LEAD')
                 FROM projects p
                 LEFT JOIN users u ON u.id = p.lead_user_id
                 WHERE p.id = ?;
@@ -793,6 +799,7 @@ static void handle_project_detail(backend::wsworker *worker,
                 res.add_int("lead_user_id", sel.column_int(4));
                 res.add_str("lead_user_name", sel.column_str(5));
                 res.add_str("created_at", sel.column_str(6));
+                res.add_str("default_assignee_type", sel.column_str(7));
                 send_json(worker, header, "200 OK", res);
                 return;
             } else {

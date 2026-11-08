@@ -8,6 +8,7 @@ import {
   IssueSecurityLevel,
   PRIORITIES,
   PriorityType,
+  ProjectComponent,
   ScreenDef,
   ScreenTab,
   ScreenTabField,
@@ -90,7 +91,7 @@ import {
         <div class="grid-3">
           <div class="form-group">
             <label for="create-project-id">Project</label>
-            <select id="create-project-id" name="project_id" [(ngModel)]="form.project_id">
+            <select id="create-project-id" name="project_id" [(ngModel)]="form.project_id" (change)="onProjectChanged()">
               @for (p of api.projects(); track p.id) {
                 <option [ngValue]="p.id">{{ p.key }} — {{ p.name }}</option>
               }
@@ -178,8 +179,20 @@ import {
           </div>
 
           <div class="form-group">
-            <label for="create-assignee-id">Assignee</label>
-            <select id="create-assignee-id" name="assignee_id" [(ngModel)]="form.assignee_id">
+            <label for="create-assignee-id">
+              Assignee
+              @if (autoAssignedReason()) {
+                <span style="margin-left: 6px; font-size: 0.75rem; background: #0052cc; color: white; padding: 2px 6px; border-radius: 4px; font-weight: normal;">
+                  {{ autoAssignedReason() }}
+                </span>
+              }
+            </label>
+            <select
+              id="create-assignee-id"
+              name="assignee_id"
+              [(ngModel)]="form.assignee_id"
+              (change)="onAssigneeManuallyChanged()"
+            >
               <option [ngValue]="0">— Unassigned —</option>
               @for (u of api.users(); track u.id) {
                 <option [ngValue]="u.id">{{ u.display_name }} ({{ u.role }})</option>
@@ -301,7 +314,7 @@ import {
                   type="button"
                   class="pill"
                   [class.active]="form.component_ids.includes(c.id)"
-                  (click)="toggleId(form.component_ids, c.id)"
+                  (click)="toggleComponent(c)"
                 >
                   🧩 {{ c.name }}
                 </button>
@@ -680,6 +693,77 @@ export class CreateItemComponent implements OnInit {
     }
   }
 
+  readonly autoAssignedReason = signal<string>('');
+  readonly userManuallyChangedAssignee = signal<boolean>(false);
+
+  toggleComponent(c: ProjectComponent): void {
+    this.toggleId(this.form.component_ids, c.id);
+    this.evaluateComponentAutoAssignment();
+  }
+
+  onAssigneeManuallyChanged(): void {
+    this.userManuallyChangedAssignee.set(true);
+    this.autoAssignedReason.set('');
+  }
+
+  onProjectChanged(): void {
+    this.form.component_ids = [];
+    this.form.fix_version_ids = [];
+    this.form.affects_version_ids = [];
+    if (!this.userManuallyChangedAssignee()) {
+      this.evaluateComponentAutoAssignment();
+    }
+  }
+
+  evaluateComponentAutoAssignment(): void {
+    if (this.userManuallyChangedAssignee()) {
+      return;
+    }
+
+    const comps = this.projectComponents();
+    const activeComps = this.form.component_ids
+      .map(id => comps.find(c => c.id === id))
+      .filter((c): c is ProjectComponent => !!c);
+
+    if (activeComps.length > 0) {
+      for (const comp of activeComps) {
+        const routeType = (comp.default_assignee_type || 'PROJECT_DEFAULT').toUpperCase();
+        if (routeType === 'COMPONENT_LEAD' && comp.lead_user_id) {
+          this.form.assignee_id = comp.lead_user_id;
+          this.autoAssignedReason.set('(Auto: Component Lead)');
+          return;
+        } else if (routeType === 'UNASSIGNED') {
+          this.form.assignee_id = 0;
+          this.autoAssignedReason.set('(Auto: Unassigned)');
+          return;
+        } else if (routeType === 'PROJECT_LEAD') {
+          const proj = this.api.projects().find(p => p.id === this.form.project_id);
+          if (proj?.lead_user_id) {
+            this.form.assignee_id = proj.lead_user_id;
+            this.autoAssignedReason.set('(Auto: Project Lead)');
+            return;
+          }
+        } else if (routeType === 'PROJECT_DEFAULT') {
+          break;
+        }
+      }
+    }
+
+    // Fall back to project default policy
+    const proj = this.api.projects().find(p => p.id === this.form.project_id);
+    if (proj) {
+      const projDef = (proj.default_assignee_type || 'PROJECT_LEAD').toUpperCase();
+      if (projDef === 'PROJECT_LEAD' && proj.lead_user_id) {
+        this.form.assignee_id = proj.lead_user_id;
+        this.autoAssignedReason.set('(Auto: Project Lead)');
+        return;
+      }
+    }
+
+    this.form.assignee_id = 0;
+    this.autoAssignedReason.set('');
+  }
+
   projectComponents() {
     return this.api.components().filter((c) => c.project_id === this.form.project_id);
   }
@@ -729,6 +813,7 @@ export class CreateItemComponent implements OnInit {
     } catch {}
 
     await this.loadCreateScreen();
+    this.evaluateComponentAutoAssignment();
   }
 
   typeDescription(t: WorkItemType): string {
@@ -781,7 +866,12 @@ export class CreateItemComponent implements OnInit {
     this.errorMsg.set('');
 
     try {
-      const created = await this.api.createItem(this.form);
+      const payload = {
+        ...this.form,
+        manual_assignee: this.userManuallyChangedAssignee(),
+        auto_assigned: !this.userManuallyChangedAssignee() && !!this.autoAssignedReason(),
+      };
+      const created = await this.api.createItem(payload);
       for (const file of this.selectedFiles()) {
         await this.api.uploadAttachment(created.key, file);
       }

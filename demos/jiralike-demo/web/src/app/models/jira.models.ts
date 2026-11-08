@@ -93,6 +93,7 @@ export interface Project {
   issue_type_scheme_id?: number;
   issue_type_scheme_name?: string;
   total_items?: number;
+  default_assignee_type?: 'PROJECT_LEAD' | 'UNASSIGNED';
   created_at?: string;
 }
 

@@ -118,6 +118,14 @@ import {
                         <button
                           type="button"
                           class="btn btn-ghost btn-sm"
+                          title="Edit Component"
+                          (click)="startEditComponent(c)"
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          type="button"
+                          class="btn btn-ghost btn-sm"
                           (click)="deleteComponent(c)"
                         >
                           🗑
@@ -131,8 +139,13 @@ import {
           </div>
 
           <div class="detail-sidebar">
-            <form (ngSubmit)="createComponent()" class="card-panel">
-              <h3>Add Component</h3>
+            <form (ngSubmit)="saveComponent()" class="card-panel">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <h3 style="margin: 0;">{{ editingComponent() ? 'Edit Component' : 'Add Component' }}</h3>
+                @if (editingComponent()) {
+                  <button type="button" class="btn btn-ghost btn-sm" (click)="cancelEditComponent()">✕ Cancel</button>
+                }
+              </div>
               <div class="form-group">
                 <label for="comp-name">Component Name *</label>
                 <input
@@ -177,7 +190,7 @@ import {
                 </select>
               </div>
               <button type="submit" class="btn btn-primary" style="width: 100%;">
-                + Create Component
+                {{ editingComponent() ? '✓ Save Component' : '+ Create Component' }}
               </button>
             </form>
           </div>
@@ -534,13 +547,22 @@ import {
                     </select>
                   </div>
                   <div class="form-group">
+                    <label>Default Assignee Routing</label>
+                    <select [(ngModel)]="editProjectForm.default_assignee_type" name="p_def_assignee">
+                      <option value="PROJECT_LEAD">Project Lead</option>
+                      <option value="UNASSIGNED">Unassigned</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="grid-2">
+                  <div class="form-group">
                     <label>Category</label>
                     <input type="text" [(ngModel)]="editProjectForm.project_category" name="p_cat" placeholder="e.g. Software, Core" />
                   </div>
-                </div>
-                <div class="form-group">
-                  <label>URL</label>
-                  <input type="url" [(ngModel)]="editProjectForm.url" name="p_url" placeholder="https://..." />
+                  <div class="form-group">
+                    <label>URL</label>
+                    <input type="url" [(ngModel)]="editProjectForm.url" name="p_url" placeholder="https://..." />
+                  </div>
                 </div>
                 <div class="form-group">
                   <label>Description</label>
@@ -624,6 +646,52 @@ export class ProjectSettingsComponent implements OnInit {
   onProjectChange(pid: number): void {
     this.selectedProjectId.set(Number(pid));
     this.releaseNotes.set(null);
+    this.cancelEditComponent();
+    this.loadProjectEditForm();
+  }
+
+  readonly editingComponent = signal<ProjectComponent | null>(null);
+
+  startEditComponent(c: ProjectComponent): void {
+    this.editingComponent.set(c);
+    this.newComponent = {
+      name: c.name,
+      description: c.description || '',
+      lead_user_id: c.lead_user_id || null,
+      default_assignee_type: (c.default_assignee_type || 'COMPONENT_LEAD').toUpperCase(),
+    };
+  }
+
+  cancelEditComponent(): void {
+    this.editingComponent.set(null);
+    this.newComponent = {
+      name: '',
+      description: '',
+      lead_user_id: null,
+      default_assignee_type: 'COMPONENT_LEAD',
+    };
+  }
+
+  async saveComponent(): Promise<void> {
+    if (!this.newComponent.name.trim()) return;
+    const editing = this.editingComponent();
+    if (editing) {
+      this.errorMsg.set('');
+      try {
+        await this.api.updateComponent(editing.id, {
+          name: this.newComponent.name.trim(),
+          description: this.newComponent.description.trim(),
+          lead_user_id: this.newComponent.lead_user_id,
+          default_assignee_type: this.newComponent.default_assignee_type,
+        });
+        this.cancelEditComponent();
+        this.showToast('Component updated');
+      } catch (e) {
+        this.errorMsg.set((e as Error).message);
+      }
+    } else {
+      await this.createComponent();
+    }
   }
 
   async createComponent(): Promise<void> {
@@ -762,6 +830,7 @@ export class ProjectSettingsComponent implements OnInit {
     key: '',
     description: '',
     lead_user_id: null as number | null,
+    default_assignee_type: 'PROJECT_LEAD' as 'PROJECT_LEAD' | 'UNASSIGNED',
     url: '',
     project_category: '',
   };
@@ -774,6 +843,7 @@ export class ProjectSettingsComponent implements OnInit {
         key: cur.key,
         description: cur.description || '',
         lead_user_id: cur.lead_user_id || null,
+        default_assignee_type: (cur.default_assignee_type as 'PROJECT_LEAD' | 'UNASSIGNED') || 'PROJECT_LEAD',
         url: '',
         project_category: '',
       };
@@ -790,6 +860,7 @@ export class ProjectSettingsComponent implements OnInit {
         key: this.editProjectForm.key.trim().toUpperCase(),
         description: this.editProjectForm.description.trim(),
         lead_user_id: this.editProjectForm.lead_user_id || undefined,
+        default_assignee_type: this.editProjectForm.default_assignee_type,
         url: this.editProjectForm.url.trim(),
         project_category: this.editProjectForm.project_category.trim(),
       });

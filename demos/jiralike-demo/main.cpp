@@ -1235,7 +1235,8 @@ static void handle_projects(backend::wsworker *worker,
                    (SELECT COUNT(*) FROM versions v WHERE v.project_id = p.id) AS version_count,
                    COALESCE(p.permission_scheme_id, 1),
                    COALESCE(p.security_scheme_id, 1),
-                   COALESCE(p.notification_scheme_id, 1)
+                   COALESCE(p.notification_scheme_id, 1),
+                   COALESCE(p.default_assignee_type, 'PROJECT_LEAD')
             FROM projects p
             LEFT JOIN users u ON u.id = p.lead_user_id
             ORDER BY p.id ASC;
@@ -1258,6 +1259,7 @@ static void handle_projects(backend::wsworker *worker,
             p.add_int("permission_scheme_id", stmt.column_int(12));
             p.add_int("security_scheme_id", stmt.column_int(13));
             p.add_int("notification_scheme_id", stmt.column_int(14));
+            p.add_str("default_assignee_type", stmt.column_str(15));
             arr.add(std::move(p));
         }
         send_json(worker, header, "200 OK", arr);
@@ -1280,6 +1282,7 @@ static void handle_projects(backend::wsworker *worker,
     std::string name = body.get_string("name");
     std::string desc = body.get_string("description");
     int scheme_id = body.get_int("issue_type_scheme_id", 1);
+    std::string default_assignee_type = body.get_string("default_assignee_type", "PROJECT_LEAD");
     if (key.empty() || name.empty()) {
         send_error(worker, header, "400 Bad Request", "Project key and name are required");
         return;
@@ -1290,14 +1293,15 @@ static void handle_projects(backend::wsworker *worker,
     {
         db::sqlite_transaction tx(conn);
         auto ins = conn.prepare(R"SQL(
-            INSERT INTO projects (key, name, description, lead_user_id, issue_type_scheme_id)
-            VALUES (?, ?, ?, ?, ?);
+            INSERT INTO projects (key, name, description, lead_user_id, issue_type_scheme_id, default_assignee_type)
+            VALUES (?, ?, ?, ?, ?, ?);
         )SQL");
         ins.bind_text(1, key);
         ins.bind_text(2, name);
         ins.bind_text(3, desc);
         ins.bind_int(4, u_auth.id);
         ins.bind_int(5, scheme_id > 0 ? scheme_id : 1);
+        ins.bind_text(6, default_assignee_type);
         ins.step_done();
         pid = static_cast<int>(conn.last_insert_rowid());
         tx.commit();
@@ -1309,6 +1313,7 @@ static void handle_projects(backend::wsworker *worker,
     res.add_str("name", name);
     res.add_str("description", desc);
     res.add_int("issue_type_scheme_id", scheme_id > 0 ? scheme_id : 1);
+    res.add_str("default_assignee_type", default_assignee_type);
     send_json(worker, header, "201 Created", res);
 }
 
@@ -1678,7 +1683,12 @@ static void handle_components(backend::wsworker *worker,
     std::string name = body.get_string("name");
     std::string description = body.get_string("description");
     int lead_user_id = body.get_int("lead_user_id", 0);
-    std::string default_assignee_type = body.get_string("default_assignee_type", "project_lead");
+    std::string default_assignee_type = body.get_string("default_assignee_type", "PROJECT_DEFAULT");
+    for (char &ch : default_assignee_type) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+    if (default_assignee_type != "COMPONENT_LEAD" && default_assignee_type != "PROJECT_LEAD" &&
+        default_assignee_type != "PROJECT_DEFAULT" && default_assignee_type != "UNASSIGNED") {
+        default_assignee_type = "PROJECT_DEFAULT";
+    }
 
     if (name.empty()) {
         send_error(worker, header, "400 Bad Request", "Component name is required");
@@ -1763,7 +1773,12 @@ static void handle_component_detail(backend::wsworker *worker,
     std::string name = body.get_string("name");
     std::string description = body.get_string("description");
     int lead_user_id = body.get_int("lead_user_id", 0);
-    std::string default_assignee_type = body.get_string("default_assignee_type", "project_lead");
+    std::string default_assignee_type = body.get_string("default_assignee_type", "PROJECT_DEFAULT");
+    for (char &ch : default_assignee_type) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+    if (default_assignee_type != "COMPONENT_LEAD" && default_assignee_type != "PROJECT_LEAD" &&
+        default_assignee_type != "PROJECT_DEFAULT" && default_assignee_type != "UNASSIGNED") {
+        default_assignee_type = "PROJECT_DEFAULT";
+    }
 
     if (name.empty()) {
         send_error(worker, header, "400 Bad Request", "Component name is required");
@@ -4886,6 +4901,101 @@ static json::json_value build_item_time_rollup_json(db::sqlite_db &conn, int ite
     obj.add_bool("is_over_estimate", own_orig > 0 && (own_spent + own_rem) > own_orig);
     obj.add_bool("is_rollup_over_estimate", tot_orig > 0 && (tot_spent + tot_rem) > tot_orig);
     return obj;
+}
+
+struct assignee_resolution_result {
+    int assignee_id = 0;
+    std::string rule_source; // "COMPONENT_LEAD", "PROJECT_LEAD", "UNASSIGNED", "PROJECT_DEFAULT"
+    std::string component_name;
+};
+
+static assignee_resolution_result resolve_default_assignee_details(db::sqlite_db &conn, int project_id, const std::vector<int> &component_ids) {
+    assignee_resolution_result res;
+
+    // 1. Evaluate component routing in order of component_ids
+    if (!component_ids.empty()) {
+        for (int cid : component_ids) {
+            if (cid <= 0) continue;
+            auto cstmt = conn.prepare(R"SQL(
+                SELECT c.project_id, c.name, COALESCE(c.lead_user_id, 0),
+                       COALESCE(c.default_assignee_type, 'PROJECT_DEFAULT')
+                FROM components c
+                WHERE c.id = ?;
+            )SQL");
+            cstmt.bind_int(1, cid);
+            if (cstmt.step() == SQLITE_ROW) {
+                if (project_id <= 0) project_id = cstmt.column_int(0);
+                std::string comp_name = cstmt.column_str(1);
+                int comp_lead = cstmt.column_int(2);
+                std::string def_type = cstmt.column_str(3);
+                std::string def_upper;
+                for (char c : def_type) def_upper += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+
+                if (def_upper == "COMPONENT_LEAD") {
+                    if (comp_lead > 0) {
+                        res.assignee_id = comp_lead;
+                        res.rule_source = "COMPONENT_LEAD";
+                        res.component_name = comp_name;
+                        return res;
+                    }
+                } else if (def_upper == "UNASSIGNED") {
+                    res.assignee_id = 0;
+                    res.rule_source = "UNASSIGNED";
+                    res.component_name = comp_name;
+                    return res;
+                } else if (def_upper == "PROJECT_LEAD") {
+                    res.rule_source = "PROJECT_LEAD";
+                    res.component_name = comp_name;
+                    break;
+                } else if (def_upper == "PROJECT_DEFAULT") {
+                    res.component_name = comp_name;
+                    break;
+                }
+            }
+        }
+    }
+
+    // 2. Project default policy
+    if (project_id > 0) {
+        auto pstmt = conn.prepare(R"SQL(
+            SELECT COALESCE(lead_user_id, 0), COALESCE(default_assignee_type, 'PROJECT_LEAD')
+            FROM projects
+            WHERE id = ?;
+        )SQL");
+        pstmt.bind_int(1, project_id);
+        if (pstmt.step() == SQLITE_ROW) {
+            int proj_lead = pstmt.column_int(0);
+            std::string proj_type = pstmt.column_str(1);
+            std::string proj_type_upper;
+            for (char c : proj_type) proj_type_upper += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+
+            if (res.rule_source != "PROJECT_LEAD" && proj_type_upper == "UNASSIGNED") {
+                res.assignee_id = 0;
+                res.rule_source = "UNASSIGNED";
+                return res;
+            }
+            if (proj_lead > 0) {
+                res.assignee_id = proj_lead;
+                if (res.rule_source.empty()) {
+                    res.rule_source = "PROJECT_LEAD";
+                }
+                return res;
+            }
+        }
+    }
+
+    res.assignee_id = 0;
+    return res;
+}
+
+static int resolve_default_assignee(db::sqlite_db &conn, int project_id, const std::vector<int> &component_ids) {
+    return resolve_default_assignee_details(conn, project_id, component_ids).assignee_id;
+}
+
+static int resolve_default_assignee(db::sqlite_db &conn, int project_id, int component_id) {
+    std::vector<int> cids;
+    if (component_id > 0) cids.push_back(component_id);
+    return resolve_default_assignee(conn, project_id, cids);
 }
 
 static void sync_item_components_and_versions(db::sqlite_db &conn,
@@ -8155,26 +8265,14 @@ static void handle_items(backend::wsworker *worker,
         return;
     }
 
-    // Component default assignee auto-routing when assignee_id is not explicitly specified
+    // Component and project default assignee auto-routing when assignee_id is not explicitly specified
     auto comp_ids = body.get_int_array("component_ids");
-    if (assignee_id <= 0 && !comp_ids.empty()) {
-        auto cstmt = conn.prepare(R"SQL(
-            SELECT c.lead_user_id, c.default_assignee_type, p.lead_user_id
-            FROM components c
-            INNER JOIN projects p ON p.id = c.project_id
-            WHERE c.id = ?;
-        )SQL");
-        cstmt.bind_int(1, comp_ids.front());
-        if (cstmt.step() == SQLITE_ROW) {
-            int comp_lead = cstmt.column_int(0);
-            std::string def_type = cstmt.column_str(1);
-            int proj_lead = cstmt.column_int(2);
-            if ((def_type == "component_lead" || def_type == "COMPONENT_LEAD") && comp_lead > 0) {
-                assignee_id = comp_lead;
-            } else if ((def_type == "project_lead" || def_type == "PROJECT_LEAD" || def_type == "project_default" || def_type == "PROJECT_DEFAULT") && proj_lead > 0) {
-                assignee_id = proj_lead;
-            }
-        }
+    bool manual_assignee = body.get_bool("manual_assignee", false);
+    bool auto_assigned_flag = body.get_bool("auto_assigned", false);
+    assignee_resolution_result auto_assign_res;
+    if (!manual_assignee && (assignee_id <= 0 || auto_assigned_flag)) {
+        auto_assign_res = resolve_default_assignee_details(conn, project_id, comp_ids);
+        assignee_id = auto_assign_res.assignee_id;
     }
 
     if (status == "Done" && resolution_id <= 0) {
@@ -8260,6 +8358,13 @@ static void handle_items(backend::wsworker *worker,
 
         // Step 10: Rich text mentions, auto-links, changelog and default watchers
         collaboration::record_changelog(conn, new_item_id, u_auth.id, "Issue", "", "Work item created");
+        if (auto_assign_res.assignee_id > 0) {
+            std::string reason_msg = "Auto-assigned via " + auto_assign_res.rule_source;
+            if (!auto_assign_res.component_name.empty()) {
+                reason_msg += " (" + auto_assign_res.component_name + ")";
+            }
+            collaboration::record_changelog(conn, new_item_id, u_auth.id, "assignee", "Unassigned", reason_msg);
+        }
         collaboration::process_mentions_and_links(conn, new_item_id, 0, u_auth.id, description);
 
         if (reporter_id > 0) {
@@ -8296,6 +8401,13 @@ static void handle_items(backend::wsworker *worker,
         cr_payload.add_str("title", title);
         cr_payload.add_str("status", status);
         cr_payload.add_str("priority", priority);
+        cr_payload.add_int("assignee_id", assignee_id);
+        if (auto_assign_res.assignee_id > 0) {
+            cr_payload.add_str("auto_assigned_rule", auto_assign_res.rule_source);
+            if (!auto_assign_res.component_name.empty()) {
+                cr_payload.add_str("auto_assigned_component", auto_assign_res.component_name);
+            }
+        }
         realtime::get_engine().publish("item_created", cr_payload.to_string(), u_auth.id, u_auth.display_name, new_item_id, item_key);
     } catch (const std::exception &ex) {
         send_error(worker, header, "500 Internal Server Error", ex.what());
@@ -8709,7 +8821,18 @@ static void handle_item_detail(backend::wsworker *worker,
     std::string description = body.get_string("description");
     int parent_id = body.get_int("parent_id", 0);
     int sprint_id = body.get_int("sprint_id", 0);
-    int assignee_id = body.get_int("assignee_id", 0);
+    int assignee_id = body.has_key("assignee_id") ? body.get_int("assignee_id", 0) : old_assignee_id;
+    // Auto-assign component lead if item is currently unassigned and components are updated,
+    // or if explicitly requested via auto_assign_component flag
+    assignee_resolution_result auto_assign_res;
+    if ((old_assignee_id <= 0 && assignee_id <= 0 && body.has_key("component_ids")) ||
+        body.get_bool("auto_assign_component", false)) {
+        auto comp_ids = body.get_int_array("component_ids");
+        auto_assign_res = resolve_default_assignee_details(conn, old_project_id, comp_ids);
+        if (auto_assign_res.assignee_id > 0) {
+            assignee_id = auto_assign_res.assignee_id;
+        }
+    }
     int story_points = body.get_int("story_points", 0);
     int progress = body.get_int("progress", 0);
     std::string start_date = body.get_string("start_date");
@@ -8821,9 +8944,16 @@ static void handle_item_detail(backend::wsworker *worker,
             itsm::on_item_status_changed(conn, item_id, old_status, status);
         }
         if (old_assignee_id != assignee_id) {
+            std::string new_assignee_str = assignee_id > 0 ? std::to_string(assignee_id) : "Unassigned";
+            if (auto_assign_res.assignee_id > 0 && assignee_id == auto_assign_res.assignee_id) {
+                new_assignee_str = "Auto-assigned via " + auto_assign_res.rule_source;
+                if (!auto_assign_res.component_name.empty()) {
+                    new_assignee_str += " (" + auto_assign_res.component_name + ")";
+                }
+            }
             collaboration::record_changelog(conn, item_id, u_auth.id, "assignee",
                 old_assignee_id > 0 ? std::to_string(old_assignee_id) : "Unassigned",
-                assignee_id > 0 ? std::to_string(assignee_id) : "Unassigned");
+                new_assignee_str);
         }
         if (old_sprint_id != sprint_id) {
             collaboration::record_changelog(conn, item_id, u_auth.id, "sprint", std::to_string(old_sprint_id), std::to_string(sprint_id));
