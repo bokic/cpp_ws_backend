@@ -22,8 +22,6 @@ package_jiralike-demo() {
   install -Dm644 "${srcdir}/../../jiralike-demo.service" "$pkgdir/usr/lib/systemd/system/jiralike-demo.service"
   install -Dm644 "${srcdir}/../jiralike-demo.sysusers" "$pkgdir/usr/lib/sysusers.d/jiralike-demo.conf"
   install -Dm644 "${srcdir}/../jiralike-demo.tmpfiles" "$pkgdir/usr/lib/tmpfiles.d/jiralike-demo.conf"
-  mkdir -p "$pkgdir/opt/jiralike-demo/db/migrations"
-  cp -r "${srcdir}/../../db/migrations/"*.sql "$pkgdir/opt/jiralike-demo/db/migrations/"
 }
 
 package_jiralike-demo-config-nginx() {
