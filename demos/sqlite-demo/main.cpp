@@ -1,11 +1,9 @@
 #include "wsserver.h"
 #include "wsworker.h"
 #include "wsroute.h"
-#include "raii_sqlite.h"
-#include "raii_json.h"
+#include "db/db.h"
 
 #include <iostream>
-#include <sstream>
 #include <vector>
 #include <regex>
 #include <list>
@@ -16,82 +14,10 @@
 #include <stdexcept>
 #include <unistd.h>
 #include <fcgio.h>
-
 #include <csignal>
 #include <atomic>
 
-
-static db::sqlite_db &acquire_db_connection(const std::string &db_pathname = "chinook.db")
-{
-    thread_local db::sqlite_db tl_db;
-    if (!tl_db || tl_db.path() != db_pathname) {
-        tl_db.open(db_pathname);
-    } else {
-        tl_db.reset_for_request();
-    }
-    return tl_db;
-}
-
-static bool is_valid_callback(const std::string &callback)
-{
-    if (callback.empty() || callback.size() > 128) {
-        return false;
-    }
-    static const std::regex valid_cb_regex(R"(^[a-zA-Z_$][a-zA-Z0-9_$]*(\.[a-zA-Z_$][a-zA-Z0-9_$]*)*$)");
-    return std::regex_match(callback, valid_cb_regex);
-}
-
-static void wsdatabase_sqlite_write_json(FCGX_Stream *out_stream, const char *server_protocol, const std::string &callback, const char *db_pathname, const char *count_sql, const char *sql, int current_page, int page_size)
-{
-    if (!callback.empty() && !is_valid_callback(callback)) {
-        throw std::invalid_argument("Invalid callback parameter");
-    }
-
-    db::sqlite_db &db = acquire_db_connection(db_pathname);
-
-    auto count_stmt = db.prepare(count_sql);
-    if (count_stmt.step() != SQLITE_ROW) {
-        throw std::runtime_error("Stepping into first record for getting row count FAILED!");
-    }
-    int row_count = count_stmt.column_int(0);
-    count_stmt.reset();
-
-    auto data_stmt = db.prepare(sql);
-    data_stmt.bind_int(1, page_size);
-    data_stmt.bind_int(2, (current_page - 1) * page_size);
-
-    auto json = json::json_value::make_object();
-    auto json_rows = json::json_value::make_array();
-
-    int column_count = -1;
-    while (data_stmt.step() == SQLITE_ROW) {
-        if (column_count == -1) column_count = data_stmt.column_count();
-
-        auto json_row = json::json_value::make_object();
-        for (int col = 0; col < column_count; col++) {
-            const char *col_name = data_stmt.column_name(col);
-            const char *col_val = data_stmt.column_text(col);
-            json_row.add(col_name, json::json_value::make_string(col_val ? col_val : ""));
-        }
-        json_rows.add(std::move(json_row));
-    }
-
-    json.add("rows", std::move(json_rows));
-    json.add("total", json::json_value::make_int((row_count % page_size) ? (row_count / page_size) + 1 : row_count / page_size));
-    json.add("page", json::json_value::make_int(current_page));
-    json.add("records", json::json_value::make_int(row_count));
-
-    const char *json_str = json.to_string();
-    std::string content;
-    if (!callback.empty()) {
-        content = callback + "(" + json_str + ")";
-    } else {
-        content = json_str;
-    }
-
-    FCGX_FPrintF(out_stream, "%s 200 OK\r\nContent-type: application/json\r\nX-Content-Type-Options: nosniff\r\nContent-Length: %d\r\n\r\n%s",
-                 server_protocol, static_cast<int>(content.length()), content.c_str());
-}
+static std::shared_ptr<backend::db::connection_pool<backend::db::sqlite_database>> g_db_pool;
 
 static const std::string &get_header(const std::map<std::string, std::string> &header, const std::string &key)
 {
@@ -100,44 +26,30 @@ static const std::string &get_header(const std::map<std::string, std::string> &h
     return it != header.end() ? it->second : empty_str;
 }
 
+static void send_json_response(FCGX_Stream *out, const std::string &protocol, const std::string &body)
+{
+    FCGX_FPrintF(out, "%s 200 OK\r\nContent-type: application/json\r\nX-Content-Type-Options: nosniff\r\nContent-Length: %d\r\n\r\n%s",
+                 protocol.c_str(), static_cast<int>(body.length()), body.c_str());
+}
+
 static void request_ws_db_tables(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const std::list<std::string> &uri_params)
 {
-    db::sqlite_db &db = acquire_db_connection("chinook.db");
-    auto stmt = db.prepare("SELECT name FROM sqlite_master WHERE type ='table' AND name NOT LIKE 'sqlite_%'");
+    auto conn = g_db_pool->acquire();
 
-    auto json = json::json_value::make_object();
-    auto json_data = json::json_value::make_array();
+    // Use sql_to_json to get tables list and envelope under "data"
+    backend::db::json_object_guard json(json_object_new_object());
+    json_object_object_add(json.get(), "data",
+        backend::db::sql_to_json_object(*conn, "SELECT name FROM sqlite_master WHERE type ='table' AND name NOT LIKE 'sqlite_%'"));
 
-    while (stmt.step() == SQLITE_ROW) {
-        const char *tbl_name = stmt.column_text(0);
-        json_data.add(json::json_value::make_string(tbl_name ? tbl_name : ""));
-    }
-
-    json.add("data", std::move(json_data));
-
-    const char *json_str = json.to_string();
-    FCGX_FPrintF(worker->out(), "%s 200 OK\r\nContent-type: application/json\r\nX-Content-Type-Options: nosniff\r\nContent-Length: %d\r\n\r\n%s",
-                 get_header(header, "SERVER_PROTOCOL").c_str(), static_cast<int>(std::strlen(json_str)), json_str);
+    send_json_response(worker->out(), get_header(header, "SERVER_PROTOCOL"), json.to_string());
 }
 
 static void request_ws_jsGrid_customers(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const std::list<std::string> &uri_params)
 {
     auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
-    const auto &callback = args["callback"];
-    if (!callback.empty() && !is_valid_callback(callback)) {
-        throw std::invalid_argument("Invalid callback parameter");
-    }
-
     int current_page = std::atoi(args["page"].data());
     int page_size = std::atoi(args["rows"].data());
     if (page_size <= 0) throw std::invalid_argument("page_size contains invalid value!");
-
-    db::sqlite_db &db = acquire_db_connection("chinook.db");
-
-    auto count_stmt = db.prepare("SELECT COUNT(*) FROM customers");
-    if (count_stmt.step() != SQLITE_ROW) throw std::runtime_error("Can't step SQL!");
-    int row_count = count_stmt.column_int(0);
-    count_stmt.reset();
 
     std::string sql;
     if (args["sidx"].empty()) {
@@ -155,42 +67,17 @@ static void request_ws_jsGrid_customers(backend::wsworker *worker, const std::ma
         sql = "SELECT * FROM customers ORDER BY " + order + " " + order_dir +  " LIMIT ? OFFSET ?";
     }
 
-    auto stmt = db.prepare(sql);
-    stmt.bind_int(1, page_size);
-    stmt.bind_int(2, (current_page - 1) * page_size);
+    auto conn = g_db_pool->acquire();
+    backend::db::sql_query q{
+        .count_sql = "SELECT COUNT(*) FROM customers",
+        .data_sql = sql,
+        .page = current_page,
+        .page_size = page_size,
+        .callback = args["callback"]
+    };
 
-    auto json = json::json_value::make_object();
-    auto json_rows = json::json_value::make_array();
-    int column_count = -1;
-
-    while (stmt.step() == SQLITE_ROW) {
-        if (column_count == -1) column_count = stmt.column_count();
-
-        auto json_row = json::json_value::make_object();
-        for (int col = 0; col < column_count; col++) {
-            const char *col_name = stmt.column_name(col);
-            const char *col_val = stmt.column_text(col);
-            json_row.add(col_name, json::json_value::make_string(col_val ? col_val : ""));
-        }
-
-        json_rows.add(std::move(json_row));
-    }
-
-    json.add("rows", std::move(json_rows));
-    json.add("total", json::json_value::make_int((row_count % page_size) ? (row_count / page_size) + 1 : row_count / page_size));
-    json.add("page", json::json_value::make_int(current_page));
-    json.add("records", json::json_value::make_int(row_count));
-
-    const char *json_str = json.to_string();
-    std::string content;
-    if (!callback.empty()) {
-        content = callback + "(" + json_str + ")";
-    } else {
-        content = json_str;
-    }
-
-    FCGX_FPrintF(worker->out(), "%s 200 OK\r\nContent-type: application/json\r\nX-Content-Type-Options: nosniff\r\nContent-Length: %d\r\n\r\n%s",
-                 get_header(header, "SERVER_PROTOCOL").c_str(), static_cast<int>(content.length()), content.c_str());
+    std::string body = backend::db::sql_to_json_paginated_string(*conn, q);
+    send_json_response(worker->out(), get_header(header, "SERVER_PROTOCOL"), body);
 }
 
 static void request_ws_jsGrid_artists(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const std::list<std::string> &uri_params)
@@ -216,8 +103,17 @@ static void request_ws_jsGrid_artists(backend::wsworker *worker, const std::map<
         sql = "SELECT artists.ArtistId as 'id', artists.Name as 'Artist', count(DISTINCT albums.AlbumId) as 'Albums', count(DISTINCT tracks.TrackId) as 'Tracks' FROM artists LEFT JOIN albums ON(albums.ArtistId = artists.ArtistId) LEFT JOIN tracks ON(tracks.AlbumId = albums.AlbumId) GROUP BY artists.Name ORDER BY " + order + " " + order_dir + " LIMIT ? OFFSET ?";
     }
 
-    const char *count_sql = "SELECT count(*) FROM artists";
-    wsdatabase_sqlite_write_json(worker->out(), get_header(header, "SERVER_PROTOCOL").c_str(), args["callback"], "chinook.db", count_sql, sql.c_str(), current_page, page_size);
+    auto conn = g_db_pool->acquire();
+    backend::db::sql_query q{
+        .count_sql = "SELECT count(*) FROM artists",
+        .data_sql = sql,
+        .page = current_page,
+        .page_size = page_size,
+        .callback = args["callback"]
+    };
+
+    std::string body = backend::db::sql_to_json_paginated_string(*conn, q);
+    send_json_response(worker->out(), get_header(header, "SERVER_PROTOCOL"), body);
 }
 
 static void request_ws_jsGrid_artist_song_type(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const std::list<std::string> &uri_params)
@@ -226,37 +122,11 @@ static void request_ws_jsGrid_artist_song_type(backend::wsworker *worker, const 
     int id = std::atoi(args["id"].data());
     if (id <= 0) throw std::invalid_argument("Invalid id.");
 
-    db::sqlite_db &db = acquire_db_connection("chinook.db");
-
+    auto conn = g_db_pool->acquire();
     std::string sql = "SELECT genres.Name as 'name', count(DISTINCT tracks.TrackId) as 'hvalue' FROM genres INNER JOIN tracks ON(tracks.GenreId = genres.GenreId) INNER JOIN albums ON(albums.AlbumId = tracks.AlbumId) WHERE albums.ArtistId = ? GROUP BY genres.Name ORDER BY `hvalue` DESC";
-    auto stmt = db.prepare(sql);
-    stmt.bind_int(1, id);
 
-    auto json_rows = json::json_value::make_array();
-    int column_count = -1;
-
-    while (stmt.step() == SQLITE_ROW) {
-        if (column_count == -1) column_count = stmt.column_count();
-
-        auto json_row = json::json_value::make_object();
-        for (int col = 0; col < column_count; col++) {
-            const char *col_name = stmt.column_name(col);
-            if (col != 1) {
-                const char *col_val = stmt.column_text(col);
-                json_row.add(col_name, json::json_value::make_string(col_val ? col_val : ""));
-            } else {
-                int col_val = stmt.column_int(col);
-                json_row.add(col_name, json::json_value::make_int(col_val));
-            }
-        }
-
-        json_rows.add(std::move(json_row));
-    }
-
-    const char *json_str = json_rows.to_string();
-
-    FCGX_FPrintF(worker->out(), "%s 200 OK\r\nContent-type: application/json\r\nContent-Length: %d\r\n\r\n%s",
-                 get_header(header, "SERVER_PROTOCOL").c_str(), static_cast<int>(std::strlen(json_str)), json_str);
+    std::string body = backend::db::sql_to_json_string(*conn, sql, id);
+    send_json_response(worker->out(), get_header(header, "SERVER_PROTOCOL"), body);
 }
 
 static constexpr auto DEFAULT_SOCKET_NAME = ":9000";
@@ -320,6 +190,21 @@ int main(int argc, char *argv[])
             return 1;
         }
     }
+
+    // Initialize connection pool and register with server for graceful shutdown
+    g_db_pool = std::make_shared<backend::db::connection_pool<backend::db::sqlite_database>>(
+        []() {
+            return std::make_unique<backend::db::sqlite_database>("chinook.db");
+        },
+        backend::db::pool_options{
+            .min_size = 2,
+            .max_size = 16,
+            .acquire_timeout = std::chrono::milliseconds(3000),
+            .idle_timeout = std::chrono::milliseconds(60000),
+            .ping_on_acquire = true
+        }
+    );
+    server.register_connection_pool(g_db_pool);
 
     server.init(socket_name.c_str(), backlog, worker_num);
 
