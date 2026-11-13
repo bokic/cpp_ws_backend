@@ -19,6 +19,15 @@ public:
     using std::runtime_error::runtime_error;
 };
 
+enum class column_type {
+    null_value,
+    integer,
+    floating_point,
+    text,
+    blob,
+    timestamp
+};
+
 class row {
 public:
     virtual ~row() = default;
@@ -28,6 +37,11 @@ public:
     virtual size_t column_index(std::string_view name) const = 0;
     virtual bool is_null(size_t index) const = 0;
     virtual bool is_null(std::string_view name) const { return is_null(column_index(name)); }
+
+    virtual column_type get_column_type(size_t index) const {
+        if (is_null(index)) return column_type::null_value;
+        return column_type::text;
+    }
 
     virtual int32_t get_int32(size_t index) const = 0;
     virtual int64_t get_int64(size_t index) const = 0;

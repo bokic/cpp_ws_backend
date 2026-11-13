@@ -30,6 +30,8 @@ add_library(ws_backend STATIC
     src/db/postgres_driver.cpp
     src/db/mysql_driver.h
     src/db/mysql_driver.cpp
+    src/db/sql_to_json.h
+    src/db/sql_to_json.cpp
     src/db/db.h
 )
 
@@ -41,6 +43,7 @@ target_include_directories(ws_backend PUBLIC
 target_link_libraries(ws_backend PUBLIC
     Threads::Threads
     fcgi
+    json-c
 )
 
 include(GNUInstallDirs)
@@ -63,6 +66,7 @@ install(FILES
     src/db/sqlite_driver.h
     src/db/postgres_driver.h
     src/db/mysql_driver.h
+    src/db/sql_to_json.h
     src/db/db.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/backend/db
 )
