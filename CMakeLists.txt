@@ -22,6 +22,15 @@ add_library(ws_backend STATIC
     src/wsthreadpool.h
     src/wsworker.cpp
     src/wsworker.h
+    src/db/database.h
+    src/db/database.cpp
+    src/db/sqlite_driver.h
+    src/db/sqlite_driver.cpp
+    src/db/postgres_driver.h
+    src/db/postgres_driver.cpp
+    src/db/mysql_driver.h
+    src/db/mysql_driver.cpp
+    src/db/db.h
 )
 
 target_include_directories(ws_backend PUBLIC
@@ -47,6 +56,15 @@ install(FILES
     src/wsthreadpool.h
     src/wsworker.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/backend
+)
+
+install(FILES
+    src/db/database.h
+    src/db/sqlite_driver.h
+    src/db/postgres_driver.h
+    src/db/mysql_driver.h
+    src/db/db.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/backend/db
 )
 
 if(BUILD_DEMOS)
