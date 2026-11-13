@@ -260,6 +260,8 @@ void execute_sql_to_json_paginated_sink(
     json_object_object_add(meta.get(), "page_size", json_object_new_int(page_size));
     json_object_object_add(meta.get(), "total_records", json_object_new_int64(total_records));
     json_object_object_add(meta.get(), "total_pages", json_object_new_int64(total_pages));
+    json_object_object_add(meta.get(), "total", json_object_new_int64(total_pages));
+    json_object_object_add(meta.get(), "records", json_object_new_int64(total_records));
 
     std::string meta_str = meta.to_string();
     if (!meta_str.empty() && meta_str.back() == '}') {
@@ -307,6 +309,8 @@ json_object *execute_sql_to_json_paginated_c(
     json_object_object_add(envelope, "page_size", json_object_new_int(page_size));
     json_object_object_add(envelope, "total_records", json_object_new_int64(total_records));
     json_object_object_add(envelope, "total_pages", json_object_new_int64(total_pages));
+    json_object_object_add(envelope, "total", json_object_new_int64(total_pages));
+    json_object_object_add(envelope, "records", json_object_new_int64(total_records));
 
     auto data_res = data_stmt.query();
     if (data_res) {
