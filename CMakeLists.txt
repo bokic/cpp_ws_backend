@@ -43,6 +43,7 @@ target_include_directories(ws_backend PUBLIC
 
 target_link_libraries(ws_backend PUBLIC
     Threads::Threads
+    ${CMAKE_DL_LIBS}
     fcgi
     json-c
     sqlite3

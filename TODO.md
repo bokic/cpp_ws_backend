@@ -1,6 +1,28 @@
 # Project Roadmap & Todos
 
-This document outlines planned architectural enhancements, core features, and design proposals for `cpp_ws_backend`.
+This document outlines architectural enhancements, core features, and design proposals for `cpp_ws_backend`.
+
+---
+
+## Completed Implementations
+
+### 1. Database Connection Pooling (`backend::db::connection_pool`)
+- Thread-safe generic connection pool with configurable min/max size, idle connection recycling, and acquire timeouts.
+- Move-only RAII `pooled_connection` handle returning connection to the pool on scope exit.
+- Liveness check (`ping()`) and graceful server shutdown auto-drain integration.
+
+### 2. Database Abstraction Layer (DAL) (`backend::db`)
+- Type-safe unified database interface (`database`, `statement`, `result_set`, `row`, `transaction`).
+- **SQLite Driver** (`sqlite_database` / `sqlite_db`): Built-in zero-copy and typed queries.
+- **PostgreSQL Driver** (`postgres_database` / `postgres_db`): Dynamically loaded on demand via `dlopen`/`dlsym` (`libpq.so.5` / `libpq.so`). Positional `?` and named `:name` parameter translation to `$1, $2, ...`.
+- **MySQL / MariaDB Driver** (`mysql_database` / `mysql_db`): Dynamically loaded on demand via `dlopen`/`dlsym` (`libmariadb.so.3` / `libmysqlclient.so`). Supports both URI connection strings and key-value formats.
+- **Zero Link-Time Overhead**: Binaries do not link `-lpq` or `-lmysqlclient`, eliminating runtime library dependencies when those drivers are not actively used.
+
+### 3. One-Line SQL to JSON Serialization (`backend::db::sql_to_json`)
+- One-line serialization to FastCGI streams or string buffers.
+- Paginated envelope formatting (`page`, `total`, `records`, `rows`) supporting jqGrid and standard REST grids.
+- Automatic datatype mapping (integers, floats, text, blobs/base64, timestamps, nulls).
+- Optional JSONP callback envelope with identifier validation.
 
 ---
 
