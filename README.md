@@ -145,12 +145,6 @@ For details on architecture, endpoints, and running instructions, see [DEMOS.md]
 
 ---
 
-## Roadmap
-
-Upcoming features and architectural goals are tracked in [TODO.md](TODO.md).
-
----
-
 ## License
 
 This project is licensed under the [LGPL-3.0 License](LICENSE).
