@@ -647,6 +647,64 @@ void sqlite_statement::step_done() {
     }
 }
 
+void sqlite_statement::bind_optional_int(int idx, int val) {
+    if (val <= 0) {
+        bind_null(idx);
+    } else {
+        bind_int(idx, val);
+    }
+}
+
+void sqlite_statement::clear_and_reset() {
+    reset();
+}
+
+int sqlite_statement::column_count() const noexcept {
+    if (!m_holder || !m_holder->stmt) return 0;
+    return sqlite3_column_count(m_holder->stmt);
+}
+
+const char *sqlite_statement::column_name(int col) const noexcept {
+    if (!m_holder || !m_holder->stmt) return nullptr;
+    return sqlite3_column_name(m_holder->stmt, col);
+}
+
+bool sqlite_statement::column_is_null(int col) const noexcept {
+    if (!m_holder || !m_holder->stmt) return true;
+    return sqlite3_column_type(m_holder->stmt, col) == SQLITE_NULL;
+}
+
+int sqlite_statement::column_type(int col) const noexcept {
+    if (!m_holder || !m_holder->stmt) return SQLITE_NULL;
+    return sqlite3_column_type(m_holder->stmt, col);
+}
+
+std::string sqlite_statement::column_str(int col) const {
+    if (!m_holder || !m_holder->stmt) return {};
+    const auto *txt = reinterpret_cast<const char *>(sqlite3_column_text(m_holder->stmt, col));
+    return txt ? std::string(txt) : std::string();
+}
+
+const char *sqlite_statement::column_text(int col) const noexcept {
+    if (!m_holder || !m_holder->stmt) return nullptr;
+    return reinterpret_cast<const char *>(sqlite3_column_text(m_holder->stmt, col));
+}
+
+int sqlite_statement::column_int(int col) const noexcept {
+    if (!m_holder || !m_holder->stmt) return 0;
+    return sqlite3_column_int(m_holder->stmt, col);
+}
+
+int64_t sqlite_statement::column_int64(int col) const noexcept {
+    if (!m_holder || !m_holder->stmt) return 0;
+    return sqlite3_column_int64(m_holder->stmt, col);
+}
+
+double sqlite_statement::column_double(int col) const noexcept {
+    if (!m_holder || !m_holder->stmt) return 0.0;
+    return sqlite3_column_double(m_holder->stmt, col);
+}
+
 // ==================== sqlite_transaction ====================
 
 sqlite_transaction::sqlite_transaction(sqlite_database &db, bool immediate)
@@ -804,6 +862,11 @@ void sqlite_database::execute(std::string_view sql) {
 std::unique_ptr<statement> sqlite_database::prepare(std::string_view sql) {
     if (!m_db) throw db_exception("Database connection is closed");
     return std::make_unique<sqlite_statement>(m_db, sql, m_cache);
+}
+
+sqlite_statement sqlite_database::prepare_stmt(std::string_view sql) const {
+    if (!m_db) throw db_exception("Database connection is closed");
+    return sqlite_statement(m_db, sql, m_cache);
 }
 
 std::unique_ptr<transaction> sqlite_database::begin_transaction() {

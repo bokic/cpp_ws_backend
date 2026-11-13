@@ -166,11 +166,25 @@ public:
     int step();
     void step_done();
     sqlite3_stmt *get() const noexcept { return m_holder ? m_holder->stmt : nullptr; }
+    explicit operator bool() const noexcept { return m_holder && m_holder->stmt != nullptr; }
+
     void bind_int(int idx, int val) { bind(static_cast<size_t>(idx), val); }
     void bind_int64(int idx, int64_t val) { bind(static_cast<size_t>(idx), val); }
     void bind_double(int idx, double val) { bind(static_cast<size_t>(idx), val); }
     void bind_text(int idx, const std::string &val) { bind(static_cast<size_t>(idx), std::string_view(val)); }
     void bind_null(int idx) { bind(static_cast<size_t>(idx), nullptr); }
+    void bind_optional_int(int idx, int val);
+    void clear_and_reset();
+
+    int column_count() const noexcept;
+    const char *column_name(int col) const noexcept;
+    bool column_is_null(int col) const noexcept;
+    int column_type(int col) const noexcept;
+    std::string column_str(int col) const;
+    const char *column_text(int col) const noexcept;
+    int column_int(int col) const noexcept;
+    int64_t column_int64(int col) const noexcept;
+    double column_double(int col) const noexcept;
 
 private:
     int get_param_index(std::string_view name);
@@ -245,6 +259,10 @@ public:
     explicit operator bool() const noexcept { return m_db != nullptr; }
 
     std::unique_ptr<transaction> begin_transaction(bool immediate);
+
+    // Ergonomic direct statement creation
+    sqlite_statement prepare_stmt(std::string_view sql) const;
+    std::shared_ptr<statement_cache> get_cache() const noexcept { return m_cache; }
 
     // Prepared statement cache metrics
     size_t cached_statement_count() const noexcept;

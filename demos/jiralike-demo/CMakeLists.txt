@@ -46,6 +46,5 @@ target_include_directories(jiralike-demo PRIVATE
 
 target_link_libraries(jiralike-demo PRIVATE
     ws_backend
-    sqlite3
     json-c
 )

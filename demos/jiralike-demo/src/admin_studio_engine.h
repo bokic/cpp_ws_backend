@@ -63,21 +63,21 @@ inline std::vector<column_meta> get_table_columns(db::sqlite_db &conn, const std
     return cols;
 }
 
-inline void bind_json_to_statement(sqlite3_stmt *raw_stmt, int idx, json_object *val) {
+inline void bind_json_to_statement(db::sqlite_stmt &stmt, int idx, json_object *val) {
     if (!val || json_object_is_type(val, json_type_null)) {
-        sqlite3_bind_null(raw_stmt, idx);
+        stmt.bind_null(idx);
     } else if (json_object_is_type(val, json_type_boolean)) {
-        sqlite3_bind_int(raw_stmt, idx, json_object_get_boolean(val) ? 1 : 0);
+        stmt.bind_int(idx, json_object_get_boolean(val) ? 1 : 0);
     } else if (json_object_is_type(val, json_type_int)) {
-        sqlite3_bind_int64(raw_stmt, idx, json_object_get_int64(val));
+        stmt.bind_int64(idx, json_object_get_int64(val));
     } else if (json_object_is_type(val, json_type_double)) {
-        sqlite3_bind_double(raw_stmt, idx, json_object_get_double(val));
+        stmt.bind_double(idx, json_object_get_double(val));
     } else if (json_object_is_type(val, json_type_string)) {
         const char *s = json_object_get_string(val);
-        sqlite3_bind_text(raw_stmt, idx, s, -1, SQLITE_TRANSIENT);
+        stmt.bind_text(idx, s ? s : "");
     } else {
         const char *s = json_object_to_json_string_ext(val, JSON_C_TO_STRING_PLAIN);
-        sqlite3_bind_text(raw_stmt, idx, s, -1, SQLITE_TRANSIENT);
+        stmt.bind_text(idx, s ? s : "");
     }
 }
 
@@ -274,7 +274,7 @@ static void handle_admin_table_detail(backend::wsworker *worker,
                 if (qstmt.column_is_null(i)) {
                     row_obj.add_null(cname);
                 } else {
-                    int ctype = sqlite3_column_type(qstmt.get(), i);
+                    int ctype = qstmt.column_type(i);
                     if (ctype == SQLITE_INTEGER) {
                         row_obj.add_int64(cname, qstmt.column_int64(i));
                     } else if (ctype == SQLITE_FLOAT) {
@@ -356,7 +356,7 @@ static void handle_admin_table_detail(backend::wsworker *worker,
             db::sqlite_transaction tx(conn);
             auto ins = conn.prepare(sql.str());
             for (size_t i = 0; i < insert_vals.size(); ++i) {
-                admin_studio::bind_json_to_statement(ins.get(), static_cast<int>(i + 1), insert_vals[i]);
+                admin_studio::bind_json_to_statement(ins, static_cast<int>(i + 1), insert_vals[i]);
             }
             ins.step_done();
             int64_t new_id = conn.last_insert_rowid();
@@ -490,10 +490,10 @@ static void handle_admin_table_row(backend::wsworker *worker,
             auto upd = conn.prepare(sql.str());
             int bidx = 1;
             for (auto *val : set_vals) {
-                admin_studio::bind_json_to_statement(upd.get(), bidx++, val);
+                admin_studio::bind_json_to_statement(upd, bidx++, val);
             }
             for (auto *val : where_vals) {
-                admin_studio::bind_json_to_statement(upd.get(), bidx++, val);
+                admin_studio::bind_json_to_statement(upd, bidx++, val);
             }
             upd.step_done();
             int changes = conn.changes();
@@ -567,7 +567,7 @@ static void handle_admin_table_row(backend::wsworker *worker,
             auto del = conn.prepare(sql.str());
             int bidx = 1;
             for (auto *val : where_vals) {
-                admin_studio::bind_json_to_statement(del.get(), bidx++, val);
+                admin_studio::bind_json_to_statement(del, bidx++, val);
             }
             del.step_done();
             int changes = conn.changes();

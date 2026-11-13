@@ -9,8 +9,22 @@
 - **High Performance & Minimal Resource Footprint**: Native C++ execution with negligible memory and CPU overhead.
 - **Multi-Threaded Architecture**: Configurable thread pool with synchronized worker queues for high-concurrency request handling.
 - **Expressive URI Routing**: Regex-based and literal path routing with HTTP method filtering (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`) and capture parameter extraction (e.g., matching `^/api/users/([0-9]+)$` extracts the user ID directly into `uri_params`).
+- **Database Abstraction Layer (DAL) & Connection Pooling**: Unified interface (`backend::db`) supporting SQLite, PostgreSQL, and MySQL/MariaDB with dynamic client loading via `dlopen`/`dlsym` (zero link-time dependencies on database libraries).
+- **One-Line SQL to JSON Serialization**: Rapid serialization of SQL queries to FastCGI streams or strings with paginated envelopes (`page`, `total`, `records`, `rows`).
 - **Modern C++23**: Type-safe, RAII-driven design leveraging `std::string_view`, `std::function`, and standard exception hierarchies.
 - **Graceful Lifecycle Management**: Clean signal handling (`SIGINT`, `SIGTERM`, `SIGUSR1`) for worker draining and server shutdown.
+
+---
+
+## Design Philosophy & JSON Serialization Note
+
+`cpp_ws_backend` is specifically architected for low-latency web microservices, REST APIs, and interactive web application backends (handling typical paginated queries, status payloads, and CRUD data).
+
+> [!NOTE]
+> **On JSON Serialization & Bulk Data**:
+> This backend is designed for serving API payloads and paginated datasets, **not for generating massive multi-megabyte/gigabyte JSON dump files**. If an endpoint is generating huge monolithic JSON documents, that is considered a misuse of this project's architecture (bulk data exports, database dumps, or massive analytical feeds should be offloaded to dedicated streaming background jobs or binary dump pipelines).
+>
+> Consequently, `backend::db::sql_to_json` uses `json-c` DOM serialization for clean type mapping, safety, and validation, rather than an overly complex zero-DOM direct tokenizer.
 
 ---
 
