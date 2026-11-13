@@ -31,6 +31,34 @@ void backend::wsserver::shutdown()
     {
         close(fd);
     }
+
+    std::vector<std::function<void()>> hooks;
+    {
+        std::lock_guard<std::mutex> lock(m_hooks_mutex);
+        hooks = std::move(m_shutdown_hooks);
+    }
+    for (auto &hook : hooks)
+    {
+        if (hook)
+        {
+            try
+            {
+                hook();
+            }
+            catch (...)
+            {
+            }
+        }
+    }
+}
+
+void backend::wsserver::on_shutdown(std::function<void()> hook)
+{
+    if (hook)
+    {
+        std::lock_guard<std::mutex> lock(m_hooks_mutex);
+        m_shutdown_hooks.push_back(std::move(hook));
+    }
 }
 
 void backend::wsserver::add_route(const route &r)

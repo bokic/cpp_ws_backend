@@ -6,6 +6,9 @@
 #include <initializer_list>
 #include <cstddef>
 #include <atomic>
+#include <functional>
+#include <vector>
+#include <mutex>
 
 
 namespace backend {
@@ -35,10 +38,23 @@ public:
 
     std::shared_ptr<const router> get_router() const;
 
+    void on_shutdown(std::function<void()> hook);
+
+    template <typename Pool>
+    void register_connection_pool(std::shared_ptr<Pool> pool) {
+        if (pool) {
+            on_shutdown([pool]() {
+                pool->shutdown();
+            });
+        }
+    }
+
 private:
     std::shared_ptr<router> m_router;
     backend::wsthreadpool m_thread_pool;
     std::atomic<int> m_sock_fd{0};
+    mutable std::mutex m_hooks_mutex;
+    std::vector<std::function<void()>> m_shutdown_hooks;
 };
 
 };
