@@ -1,9 +1,212 @@
 #include "sqlite_driver.h"
+#include <dlfcn.h>
 #include <ctime>
 #include <cstring>
 #include <algorithm>
 
 namespace backend::db {
+
+// ==================== Dynamic SQLite3 Loader ====================
+
+#ifndef SQLITE_OK
+#define SQLITE_OK           0
+#endif
+#ifndef SQLITE_ROW
+#define SQLITE_ROW          100
+#endif
+#ifndef SQLITE_DONE
+#define SQLITE_DONE         101
+#endif
+#ifndef SQLITE_INTEGER
+#define SQLITE_INTEGER      1
+#endif
+#ifndef SQLITE_FLOAT
+#define SQLITE_FLOAT        2
+#endif
+#ifndef SQLITE_TEXT
+#define SQLITE_TEXT         3
+#endif
+#ifndef SQLITE_BLOB
+#define SQLITE_BLOB         4
+#endif
+#ifndef SQLITE_NULL
+#define SQLITE_NULL         5
+#endif
+#ifndef SQLITE_PREPARE_PERSISTENT
+#define SQLITE_PREPARE_PERSISTENT 0x01
+#endif
+#ifndef SQLITE_TRANSIENT
+#define SQLITE_TRANSIENT    ((void(*)(void*))-1)
+#endif
+
+struct sqlite_api {
+    void *handle = nullptr;
+
+    typedef int (*sqlite3_open_v2_t)(const char *filename, sqlite3 **ppDb, int flags, const char *zVfs);
+    typedef int (*sqlite3_close_v2_t)(sqlite3 *db);
+    typedef int (*sqlite3_busy_timeout_t)(sqlite3 *db, int ms);
+    typedef int (*sqlite3_exec_t)(sqlite3 *db, const char *sql, int (*callback)(void*,int,char**,char**), void *arg, char **errmsg);
+    typedef void (*sqlite3_free_t)(void *ptr);
+    typedef const char *(*sqlite3_errmsg_t)(sqlite3 *db);
+    typedef int (*sqlite3_changes_t)(sqlite3 *db);
+    typedef int64_t (*sqlite3_last_insert_rowid_t)(sqlite3 *db);
+    typedef int (*sqlite3_get_autocommit_t)(sqlite3 *db);
+    typedef sqlite3_stmt *(*sqlite3_next_stmt_t)(sqlite3 *pDb, sqlite3_stmt *pStmt);
+    typedef int (*sqlite3_prepare_v3_t)(sqlite3 *db, const char *zSql, int nByte, unsigned int prepFlags, sqlite3_stmt **ppStmt, const char **pzTail);
+    typedef int (*sqlite3_prepare_v2_t)(sqlite3 *db, const char *zSql, int nByte, sqlite3_stmt **ppStmt, const char **pzTail);
+    typedef int (*sqlite3_finalize_t)(sqlite3_stmt *pStmt);
+    typedef int (*sqlite3_reset_t)(sqlite3_stmt *pStmt);
+    typedef int (*sqlite3_clear_bindings_t)(sqlite3_stmt *pStmt);
+    typedef int (*sqlite3_step_t)(sqlite3_stmt *pStmt);
+    typedef int (*sqlite3_column_count_t)(sqlite3_stmt *pStmt);
+    typedef const char *(*sqlite3_column_name_t)(sqlite3_stmt *pStmt, int N);
+    typedef int (*sqlite3_column_type_t)(sqlite3_stmt *pStmt, int iCol);
+    typedef int (*sqlite3_column_int_t)(sqlite3_stmt *pStmt, int iCol);
+    typedef int64_t (*sqlite3_column_int64_t)(sqlite3_stmt *pStmt, int iCol);
+    typedef double (*sqlite3_column_double_t)(sqlite3_stmt *pStmt, int iCol);
+    typedef const unsigned char *(*sqlite3_column_text_t)(sqlite3_stmt *pStmt, int iCol);
+    typedef const void *(*sqlite3_column_blob_t)(sqlite3_stmt *pStmt, int iCol);
+    typedef int (*sqlite3_column_bytes_t)(sqlite3_stmt *pStmt, int iCol);
+    typedef int (*sqlite3_bind_null_t)(sqlite3_stmt *pStmt, int idx);
+    typedef int (*sqlite3_bind_int_t)(sqlite3_stmt *pStmt, int idx, int val);
+    typedef int (*sqlite3_bind_int64_t)(sqlite3_stmt *pStmt, int idx, int64_t val);
+    typedef int (*sqlite3_bind_double_t)(sqlite3_stmt *pStmt, int idx, double val);
+    typedef int (*sqlite3_bind_text_t)(sqlite3_stmt *pStmt, int idx, const char *val, int n, void (*del)(void*));
+    typedef int (*sqlite3_bind_blob_t)(sqlite3_stmt *pStmt, int idx, const void *val, int n, void (*del)(void*));
+    typedef int (*sqlite3_bind_parameter_index_t)(sqlite3_stmt *pStmt, const char *zName);
+    typedef int (*sqlite3_bind_parameter_count_t)(sqlite3_stmt *pStmt);
+
+    sqlite3_open_v2_t sqlite3_open_v2 = nullptr;
+    sqlite3_close_v2_t sqlite3_close_v2 = nullptr;
+    sqlite3_busy_timeout_t sqlite3_busy_timeout = nullptr;
+    sqlite3_exec_t sqlite3_exec = nullptr;
+    sqlite3_free_t sqlite3_free = nullptr;
+    sqlite3_errmsg_t sqlite3_errmsg = nullptr;
+    sqlite3_changes_t sqlite3_changes = nullptr;
+    sqlite3_last_insert_rowid_t sqlite3_last_insert_rowid = nullptr;
+    sqlite3_get_autocommit_t sqlite3_get_autocommit = nullptr;
+    sqlite3_next_stmt_t sqlite3_next_stmt = nullptr;
+    sqlite3_prepare_v3_t sqlite3_prepare_v3 = nullptr;
+    sqlite3_prepare_v2_t sqlite3_prepare_v2 = nullptr;
+    sqlite3_finalize_t sqlite3_finalize = nullptr;
+    sqlite3_reset_t sqlite3_reset = nullptr;
+    sqlite3_clear_bindings_t sqlite3_clear_bindings = nullptr;
+    sqlite3_step_t sqlite3_step = nullptr;
+    sqlite3_column_count_t sqlite3_column_count = nullptr;
+    sqlite3_column_name_t sqlite3_column_name = nullptr;
+    sqlite3_column_type_t sqlite3_column_type = nullptr;
+    sqlite3_column_int_t sqlite3_column_int = nullptr;
+    sqlite3_column_int64_t sqlite3_column_int64 = nullptr;
+    sqlite3_column_double_t sqlite3_column_double = nullptr;
+    sqlite3_column_text_t sqlite3_column_text = nullptr;
+    sqlite3_column_blob_t sqlite3_column_blob = nullptr;
+    sqlite3_column_bytes_t sqlite3_column_bytes = nullptr;
+    sqlite3_bind_null_t sqlite3_bind_null = nullptr;
+    sqlite3_bind_int_t sqlite3_bind_int = nullptr;
+    sqlite3_bind_int64_t sqlite3_bind_int64 = nullptr;
+    sqlite3_bind_double_t sqlite3_bind_double = nullptr;
+    sqlite3_bind_text_t sqlite3_bind_text = nullptr;
+    sqlite3_bind_blob_t sqlite3_bind_blob = nullptr;
+    sqlite3_bind_parameter_index_t sqlite3_bind_parameter_index = nullptr;
+    sqlite3_bind_parameter_count_t sqlite3_bind_parameter_count = nullptr;
+
+    static sqlite_api &instance() {
+        static sqlite_api api;
+        return api;
+    }
+
+    bool load() {
+        if (handle) return true;
+        const char *libs[] = {
+            "libsqlite3.so.0",
+            "libsqlite3.so"
+        };
+        for (const char *lib : libs) {
+            handle = dlopen(lib, RTLD_LAZY | RTLD_LOCAL);
+            if (handle) break;
+        }
+        if (!handle) return false;
+
+        #define LOAD_SYM(name) name = reinterpret_cast<name##_t>(dlsym(handle, #name)); if (!name) return false;
+        LOAD_SYM(sqlite3_open_v2);
+        LOAD_SYM(sqlite3_close_v2);
+        LOAD_SYM(sqlite3_busy_timeout);
+        LOAD_SYM(sqlite3_exec);
+        LOAD_SYM(sqlite3_free);
+        LOAD_SYM(sqlite3_errmsg);
+        LOAD_SYM(sqlite3_changes);
+        LOAD_SYM(sqlite3_last_insert_rowid);
+        LOAD_SYM(sqlite3_get_autocommit);
+        LOAD_SYM(sqlite3_next_stmt);
+        LOAD_SYM(sqlite3_prepare_v2);
+        sqlite3_prepare_v3 = reinterpret_cast<sqlite3_prepare_v3_t>(dlsym(handle, "sqlite3_prepare_v3"));
+        LOAD_SYM(sqlite3_finalize);
+        LOAD_SYM(sqlite3_reset);
+        LOAD_SYM(sqlite3_clear_bindings);
+        LOAD_SYM(sqlite3_step);
+        LOAD_SYM(sqlite3_column_count);
+        LOAD_SYM(sqlite3_column_name);
+        LOAD_SYM(sqlite3_column_type);
+        LOAD_SYM(sqlite3_column_int);
+        LOAD_SYM(sqlite3_column_int64);
+        LOAD_SYM(sqlite3_column_double);
+        LOAD_SYM(sqlite3_column_text);
+        LOAD_SYM(sqlite3_column_blob);
+        LOAD_SYM(sqlite3_column_bytes);
+        LOAD_SYM(sqlite3_bind_null);
+        LOAD_SYM(sqlite3_bind_int);
+        LOAD_SYM(sqlite3_bind_int64);
+        LOAD_SYM(sqlite3_bind_double);
+        LOAD_SYM(sqlite3_bind_text);
+        LOAD_SYM(sqlite3_bind_blob);
+        LOAD_SYM(sqlite3_bind_parameter_index);
+        LOAD_SYM(sqlite3_bind_parameter_count);
+        #undef LOAD_SYM
+
+        return true;
+    }
+
+    void ensure_loaded() {
+        if (!load()) {
+            const char *err = dlerror();
+            throw db_exception("Failed to dynamically load SQLite3 library: " +
+                               std::string(err ? err : "library not found"));
+        }
+    }
+};
+
+// Internal function call wrappers for loaded symbols
+#define sqlite3_open_v2 sqlite_api::instance().sqlite3_open_v2
+#define sqlite3_close_v2 sqlite_api::instance().sqlite3_close_v2
+#define sqlite3_busy_timeout sqlite_api::instance().sqlite3_busy_timeout
+#define sqlite3_exec sqlite_api::instance().sqlite3_exec
+#define sqlite3_free sqlite_api::instance().sqlite3_free
+#define sqlite3_errmsg sqlite_api::instance().sqlite3_errmsg
+#define sqlite3_changes sqlite_api::instance().sqlite3_changes
+#define sqlite3_last_insert_rowid sqlite_api::instance().sqlite3_last_insert_rowid
+#define sqlite3_get_autocommit sqlite_api::instance().sqlite3_get_autocommit
+#define sqlite3_next_stmt sqlite_api::instance().sqlite3_next_stmt
+#define sqlite3_finalize sqlite_api::instance().sqlite3_finalize
+#define sqlite3_reset sqlite_api::instance().sqlite3_reset
+#define sqlite3_clear_bindings sqlite_api::instance().sqlite3_clear_bindings
+#define sqlite3_step sqlite_api::instance().sqlite3_step
+#define sqlite3_column_count sqlite_api::instance().sqlite3_column_count
+#define sqlite3_column_name sqlite_api::instance().sqlite3_column_name
+#define sqlite3_column_type sqlite_api::instance().sqlite3_column_type
+#define sqlite3_column_int sqlite_api::instance().sqlite3_column_int
+#define sqlite3_column_int64 sqlite_api::instance().sqlite3_column_int64
+#define sqlite3_column_double sqlite_api::instance().sqlite3_column_double
+#define sqlite3_column_text sqlite_api::instance().sqlite3_column_text
+#define sqlite3_column_blob sqlite_api::instance().sqlite3_column_blob
+#define sqlite3_column_bytes sqlite_api::instance().sqlite3_column_bytes
+#define sqlite3_bind_null sqlite_api::instance().sqlite3_bind_null
+#define sqlite3_bind_int sqlite_api::instance().sqlite3_bind_int
+#define sqlite3_bind_int64 sqlite_api::instance().sqlite3_bind_int64
+#define sqlite3_bind_double sqlite_api::instance().sqlite3_bind_double
+#define sqlite3_bind_text sqlite_api::instance().sqlite3_bind_text
+#define sqlite3_bind_blob sqlite_api::instance().sqlite3_bind_blob
+#define sqlite3_bind_parameter_index sqlite_api::instance().sqlite3_bind_parameter_index
+#define sqlite3_bind_parameter_count sqlite_api::instance().sqlite3_bind_parameter_count
 
 // ==================== statement_cache ====================
 
@@ -27,8 +230,10 @@ sqlite3_stmt *statement_cache::checkout(const std::string &sql) {
     m_lru.erase(it->second);
     m_map.erase(it);
 
-    sqlite3_reset(stmt);
-    sqlite3_clear_bindings(stmt);
+    if (sqlite_api::instance().sqlite3_reset) {
+        sqlite3_reset(stmt);
+        sqlite3_clear_bindings(stmt);
+    }
     m_hits.fetch_add(1, std::memory_order_relaxed);
     return stmt;
 }
@@ -36,25 +241,33 @@ sqlite3_stmt *statement_cache::checkout(const std::string &sql) {
 void statement_cache::checkin(const std::string &sql, sqlite3_stmt *stmt) noexcept {
     if (!stmt) return;
 
-    sqlite3_reset(stmt);
-    sqlite3_clear_bindings(stmt);
+    if (sqlite_api::instance().sqlite3_reset) {
+        sqlite3_reset(stmt);
+        sqlite3_clear_bindings(stmt);
+    }
 
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_closed || m_max_capacity == 0 || sql.empty()) {
-        sqlite3_finalize(stmt);
+        if (sqlite_api::instance().sqlite3_finalize) {
+            sqlite3_finalize(stmt);
+        }
         return;
     }
 
     auto existing = m_map.find(sql);
     if (existing != m_map.end()) {
-        sqlite3_finalize(stmt);
+        if (sqlite_api::instance().sqlite3_finalize) {
+            sqlite3_finalize(stmt);
+        }
         m_lru.splice(m_lru.begin(), m_lru, existing->second);
         return;
     }
 
     if (m_map.size() >= m_max_capacity && !m_lru.empty()) {
         auto &oldest = m_lru.back();
-        sqlite3_finalize(oldest.second);
+        if (sqlite_api::instance().sqlite3_finalize) {
+            sqlite3_finalize(oldest.second);
+        }
         m_map.erase(oldest.first);
         m_lru.pop_back();
     }
@@ -66,7 +279,7 @@ void statement_cache::checkin(const std::string &sql, sqlite3_stmt *stmt) noexce
 void statement_cache::clear() noexcept {
     std::lock_guard<std::mutex> lock(m_mutex);
     for (auto &entry : m_lru) {
-        if (entry.second) {
+        if (entry.second && sqlite_api::instance().sqlite3_finalize) {
             sqlite3_finalize(entry.second);
         }
     }
@@ -78,7 +291,7 @@ void statement_cache::close() noexcept {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_closed = true;
     for (auto &entry : m_lru) {
-        if (entry.second) {
+        if (entry.second && sqlite_api::instance().sqlite3_finalize) {
             sqlite3_finalize(entry.second);
         }
     }
@@ -109,7 +322,7 @@ sqlite_stmt_holder::~sqlite_stmt_holder() {
     if (stmt) {
         if (auto c = cache.lock()) {
             c->checkin(sql, stmt);
-        } else {
+        } else if (sqlite_api::instance().sqlite3_finalize) {
             sqlite3_finalize(stmt);
         }
         stmt = nullptr;
@@ -229,7 +442,7 @@ sqlite_result_set::sqlite_result_set(std::shared_ptr<sqlite_stmt_holder> holder)
     : m_holder(std::move(holder)), m_row(m_holder) {}
 
 sqlite_result_set::~sqlite_result_set() {
-    if (m_holder && m_holder->stmt) {
+    if (m_holder && m_holder->stmt && sqlite_api::instance().sqlite3_reset) {
         sqlite3_reset(m_holder->stmt);
     }
 }
@@ -277,6 +490,9 @@ sqlite_statement::sqlite_statement(
         throw db_exception("Cannot prepare statement: SQLite database connection is null");
     }
 
+    auto &api = sqlite_api::instance();
+    api.ensure_loaded();
+
     std::string sql_str(sql);
     sqlite3_stmt *stmt = nullptr;
     if (auto c = cache.lock()) {
@@ -285,7 +501,12 @@ sqlite_statement::sqlite_statement(
 
     if (!stmt) {
         unsigned int prep_flags = cache.expired() ? 0u : SQLITE_PREPARE_PERSISTENT;
-        int rc = sqlite3_prepare_v3(db, sql_str.c_str(), -1, prep_flags, &stmt, nullptr);
+        int rc = SQLITE_OK;
+        if (prep_flags != 0 && api.sqlite3_prepare_v3) {
+            rc = api.sqlite3_prepare_v3(db, sql_str.c_str(), -1, prep_flags, &stmt, nullptr);
+        } else {
+            rc = api.sqlite3_prepare_v2(db, sql_str.c_str(), -1, &stmt, nullptr);
+        }
         if (rc != SQLITE_OK) {
             std::string err = sqlite3_errmsg(db);
             throw db_exception("Failed to prepare SQLite statement (" + sql_str + "): " + err);
@@ -406,7 +627,7 @@ std::unique_ptr<result_set> sqlite_statement::query() {
 }
 
 void sqlite_statement::reset() {
-    if (m_holder && m_holder->stmt) {
+    if (m_holder && m_holder->stmt && sqlite_api::instance().sqlite3_reset) {
         sqlite3_reset(m_holder->stmt);
         sqlite3_clear_bindings(m_holder->stmt);
     }
@@ -431,6 +652,8 @@ void sqlite_statement::step_done() {
 sqlite_transaction::sqlite_transaction(sqlite_database &db, bool immediate)
     : m_db(db.get()), m_active(true) {
     if (!m_db) throw db_exception("Cannot begin transaction on unopened database");
+    sqlite_api::instance().ensure_loaded();
+
     char *err = nullptr;
     int rc = sqlite3_exec(m_db, immediate ? "BEGIN IMMEDIATE;" : "BEGIN;", nullptr, nullptr, &err);
     if (rc != SQLITE_OK) {
@@ -443,6 +666,8 @@ sqlite_transaction::sqlite_transaction(sqlite_database &db, bool immediate)
 sqlite_transaction::sqlite_transaction(sqlite3 *db_handle, bool immediate)
     : m_db(db_handle), m_active(true) {
     if (!m_db) throw db_exception("Cannot begin transaction on null database handle");
+    sqlite_api::instance().ensure_loaded();
+
     char *err = nullptr;
     int rc = sqlite3_exec(m_db, immediate ? "BEGIN IMMEDIATE;" : "BEGIN;", nullptr, nullptr, &err);
     if (rc != SQLITE_OK) {
@@ -453,7 +678,7 @@ sqlite_transaction::sqlite_transaction(sqlite3 *db_handle, bool immediate)
 }
 
 sqlite_transaction::~sqlite_transaction() {
-    if (m_active && m_db) {
+    if (m_active && m_db && sqlite_api::instance().sqlite3_exec) {
         char *err = nullptr;
         sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, &err);
         if (err) sqlite3_free(err);
@@ -468,7 +693,7 @@ sqlite_transaction::sqlite_transaction(sqlite_transaction &&other) noexcept
 
 sqlite_transaction &sqlite_transaction::operator=(sqlite_transaction &&other) noexcept {
     if (this != &other) {
-        if (m_active && m_db) {
+        if (m_active && m_db && sqlite_api::instance().sqlite3_exec) {
             char *err = nullptr;
             sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, &err);
             if (err) sqlite3_free(err);
@@ -590,6 +815,8 @@ std::unique_ptr<transaction> sqlite_database::begin_transaction(bool immediate) 
 }
 
 void sqlite_database::open(const std::string &path, int flags) {
+    sqlite_api::instance().ensure_loaded();
+
     close();
     m_path = path;
     m_flags = flags;
@@ -617,7 +844,9 @@ void sqlite_database::close() noexcept {
         m_cache.reset();
     }
     if (m_db) {
-        sqlite3_close_v2(m_db);
+        if (sqlite_api::instance().sqlite3_close_v2) {
+            sqlite3_close_v2(m_db);
+        }
         m_db = nullptr;
     }
 }
@@ -629,23 +858,33 @@ void sqlite_database::reset_for_request() {
         }
         return;
     }
-    if (sqlite3_get_autocommit(m_db) == 0) {
+    auto &api = sqlite_api::instance();
+    if (api.sqlite3_next_stmt && api.sqlite3_reset && api.sqlite3_clear_bindings) {
+        sqlite3_stmt *stmt = nullptr;
+        while ((stmt = api.sqlite3_next_stmt(m_db, stmt)) != nullptr) {
+            api.sqlite3_reset(stmt);
+            api.sqlite3_clear_bindings(stmt);
+        }
+    }
+    if (api.sqlite3_get_autocommit && api.sqlite3_get_autocommit(m_db) == 0) {
         char *err_msg = nullptr;
-        sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, &err_msg);
-        if (err_msg) sqlite3_free(err_msg);
+        if (api.sqlite3_exec) {
+            api.sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, &err_msg);
+        }
+        if (err_msg && api.sqlite3_free) api.sqlite3_free(err_msg);
     }
 }
 
 int64_t sqlite_database::last_insert_rowid() const noexcept {
-    return m_db ? sqlite3_last_insert_rowid(m_db) : 0;
+    return (m_db && sqlite_api::instance().sqlite3_last_insert_rowid) ? sqlite3_last_insert_rowid(m_db) : 0;
 }
 
 int sqlite_database::changes() const noexcept {
-    return m_db ? sqlite3_changes(m_db) : 0;
+    return (m_db && sqlite_api::instance().sqlite3_changes) ? sqlite3_changes(m_db) : 0;
 }
 
 const char *sqlite_database::errmsg() const noexcept {
-    return m_db ? sqlite3_errmsg(m_db) : "Database not open";
+    return (m_db && sqlite_api::instance().sqlite3_errmsg) ? sqlite3_errmsg(m_db) : "Database not open";
 }
 
 size_t sqlite_database::cached_statement_count() const noexcept {

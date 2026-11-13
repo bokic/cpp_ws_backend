@@ -13,10 +13,10 @@ This document outlines architectural enhancements, core features, and design pro
 
 ### 2. Database Abstraction Layer (DAL) (`backend::db`)
 - Type-safe unified database interface (`database`, `statement`, `result_set`, `row`, `transaction`).
-- **SQLite Driver** (`sqlite_database` / `sqlite_db`): Built-in zero-copy and typed queries.
+- **SQLite Driver** (`sqlite_database` / `sqlite_db`): Dynamically loaded on demand via `dlopen`/`dlsym` (`libsqlite3.so.0` / `libsqlite3.so`). LRU statement caching, typed queries, and zero header dependency on `sqlite3.h`.
 - **PostgreSQL Driver** (`postgres_database` / `postgres_db`): Dynamically loaded on demand via `dlopen`/`dlsym` (`libpq.so.5` / `libpq.so`). Positional `?` and named `:name` parameter translation to `$1, $2, ...`.
 - **MySQL / MariaDB Driver** (`mysql_database` / `mysql_db`): Dynamically loaded on demand via `dlopen`/`dlsym` (`libmariadb.so.3` / `libmysqlclient.so`). Supports both URI connection strings and key-value formats.
-- **Zero Link-Time Overhead**: Binaries do not link `-lpq` or `-lmysqlclient`, eliminating runtime library dependencies when those drivers are not actively used.
+- **Zero Link-Time Overhead**: Binaries do not link `-lsqlite3`, `-lpq`, or `-lmysqlclient`, eliminating runtime library dependencies across all database backends unless actively instantiated.
 
 ### 3. One-Line SQL to JSON Serialization (`backend::db::sql_to_json`)
 - One-line serialization to FastCGI streams or string buffers.

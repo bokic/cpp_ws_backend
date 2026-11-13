@@ -1,7 +1,6 @@
 #pragma once
 
 #include "database.h"
-#include <sqlite3.h>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -13,6 +12,32 @@
 #include <string_view>
 #include <unordered_map>
 #include <vector>
+
+// Forward declarations for SQLite types (avoids header dependency on sqlite3.h)
+struct sqlite3;
+struct sqlite3_stmt;
+
+#ifndef SQLITE_OPEN_READONLY
+#define SQLITE_OPEN_READONLY         0x00000001
+#endif
+#ifndef SQLITE_OPEN_READWRITE
+#define SQLITE_OPEN_READWRITE        0x00000002
+#endif
+#ifndef SQLITE_OPEN_CREATE
+#define SQLITE_OPEN_CREATE           0x00000004
+#endif
+#ifndef SQLITE_OPEN_FULLMUTEX
+#define SQLITE_OPEN_FULLMUTEX        0x00010000
+#endif
+#ifndef SQLITE_OPEN_SHAREDCACHE
+#define SQLITE_OPEN_SHAREDCACHE      0x00020000
+#endif
+#ifndef SQLITE_OPEN_PRIVATECACHE
+#define SQLITE_OPEN_PRIVATECACHE     0x00040000
+#endif
+#ifndef SQLITE_OPEN_WAL
+#define SQLITE_OPEN_WAL              0x00080000
+#endif
 
 namespace backend::db {
 

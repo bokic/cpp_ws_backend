@@ -46,7 +46,6 @@ target_link_libraries(ws_backend PUBLIC
     ${CMAKE_DL_LIBS}
     fcgi
     json-c
-    sqlite3
 )
 
 include(GNUInstallDirs)
