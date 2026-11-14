@@ -84,5 +84,4 @@ install(FILES
 if(BUILD_DEMOS)
     add_subdirectory(demos/sqlite-demo)
     add_subdirectory(demos/journal-demo)
-    add_subdirectory(demos/jiralike-demo)
 endif()

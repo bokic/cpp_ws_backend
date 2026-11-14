@@ -243,7 +243,7 @@ public:
     std::unique_ptr<statement> prepare(std::string_view sql) override;
     std::unique_ptr<transaction> begin_transaction() override;
 
-    // Extended methods from jiralike-demo
+    // SQLite-specific connection methods
     void open(
         const std::string &path,
         int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX

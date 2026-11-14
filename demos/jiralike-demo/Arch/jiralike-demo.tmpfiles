@@ -1,3 +1,0 @@
-d /var/lib/jiralike-demo 0750 jiralike jiralike -
-d /var/lib/jiralike-demo/db 0750 jiralike jiralike -
-d /var/lib/jiralike-demo/blobs 0750 jiralike jiralike -
