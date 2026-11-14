@@ -6,21 +6,22 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
-set(CMAKE_CXX_VISIBILITY_PRESET hidden)
+set(CMAKE_CXX_VISIBILITY_PRESET default)
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -s")
 set(CMAKE_CXX_FLAGS_MINSIZEREL "${CMAKE_CXX_FLAGS_MINSIZEREL} -s")
 
+option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 option(BUILD_DEMOS "Build demo applications" ON)
 
 find_package(Threads REQUIRED)
 
-add_library(ws_backend STATIC
+add_library(ws_backend
     src/wsroute.h
     src/wsserver.cpp
     src/wsserver.h
     src/wsthreadpool.cpp
-    src/wsthreadpool.h
     src/wsworker.cpp
+    src/wsthreadpool.h
     src/wsworker.h
     src/db/database.h
     src/db/database.cpp
@@ -34,6 +35,11 @@ add_library(ws_backend STATIC
     src/db/sql_to_json.h
     src/db/sql_to_json.cpp
     src/db/db.h
+)
+
+set_target_properties(ws_backend PROPERTIES
+    VERSION ${PROJECT_VERSION}
+    SOVERSION 0
 )
 
 target_include_directories(ws_backend PUBLIC
@@ -53,6 +59,7 @@ include(GNUInstallDirs)
 install(TARGETS ws_backend
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
 install(FILES
