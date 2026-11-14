@@ -40,18 +40,3 @@ A FastCGI backend demonstrating integration with the systemd journal API (`sd_jo
   ./journal-demo -n 127.0.0.1:9001 -w 2
   ```
 
----
-
-## Standalone Projects
-
-### Jira-Like Project Management
-
-A full-stack Agile project and issue tracking application powered by `cpp_ws_backend`, SQLite with automatic startup schema versioning/migrations, local file attachment storage, and an Angular Single-Page Application (SPA) frontend.
-
-* **Repository:** [https://github.com/bokic/jiralike](https://github.com/bokic/jiralike)
-* **Highlights:**
-  * Automatic blank SQLite database creation with a first-time Webapp Setup Wizard.
-  * Startup `schema_version` inspection and sequential SQL migration runner.
-  * Supports Epics, Stories, Tasks, Subtasks, Bugs, and Issues with comments, issue links, and attachments.
-  * Interactive Kanban State Board and Gantt / State Timeline Matrix with drag-and-drop workflow state transitions.
-  * Packaging configurations for Docker, Ubuntu/Debian `.deb`, and Arch Linux / AUR.
