@@ -77,8 +77,11 @@ static void request_ws_system_logs(backend::wsworker *worker, const std::map<std
 
     const char *msg = nullptr;
     size_t len = 0;
-    int c = 1;
-    while (sd_journal_next(journal.get()) > 0)
+    int c = 0;
+    if (sd_journal_seek_tail(journal.get()) < 0) {
+        throw std::runtime_error("Can't seek to journal tail!");
+    }
+    while (sd_journal_previous(journal.get()) > 0)
     {
         r = sd_journal_get_data(journal.get(), "MESSAGE", reinterpret_cast<const void **>(&msg), &len);
         if (r == 0 && msg != nullptr) {
@@ -88,10 +91,8 @@ static void request_ws_system_logs(backend::wsworker *worker, const std::map<std
             } else {
                 json_object_array_add(json_data, json_object_new_string(""));
             }
+            if (++c >= 100) break;
         }
-
-        if (c >= 100) break;
-        c++;
     }
 
     journal.reset();
