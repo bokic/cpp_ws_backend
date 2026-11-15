@@ -262,7 +262,61 @@ std::span<const uint8_t> postgres_row::get_blob(size_t index) const {
     const char *val = api.PQgetvalue(m_holder->res, m_row_idx, static_cast<int>(index));
     int len = api.PQgetlength(m_holder->res, m_row_idx, static_cast<int>(index));
     if (!val || len <= 0) return {};
-    return std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(val), static_cast<size_t>(len));
+
+    if (index >= m_decoded_blobs.size()) {
+        m_decoded_blobs.resize(index + 1);
+    }
+    auto &buf = m_decoded_blobs[index];
+    buf.clear();
+
+    auto hex_nibble = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    };
+
+    size_t ulen = static_cast<size_t>(len);
+    if (ulen >= 2 && val[0] == '\\' && (val[1] == 'x' || val[1] == 'X')) {
+        buf.reserve((ulen - 2) / 2);
+        for (size_t i = 2; i + 1 < ulen; ++i) {
+            while (i < ulen && std::isspace(static_cast<unsigned char>(val[i]))) ++i;
+            if (i + 1 >= ulen) break;
+            int hi = hex_nibble(val[i]);
+            int lo = hex_nibble(val[i + 1]);
+            if (hi >= 0 && lo >= 0) {
+                buf.push_back(static_cast<uint8_t>((hi << 4) | lo));
+                ++i;
+            }
+        }
+    } else {
+        buf.reserve(ulen);
+        for (size_t i = 0; i < ulen; ++i) {
+            if (val[i] == '\\' && i + 1 < ulen) {
+                if (val[i + 1] == '\\') {
+                    buf.push_back('\\');
+                    ++i;
+                } else if (i + 3 < ulen &&
+                           val[i + 1] >= '0' && val[i + 1] <= '3' &&
+                           val[i + 2] >= '0' && val[i + 2] <= '7' &&
+                           val[i + 3] >= '0' && val[i + 3] <= '7') {
+                    uint8_t byte = static_cast<uint8_t>(
+                        ((val[i + 1] - '0') << 6) |
+                        ((val[i + 2] - '0') << 3) |
+                        (val[i + 3] - '0')
+                    );
+                    buf.push_back(byte);
+                    i += 3;
+                } else {
+                    buf.push_back(static_cast<uint8_t>(val[i]));
+                }
+            } else {
+                buf.push_back(static_cast<uint8_t>(val[i]));
+            }
+        }
+    }
+
+    return std::span<const uint8_t>(buf.data(), buf.size());
 }
 
 std::chrono::system_clock::time_point postgres_row::get_timestamp(size_t index) const {

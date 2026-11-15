@@ -32,12 +32,16 @@ public:
     std::span<const uint8_t> get_blob(size_t index) const override;
     std::chrono::system_clock::time_point get_timestamp(size_t index) const override;
 
-    void set_row_index(int idx) noexcept { m_row_idx = idx; }
+    void set_row_index(int idx) noexcept {
+        m_row_idx = idx;
+        m_decoded_blobs.clear();
+    }
 
 private:
     std::shared_ptr<pg_result_holder> m_holder;
     int m_row_idx = -1;
     mutable std::vector<std::string> m_cached_names;
+    mutable std::vector<std::vector<uint8_t>> m_decoded_blobs;
     void ensure_column_names() const;
 };
 
