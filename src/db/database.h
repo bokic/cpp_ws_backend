@@ -155,6 +155,12 @@ private:
         } else if constexpr (std::is_floating_point_v<Decayed>) {
             bind(idx, static_cast<double>(arg));
         } else if constexpr (std::is_convertible_v<T, std::string_view>) {
+            if constexpr (std::is_pointer_v<Decayed>) {
+                if (arg == nullptr) {
+                    bind(idx, nullptr);
+                    return;
+                }
+            }
             bind(idx, std::string_view(arg));
         } else if constexpr (std::is_same_v<Decayed, std::span<const uint8_t>>) {
             bind(idx, arg);
