@@ -3,6 +3,7 @@
 #include <ctime>
 #include <cstring>
 #include <algorithm>
+#include <mutex>
 
 namespace backend::db {
 
@@ -166,11 +167,21 @@ struct sqlite_api {
         return true;
     }
 
+    std::once_flag init_flag;
+    bool loaded = false;
+    std::string load_error;
+
     void ensure_loaded() {
-        if (!load()) {
-            const char *err = dlerror();
-            throw db_exception("Failed to dynamically load SQLite3 library: " +
-                               std::string(err ? err : "library not found"));
+        std::call_once(init_flag, [this]() {
+            loaded = load();
+            if (!loaded) {
+                const char *err = dlerror();
+                load_error = "Failed to dynamically load SQLite3 library: " +
+                             std::string(err ? err : "library not found");
+            }
+        });
+        if (!loaded) {
+            throw db_exception(load_error);
         }
     }
 };
