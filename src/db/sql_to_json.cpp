@@ -237,9 +237,8 @@ void execute_sql_to_json_paginated_sink(
     statement *count_stmt
 ) {
     bool has_callback = !query.callback.empty();
-    if (has_callback) {
-        sink.write(query.callback);
-        sink.put('(');
+    if (has_callback && !is_valid_callback(query.callback)) {
+        throw db_exception("Invalid callback parameter");
     }
 
     int64_t total_records = 0;
@@ -254,6 +253,13 @@ void execute_sql_to_json_paginated_sink(
         if (count_res && count_res->next()) {
             total_records = count_res->current_row().get<int64_t>(0);
         }
+    }
+
+    auto data_res = data_stmt.query();
+
+    if (has_callback) {
+        sink.write(query.callback);
+        sink.put('(');
     }
 
     int page = std::max(1, query.page);
@@ -278,7 +284,6 @@ void execute_sql_to_json_paginated_sink(
         sink.write("{\"rows\":");
     }
 
-    auto data_res = data_stmt.query();
     if (data_res) {
         result_set_to_json(sink, *data_res);
     } else {
