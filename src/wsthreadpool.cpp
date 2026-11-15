@@ -11,24 +11,24 @@ const int MAX_WORKERS = 512;
 
 void backend::wsthreadpool::stop()
 {
-    if (m_started)
+    std::vector<std::thread> threads;
     {
-        {
-            std::unique_lock<std::mutex> lock(m_lock);
-            m_finished = true;
-        }
-
-        m_data_condition.notify_all();
-
-        for (auto &t : m_thread_pool)
-        {
-            if (t.joinable())
-            {
-                t.join();
-            }
-        }
-        m_thread_pool.clear();
+        std::unique_lock<std::mutex> lock(m_lock);
+        if (!m_started)
+            return;
         m_started = false;
+        m_finished = true;
+        threads = std::move(m_thread_pool);
+    }
+
+    m_data_condition.notify_all();
+
+    for (auto &t : threads)
+    {
+        if (t.joinable())
+        {
+            t.join();
+        }
     }
 }
 
