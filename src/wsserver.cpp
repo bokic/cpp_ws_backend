@@ -7,11 +7,13 @@
 #include <sys/socket.h>
 #include <system_error>
 #include <cerrno>
+#include <csignal>
 
 
 backend::wsserver::wsserver()
     : m_router(std::make_shared<router>())
 {
+    std::signal(SIGPIPE, SIG_IGN);
     FCGX_Init();
 }
 
