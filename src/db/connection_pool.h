@@ -248,6 +248,17 @@ public:
                         throw;
                     }
                     lock.lock();
+                    if (m_shutdown) {
+                        --m_total_connections;
+                        --m_active_leases;
+                        if (m_active_leases == 0) {
+                            m_shutdown_cv.notify_all();
+                        }
+                        lock.unlock();
+                        conn_disconnect_if_possible(conn.get());
+                        conn.reset();
+                        throw db_exception("Cannot acquire database connection: pool is shut down");
+                    }
                     try {
                         m_live_connections.insert(conn.get());
                     } catch (...) {
@@ -288,17 +299,29 @@ public:
                 conn = std::move(replacement);
                 created_at = clock_type::now();
             }
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                if (m_shutdown) {
+                    throw db_exception("Cannot acquire database connection: pool is shut down");
+                }
+            }
         } catch (...) {
-            std::lock_guard<std::mutex> lock(m_mutex);
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                if (conn) {
+                    retire_connection_locked(conn.get());
+                }
+                --m_total_connections;
+                --m_active_leases;
+                if (m_active_leases == 0 && m_shutdown) {
+                    m_shutdown_cv.notify_all();
+                }
+                m_cv.notify_one();
+            }
             if (conn) {
-                retire_connection_locked(conn.get());
+                conn_disconnect_if_possible(conn.get());
+                conn.reset();
             }
-            --m_total_connections;
-            --m_active_leases;
-            if (m_active_leases == 0 && m_shutdown) {
-                m_shutdown_cv.notify_all();
-            }
-            m_cv.notify_one();
             throw;
         }
 
