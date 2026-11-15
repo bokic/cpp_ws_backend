@@ -36,6 +36,7 @@ struct pq_api {
     typedef char *(*PQgetvalue_t)(const void *res, int tup_num, int field_num);
     typedef int (*PQgetlength_t)(const void *res, int tup_num, int field_num);
     typedef char *(*PQcmdTuples_t)(void *res);
+    typedef int (*PQtransactionStatus_t)(const void *conn);
 
     PQconnectdb_t PQconnectdb = nullptr;
     PQfinish_t PQfinish = nullptr;
@@ -55,6 +56,7 @@ struct pq_api {
     PQgetvalue_t PQgetvalue = nullptr;
     PQgetlength_t PQgetlength = nullptr;
     PQcmdTuples_t PQcmdTuples = nullptr;
+    PQtransactionStatus_t PQtransactionStatus = nullptr;
 
     static pq_api &instance() {
         static pq_api api;
@@ -90,6 +92,8 @@ struct pq_api {
         LOAD_SYM(PQgetlength);
         LOAD_SYM(PQcmdTuples);
         #undef LOAD_SYM
+
+        PQtransactionStatus = reinterpret_cast<PQtransactionStatus_t>(dlsym(handle, "PQtransactionStatus"));
 
         return true;
     }
@@ -733,6 +737,24 @@ std::unique_ptr<statement> postgres_database::prepare(std::string_view sql) {
 std::unique_ptr<transaction> postgres_database::begin_transaction() {
     if (!is_connected()) throw db_exception("PostgreSQL connection is not open");
     return std::make_unique<postgres_transaction>(m_conn);
+}
+
+void postgres_database::reset_for_request() {
+    if (!is_connected() || !m_conn || !m_conn->conn) return;
+    auto &api = pq_api::instance();
+    bool need_rollback = true;
+    if (api.PQtransactionStatus) {
+        int status = api.PQtransactionStatus(m_conn->conn);
+        if (status == 0) { // PQTRANS_IDLE
+            need_rollback = false;
+        }
+    }
+    if (need_rollback) {
+        void *res = api.PQexec(m_conn->conn, "ROLLBACK;");
+        if (res) {
+            api.PQclear(res);
+        }
+    }
 }
 
 } // namespace backend::db

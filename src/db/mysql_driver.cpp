@@ -943,4 +943,15 @@ std::unique_ptr<transaction> mysql_database::begin_transaction() {
     return std::make_unique<mysql_transaction>(m_conn);
 }
 
+void mysql_database::reset_for_request() {
+    if (!is_connected() || !m_conn || !m_conn->conn) return;
+    auto &api = mysql_api::instance();
+    if (api.mysql_rollback) {
+        api.mysql_rollback(m_conn->conn);
+    }
+    if (api.mysql_autocommit) {
+        api.mysql_autocommit(m_conn->conn, 1);
+    }
+}
+
 } // namespace backend::db

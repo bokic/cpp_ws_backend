@@ -170,6 +170,7 @@ public:
     void execute(std::string_view sql) override;
     std::unique_ptr<statement> prepare(std::string_view sql) override;
     std::unique_ptr<transaction> begin_transaction() override;
+    void reset_for_request() override;
 
     std::shared_ptr<mysql_conn_holder> get_holder() const { return m_conn; }
 

@@ -195,6 +195,7 @@ public:
     virtual void execute(std::string_view sql) = 0;
     virtual std::unique_ptr<statement> prepare(std::string_view sql) = 0;
     virtual std::unique_ptr<transaction> begin_transaction() = 0;
+    virtual void reset_for_request() {}
 
     template <typename... Args>
     void execute(std::string_view sql, Args&&... args) {
