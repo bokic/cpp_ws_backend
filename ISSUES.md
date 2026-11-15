@@ -69,8 +69,8 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 | **3.8** | Stale Unix domain socket file blocks restart | **LOW** | Server Core | **RESOLVED** (`09194d6`) | Operational Bug |
 | **3.9** | Silent server exit on bind/socket error | **LOW** | Server Core | **RESOLVED** (`f04a272`) | Operational Bug |
 | **3.10**| Leaked `sd_journal` and JSON on exception | **LOW** | `journal-demo` | **RESOLVED** (`939fd10`) | Resource Leak |
-| **4.1** | Exception message disclosure in HTTP 500 | **MEDIUM** | Worker | Security |
-| **4.2** | CRLF injection via `SERVER_PROTOCOL` | **MEDIUM** | Demos | Security |
+| **4.1** | Exception message disclosure in HTTP 500 | **MEDIUM** | Worker | **RESOLVED** (`132e9e1`) | Security |
+| **4.2** | CRLF injection via `SERVER_PROTOCOL` | **MEDIUM** | Demos | **RESOLVED** (`03b2ea0`) | Security |
 | **5.1** | 100+ heap allocations per request in header parsing | **HIGH** | Worker | Performance |
 | **5.2** | Indefinite 10MB memory retention in worker threads | **MEDIUM** | Worker | Performance |
 | **5.3** | Linear regex matching on all routes | **MEDIUM** | Worker | Performance |
@@ -441,6 +441,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 4.1. Sensitive Information Disclosure via `error.what()` in HTTP 500 Responses
 * **File:** [src/wsworker.cpp#L230-L235](file:///home/boris/projects/cpp_ws_backend/src/wsworker.cpp#L230-L235)
 * **Severity:** **MEDIUM**
+* **Status:** **RESOLVED** (`132e9e1`)
 * **Description:**
   ```cpp
   } catch (const std::exception &error) {
@@ -456,6 +457,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 4.2. HTTP Header Injection / Response Splitting via `SERVER_PROTOCOL`
 * **File:** [demos/sqlite-demo/main.cpp#L31](file:///home/boris/projects/cpp_ws_backend/demos/sqlite-demo/main.cpp#L31), [demos/journal-demo/main.cpp#L66](file:///home/boris/projects/cpp_ws_backend/demos/journal-demo/main.cpp#L66)
 * **Severity:** **MEDIUM**
+* **Status:** **RESOLVED** (`03b2ea0`)
 * **Description:**
   `send_json_response` prints `SERVER_PROTOCOL` directly into the HTTP response line without validating for carriage returns or newlines (`\r\n`). A client sending a crafted protocol value could inject arbitrary HTTP headers.
 * **Fix:**
