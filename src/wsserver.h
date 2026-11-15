@@ -9,6 +9,8 @@
 #include <functional>
 #include <vector>
 #include <mutex>
+#include <condition_variable>
+#include <thread>
 
 
 namespace backend {
@@ -53,7 +55,11 @@ public:
 private:
     std::shared_ptr<router> m_router;
     backend::wsthreadpool m_thread_pool;
-    std::atomic<int> m_sock_fd{0};
+    std::atomic<int> m_sock_fd{-1};
+    std::atomic<bool> m_shutdown_requested{false};
+    bool m_running = false;
+    std::thread::id m_run_thread_id{};
+    std::condition_variable m_run_cv;
     std::string m_socket_path;
     mutable std::mutex m_hooks_mutex;
     std::vector<std::function<void()>> m_shutdown_hooks;

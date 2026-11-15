@@ -4,6 +4,7 @@
 #include <fcgio.h>
 
 #include <unistd.h>
+#include <sys/socket.h>
 #include <system_error>
 #include <cerrno>
 
@@ -32,14 +33,31 @@ void backend::wsserver::init(const char *socket_name, int backlog, int workers)
             std::string("Failed to open FastCGI socket: ") + (socket_name ? socket_name : "(null)"));
     }
     m_sock_fd = fd;
+    m_shutdown_requested.store(false, std::memory_order_release);
     m_thread_pool.setWorkers(workers);
 }
 
 void backend::wsserver::shutdown()
 {
+    m_shutdown_requested.store(true, std::memory_order_release);
     FCGX_ShutdownPending();
-    int fd = m_sock_fd.exchange(0);
-    if (fd > 0)
+
+    int current_fd = m_sock_fd.load(std::memory_order_acquire);
+    if (current_fd >= 0)
+    {
+        ::shutdown(current_fd, SHUT_RDWR);
+    }
+
+    {
+        std::unique_lock<std::mutex> lock(m_hooks_mutex);
+        if (m_running && m_run_thread_id != std::this_thread::get_id())
+        {
+            m_run_cv.wait(lock, [this]() { return !m_running; });
+        }
+    }
+
+    int fd = m_sock_fd.exchange(-1);
+    if (fd >= 0)
     {
         close(fd);
     }
@@ -126,18 +144,42 @@ static std::shared_ptr<FCGX_Request> make_fcgx_request()
 
 int backend::wsserver::run()
 {
+    int sock_fd = m_sock_fd.load(std::memory_order_acquire);
+    if (sock_fd < 0)
+    {
+        return 1;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(m_hooks_mutex);
+        m_running = true;
+        m_run_thread_id = std::this_thread::get_id();
+    }
+
+    struct run_guard {
+        wsserver *self;
+        ~run_guard() {
+            {
+                std::lock_guard<std::mutex> lock(self->m_hooks_mutex);
+                self->m_running = false;
+                self->m_run_thread_id = std::thread::id{};
+            }
+            self->m_run_cv.notify_all();
+        }
+    } guard{this};
+
     int ret = 0;
 
     m_thread_pool.setRouter(m_router);
 
     if (m_thread_pool.count() == 0)
     {
-        while(1)
+        while (!m_shutdown_requested.load(std::memory_order_acquire))
         {
             auto request = make_fcgx_request();
             backend::wsworker worker(m_router);
 
-            if (FCGX_InitRequest(request.get(), m_sock_fd, 0))
+            if (FCGX_InitRequest(request.get(), sock_fd, FCGI_FAIL_ACCEPT_ON_INTR))
             {
                 ret = 1;
                 break;
@@ -153,11 +195,11 @@ int backend::wsserver::run()
     {
         m_thread_pool.start();
 
-        while(1)
+        while (!m_shutdown_requested.load(std::memory_order_acquire))
         {
             auto request = make_fcgx_request();
 
-            if (FCGX_InitRequest(request.get(), m_sock_fd, 0))
+            if (FCGX_InitRequest(request.get(), sock_fd, FCGI_FAIL_ACCEPT_ON_INTR))
             {
                 ret = 1;
                 break;
