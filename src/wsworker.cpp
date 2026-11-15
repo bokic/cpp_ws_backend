@@ -137,14 +137,16 @@ void backend::wsworker::process(std::shared_ptr<FCGX_Request> request)
 
     struct body_guard {
         std::string &b;
+        std::shared_ptr<FCGX_Request> &req;
         ~body_guard() {
             if (b.capacity() > 65536) {
                 std::string().swap(b);
             } else {
                 b.clear();
             }
+            req.reset();
         }
-    } guard{m_body};
+    } guard{m_body, m_request};
 
     try {
         std::map<std::string, std::string> header = parse_request(request);
