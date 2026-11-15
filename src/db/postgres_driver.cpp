@@ -329,6 +329,61 @@ postgres_statement::postgres_statement(std::shared_ptr<pg_conn_holder> conn, std
     size_t i = 0;
     while (i < sql.size()) {
         char c = sql[i];
+
+        // Skip line comments: -- ...
+        if (c == '-' && i + 1 < sql.size() && sql[i + 1] == '-') {
+            m_translated_sql += sql.substr(i, 2);
+            i += 2;
+            while (i < sql.size() && sql[i] != '\n') {
+                m_translated_sql += sql[i++];
+            }
+            continue;
+        }
+
+        // Skip block comments: /* ... */
+        if (c == '/' && i + 1 < sql.size() && sql[i + 1] == '*') {
+            m_translated_sql += sql.substr(i, 2);
+            i += 2;
+            while (i + 1 < sql.size() && !(sql[i] == '*' && sql[i + 1] == '/')) {
+                m_translated_sql += sql[i++];
+            }
+            if (i + 1 < sql.size()) {
+                m_translated_sql += sql.substr(i, 2);
+                i += 2;
+            }
+            continue;
+        }
+
+        // Skip string/identifier literals: '...' or "..."
+        if (c == '\'' || c == '\"') {
+            char quote = c;
+            m_translated_sql += quote;
+            ++i;
+            while (i < sql.size()) {
+                if (sql[i] == '\\' && i + 1 < sql.size()) {
+                    m_translated_sql += sql[i++];
+                    m_translated_sql += sql[i++];
+                } else if (sql[i] == quote) {
+                    m_translated_sql += sql[i++];
+                    if (i < sql.size() && sql[i] == quote) {
+                        m_translated_sql += sql[i++];
+                    } else {
+                        break;
+                    }
+                } else {
+                    m_translated_sql += sql[i++];
+                }
+            }
+            continue;
+        }
+
+        // Skip PostgreSQL type cast operator ::
+        if (c == ':' && i + 1 < sql.size() && sql[i + 1] == ':') {
+            m_translated_sql += "::";
+            i += 2;
+            continue;
+        }
+
         if (c == '?') {
             m_translated_sql += "$" + std::to_string(param_num++);
             m_param_names.push_back("");
@@ -340,6 +395,10 @@ postgres_statement::postgres_statement(std::shared_ptr<pg_conn_holder> conn, std
                 ++i;
             }
             std::string name(sql.substr(start, i - start));
+            if (name.empty()) {
+                m_translated_sql += ':';
+                continue;
+            }
             int existing_num = -1;
             for (size_t k = 0; k < m_param_names.size(); ++k) {
                 if (!m_param_names[k].empty() && m_param_names[k] == name) {
