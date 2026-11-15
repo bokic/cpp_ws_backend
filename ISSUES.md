@@ -54,11 +54,11 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 | **1.4** | Null pointer in `string_view` constructor | **HIGH** | Database Core | **RESOLVED** (`490b3c5`) | Crash / UB |
 | **1.5** | Null dereference in `acquire()` | **MEDIUM** | Connection Pool | **RESOLVED** (`ecb2727`) | Crash |
 | **1.6** | Signed char in `isxdigit` in `url_decode` | **LOW** | Worker | **RESOLVED** (`471864e`) | Undefined Behavior |
-| **2.1** | Non-async-signal-safe shutdown in signal handlers | **CRITICAL** | Demos | Concurrency / Deadlock |
-| **2.2** | Data race in dynamic library loaders | **HIGH** | DB Drivers | Concurrency / Data Race |
-| **2.3** | Data race in `connection_pool::stats()` | **HIGH** | Connection Pool | Concurrency / Data Race |
-| **2.4** | Inverted shutdown sequence drops active requests | **MEDIUM** | Server Core | Concurrency |
-| **2.5** | Dynamic route modification not thread-safe | **LOW** | Server Core | Concurrency |
+| **2.1** | Non-async-signal-safe shutdown in signal handlers | **CRITICAL** | Demos | **RESOLVED** (`12078b8`) | Concurrency / Deadlock |
+| **2.2** | Data race in dynamic library loaders | **HIGH** | DB Drivers | **RESOLVED** (`fd71daa`) | Concurrency / Data Race |
+| **2.3** | Data race in `connection_pool::stats()` | **HIGH** | Connection Pool | **RESOLVED** (`a125ab8`) | Concurrency / Data Race |
+| **2.4** | Inverted shutdown sequence drops active requests | **MEDIUM** | Server Core | **RESOLVED** (`982c42d`) | Concurrency |
+| **2.5** | Dynamic route modification not thread-safe | **LOW** | Server Core | **RESOLVED** (`a072966`) | Concurrency |
 | **3.1** | FastCGI internal buffers leaked every request | **HIGH** | Server Core | Resource Leak |
 | **3.2** | Partial HTTP body read over stream | **HIGH** | Worker | Functional Bug |
 | **3.3** | Duplicate named parameters dropped in Postgres | **HIGH** | PostgreSQL Driver | Functional Bug |
@@ -213,6 +213,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 2.1. Async-Signal-Safety Violation in Daemon Signal Handlers
 * **File:** [demos/sqlite-demo/main.cpp#L137-L145](file:///home/boris/projects/cpp_ws_backend/demos/sqlite-demo/main.cpp#L137-L145), [demos/journal-demo/main.cpp#L77-L85](file:///home/boris/projects/cpp_ws_backend/demos/journal-demo/main.cpp#L77-L85)
 * **Severity:** **CRITICAL**
+* **Status:** **RESOLVED** (`12078b8`)
 * **Description:**
   The signal handler:
   ```cpp
@@ -232,6 +233,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 2.2. Unsynchronized Dynamic Library Loaders
 * **File:** [src/db/sqlite_driver.cpp#L118](file:///home/boris/projects/cpp_ws_backend/src/db/sqlite_driver.cpp#L118), [src/db/postgres_driver.cpp#L63](file:///home/boris/projects/cpp_ws_backend/src/db/postgres_driver.cpp#L63), [src/db/mysql_driver.cpp#L89](file:///home/boris/projects/cpp_ws_backend/src/db/mysql_driver.cpp#L89)
 * **Severity:** **HIGH**
+* **Status:** **RESOLVED** (`fd71daa`)
 * **Description:**
   `sqlite_api::instance().load()`, `pq_api::instance().load()`, and `mysql_api::instance().load()` check `if (handle) return true;` without any synchronization.
   When a multi-worker pool starts up, worker threads call `ensure_loaded()` concurrently, leading to simultaneous `dlopen()` calls and unsynchronized writes to member function pointers (data race).
@@ -251,6 +253,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 2.3. Data Race on Connection State in `connection_pool::stats()`
 * **File:** [src/db/connection_pool.h#L347-L355](file:///home/boris/projects/cpp_ws_backend/src/db/connection_pool.h#L347-L355)
 * **Severity:** **HIGH**
+* **Status:** **RESOLVED** (`a125ab8`)
 * **Description:**
   `connection_pool::stats()` locks `m_mutex` and iterates over `m_live_connections`, invoking:
   ```cpp
@@ -267,6 +270,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 2.4. Inverted Shutdown Sequence Drops In-Flight Worker Requests
 * **File:** [src/wsserver.cpp#L26-L53](file:///home/boris/projects/cpp_ws_backend/src/wsserver.cpp#L26-L53)
 * **Severity:** **MEDIUM**
+* **Status:** **RESOLVED** (`982c42d`)
 * **Description:**
   `wsserver::shutdown()` executes shutdown hooks (closing the database pool) **before** stopping or joining the worker threads.
   Active worker threads processing in-flight requests attempt to query the database, but `pool->acquire()` throws `pool is shut down`, returning HTTP 500 errors to clients during shutdown.
@@ -278,6 +282,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 2.5. Unsynchronized Dynamic Route Registration
 * **File:** [src/wsroute.h#L56-L83](file:///home/boris/projects/cpp_ws_backend/src/wsroute.h#L56-L83)
 * **Severity:** **LOW**
+* **Status:** **RESOLVED** (`a072966`)
 * **Description:**
   `router::add_route()` and `router::use()` mutate `m_routes` and `m_middlewares` without a mutex. If routes or middlewares are added while the server is already processing requests on worker threads, a data race and crash will occur.
 * **Fix:**
