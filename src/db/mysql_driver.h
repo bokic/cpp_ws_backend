@@ -1,6 +1,7 @@
 #pragma once
 
 #include "database.h"
+#include <utility>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -18,6 +19,25 @@ public:
     mysql_row() = default;
     explicit mysql_row(std::shared_ptr<mysql_result_holder> holder);
     ~mysql_row() override = default;
+
+    mysql_row(const mysql_row &) = delete;
+    mysql_row &operator=(const mysql_row &) = delete;
+
+    mysql_row(mysql_row &&other) noexcept
+        : m_holder(std::move(other.m_holder)),
+          m_row_data(std::exchange(other.m_row_data, nullptr)),
+          m_lengths(std::exchange(other.m_lengths, nullptr)),
+          m_cached_names(std::move(other.m_cached_names)) {}
+
+    mysql_row &operator=(mysql_row &&other) noexcept {
+        if (this != &other) {
+            m_holder = std::move(other.m_holder);
+            m_row_data = std::exchange(other.m_row_data, nullptr);
+            m_lengths = std::exchange(other.m_lengths, nullptr);
+            m_cached_names = std::move(other.m_cached_names);
+        }
+        return *this;
+    }
 
     size_t column_count() const noexcept override;
     std::string_view column_name(size_t index) const override;
