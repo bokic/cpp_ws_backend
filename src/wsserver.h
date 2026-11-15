@@ -53,6 +53,7 @@ private:
     std::shared_ptr<router> m_router;
     backend::wsthreadpool m_thread_pool;
     std::atomic<int> m_sock_fd{0};
+    std::string m_socket_path;
     mutable std::mutex m_hooks_mutex;
     std::vector<std::function<void()>> m_shutdown_hooks;
 };

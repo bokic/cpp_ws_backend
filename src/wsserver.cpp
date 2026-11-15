@@ -19,6 +19,10 @@ backend::wsserver::~wsserver()
 
 void backend::wsserver::init(const char *socket_name, int backlog, int workers)
 {
+    if (socket_name)
+    {
+        m_socket_path = socket_name;
+    }
     m_sock_fd = FCGX_OpenSocket(socket_name, backlog);
     m_thread_pool.setWorkers(workers);
 }
@@ -30,6 +34,15 @@ void backend::wsserver::shutdown()
     if (fd > 0)
     {
         close(fd);
+    }
+
+    if (!m_socket_path.empty())
+    {
+        if (m_socket_path.find('/') != std::string::npos || m_socket_path.find(':') == std::string::npos)
+        {
+            unlink(m_socket_path.c_str());
+        }
+        m_socket_path.clear();
     }
 
     m_thread_pool.stop();
