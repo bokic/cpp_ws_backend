@@ -206,6 +206,19 @@ public:
         auto deadline = clock_type::now() + timeout;
         std::unique_ptr<Connection> conn;
         time_point created_at{};
+        std::vector<std::unique_ptr<Connection>> evicted_conns;
+        struct evicted_cleaner {
+            std::vector<std::unique_ptr<Connection>> &conns;
+            ~evicted_cleaner() noexcept {
+                for (auto &c : conns) {
+                    if (c) {
+                        conn_disconnect_if_possible(c.get());
+                        c.reset();
+                    }
+                }
+                conns.clear();
+            }
+        } cleanup_evicted{evicted_conns};
 
         {
             std::unique_lock<std::mutex> lock(m_mutex);
@@ -214,7 +227,7 @@ public:
                     throw db_exception("Cannot acquire database connection: pool is shut down");
                 }
 
-                evict_stale_locked(clock_type::now());
+                evict_stale_locked(clock_type::now(), evicted_conns);
 
                 // 1. Reuse an idle connection if available (LIFO for cache locality)
                 if (!m_idle.empty()) {
@@ -280,6 +293,14 @@ public:
                 }
             }
         }
+
+        for (auto &c : evicted_conns) {
+            if (c) {
+                conn_disconnect_if_possible(c.get());
+                c.reset();
+            }
+        }
+        evicted_conns.clear();
 
         // Connection reset & health check outside mutex
         try {
@@ -349,12 +370,18 @@ public:
         if (m_shutdown || !healthy || lifetime_expired) {
             retire_connection_locked(conn.get());
             --m_total_connections;
+            if (m_shutdown && m_active_leases == 0) {
+                m_shutdown_cv.notify_all();
+            } else {
+                m_cv.notify_one();
+            }
             lock.unlock();
+            conn_disconnect_if_possible(conn.get());
             conn.reset();
-            lock.lock();
-        } else {
-            m_idle.push_front(idle_entry{std::move(conn), created_at, now});
+            return;
         }
+
+        m_idle.push_front(idle_entry{std::move(conn), created_at, now});
 
         if (m_shutdown && m_active_leases == 0) {
             m_shutdown_cv.notify_all();
@@ -364,21 +391,33 @@ public:
     }
 
     void shutdown() noexcept {
+        std::vector<std::unique_ptr<Connection>> to_close;
         std::unique_lock<std::mutex> lock(m_mutex);
         if (m_shutdown) return;
         m_shutdown = true;
 
+        to_close.reserve(m_idle.size());
         while (!m_idle.empty()) {
             auto entry = std::move(m_idle.front());
             m_idle.pop_front();
             if (entry.conn) {
                 retire_connection_locked(entry.conn.get());
-                conn_disconnect_if_possible(entry.conn.get());
+                to_close.push_back(std::move(entry.conn));
             }
             --m_total_connections;
         }
 
         m_cv.notify_all();
+
+        lock.unlock();
+        for (auto &c : to_close) {
+            if (c) {
+                conn_disconnect_if_possible(c.get());
+                c.reset();
+            }
+        }
+        to_close.clear();
+        lock.lock();
 
         m_shutdown_cv.wait_for(lock, std::chrono::seconds(10), [this]() {
             return m_active_leases == 0;
@@ -444,16 +483,25 @@ private:
         }
     }
 
-    void evict_stale_locked(time_point now) noexcept {
+    void evict_stale_locked(time_point now, std::vector<std::unique_ptr<Connection>> &evicted) noexcept {
         if (m_options.idle_timeout.count() <= 0 && m_options.max_lifetime.count() <= 0) {
             return;
         }
+        auto stash_or_close = [&evicted](std::unique_ptr<Connection> &c) noexcept {
+            if (!c) return;
+            try {
+                evicted.push_back(std::move(c));
+            } catch (...) {
+                conn_disconnect_if_possible(c.get());
+                c.reset();
+            }
+        };
         if (m_options.max_lifetime.count() > 0) {
             for (auto it = m_idle.begin(); it != m_idle.end(); ) {
                 if ((now - it->created_at) >= m_options.max_lifetime) {
                     if (it->conn) {
                         retire_connection_locked(it->conn.get());
-                        conn_disconnect_if_possible(it->conn.get());
+                        stash_or_close(it->conn);
                     }
                     it = m_idle.erase(it);
                     --m_total_connections;
@@ -464,13 +512,13 @@ private:
         }
         if (m_options.idle_timeout.count() > 0) {
             while (m_total_connections > m_options.min_size && !m_idle.empty()) {
-                const auto &oldest = m_idle.back();
+                auto &oldest = m_idle.back();
                 if ((now - oldest.last_used) < m_options.idle_timeout) {
                     break;
                 }
                 if (oldest.conn) {
                     retire_connection_locked(oldest.conn.get());
-                    conn_disconnect_if_possible(oldest.conn.get());
+                    stash_or_close(oldest.conn);
                 }
                 m_idle.pop_back();
                 --m_total_connections;
