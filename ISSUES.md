@@ -85,6 +85,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 1.1. Out-of-Bounds Buffer Read in `journal-demo`
 * **File:** [demos/journal-demo/main.cpp#L45-L53](file:///home/boris/projects/cpp_ws_backend/demos/journal-demo/main.cpp#L45-L53)
 * **Severity:** **CRITICAL**
+* **Status:** **RESOLVED** (`7ac2db5`)
 * **Description:**
   `sd_journal_get_data` fills a pointer `msg` and length `len`. The systemd documentation explicitly states that this returned data is **not null-terminated**.
   Line 49 invokes:
@@ -103,6 +104,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 1.2. Integer Underflow & Invalid Memory Write on `bind(0, ...)` in PostgreSQL Driver
 * **File:** [src/db/postgres_driver.cpp#L353-L386](file:///home/boris/projects/cpp_ws_backend/src/db/postgres_driver.cpp#L353-L386)
 * **Severity:** **CRITICAL**
+* **Status:** **RESOLVED** (`fc73154`)
 * **Description:**
   In all positional overloads of `postgres_statement::bind(size_t index, ...)`:
   ```cpp
@@ -132,6 +134,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 1.3. Use-After-Free / Dangling Pointers in `mysql_row`
 * **File:** [src/db/mysql_driver.h#L41-L43](file:///home/boris/projects/cpp_ws_backend/src/db/mysql_driver.h#L41-L43), [src/db/mysql_driver.cpp#L483-L490](file:///home/boris/projects/cpp_ws_backend/src/db/mysql_driver.cpp#L483-L490)
 * **Severity:** **HIGH**
+* **Status:** **RESOLVED** (`7ef3f73`)
 * **Description:**
   `mysql_row` stores raw pointers:
   ```cpp
@@ -148,6 +151,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 1.4. Undefined Behavior via `std::string_view((char*)nullptr)` in `statement::bind_all`
 * **File:** [src/db/database.h#L157-L158](file:///home/boris/projects/cpp_ws_backend/src/db/database.h#L157-L158)
 * **Severity:** **HIGH**
+* **Status:** **RESOLVED** (`490b3c5`)
 * **Description:**
   In `database.h`:
   ```cpp
@@ -176,6 +180,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 1.5. Null Pointer Dereference in `connection_pool::acquire()`
 * **File:** [src/db/connection_pool.h#L244-L246](file:///home/boris/projects/cpp_ws_backend/src/db/connection_pool.h#L244-L246)
 * **Severity:** **MEDIUM**
+* **Status:** **RESOLVED** (`ecb2727`)
 * **Description:**
   If the connection factory lambda returns `nullptr` without throwing:
   ```cpp
@@ -199,6 +204,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 1.6. Undefined Behavior in `url_decode` with `<cctype>` Functions
 * **File:** [src/wsworker.cpp#L28](file:///home/boris/projects/cpp_ws_backend/src/wsworker.cpp#L28)
 * **Severity:** **LOW / UB**
+* **Status:** **RESOLVED** (`471864e`)
 * **Description:**
   `isxdigit(src[i + 1])` passes signed `char`. If `src[i + 1]` is negative (`>= 0x80`), passing negative integers other than `EOF` to `<cctype>` functions invokes undefined behavior (out-of-bounds array access in glibc's `__ctype_b_loc`).
 * **Fix:**
