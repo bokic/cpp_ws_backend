@@ -1,6 +1,7 @@
 #include "wsthreadpool.h"
 #include "wsworker.h"
 #include <thread>
+#include <fcntl.h>
 
 #include <fcgio.h>
 
@@ -90,7 +91,21 @@ void backend::wsthreadpool::addWork(std::shared_ptr<FCGX_Request> request)
     {
         std::unique_lock<std::mutex> lock(m_lock);
         if (m_finished)
+        {
+            lock.unlock();
+            if (request)
+            {
+                if (request->ipcFd >= 0)
+                {
+                    int flags = fcntl(request->ipcFd, F_GETFL, 0);
+                    if (flags >= 0)
+                        fcntl(request->ipcFd, F_SETFL, flags | O_NONBLOCK);
+                }
+                request->keepConnection = 0;
+                FCGX_Finish_r(request.get());
+            }
             return;
+        }
 
         size_t max_q = m_max_queue_size.load(std::memory_order_relaxed);
         if (max_q > 0 && m_work_queue.size() >= max_q)
@@ -98,6 +113,13 @@ void backend::wsthreadpool::addWork(std::shared_ptr<FCGX_Request> request)
             lock.unlock();
             if (request && request->out)
             {
+                if (request->ipcFd >= 0)
+                {
+                    int flags = fcntl(request->ipcFd, F_GETFL, 0);
+                    if (flags >= 0)
+                        fcntl(request->ipcFd, F_SETFL, flags | O_NONBLOCK);
+                }
+                request->keepConnection = 0;
                 FCGX_FPrintF(request->out, "Status: 503 Service Unavailable\r\nRetry-After: 1\r\n\r\nServer Busy");
                 FCGX_Finish_r(request.get());
             }
