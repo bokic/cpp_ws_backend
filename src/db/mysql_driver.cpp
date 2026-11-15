@@ -584,17 +584,26 @@ mysql_statement::mysql_statement(std::shared_ptr<mysql_conn_holder> conn, std::s
             ++i;
             continue;
         }
+        if (c == ':' && i + 1 < sql.size() && (sql[i + 1] == ':' || sql[i + 1] == '=')) {
+            cur_text += sql.substr(i, 2);
+            i += 2;
+            continue;
+        }
         if (c == ':' && (i == 0 || (!std::isalnum(static_cast<unsigned char>(sql[i - 1])) && sql[i - 1] != ':'))) {
             size_t start = ++i;
             while (i < sql.size() && (std::isalnum(static_cast<unsigned char>(sql[i])) || sql[i] == '_')) {
                 ++i;
             }
             std::string name(sql.substr(start, i - start));
+            if (name.empty()) {
+                cur_text += ':';
+                continue;
+            }
             m_chunks.push_back({std::move(cur_text), -1});
             cur_text.clear();
             int idx = -1;
             for (size_t k = 0; k < m_param_names.size(); ++k) {
-                if (m_param_names[k] == name) {
+                if (!m_param_names[k].empty() && m_param_names[k] == name) {
                     idx = static_cast<int>(k);
                     break;
                 }
@@ -621,7 +630,7 @@ int mysql_statement::get_param_index(std::string_view name) {
         name.remove_prefix(1);
     }
     for (size_t i = 0; i < m_param_names.size(); ++i) {
-        if (m_param_names[i] == name) {
+        if (!m_param_names[i].empty() && m_param_names[i] == name) {
             return static_cast<int>(i + 1);
         }
     }
