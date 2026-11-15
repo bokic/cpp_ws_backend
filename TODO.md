@@ -20,29 +20,29 @@ This document tracks newly discovered bugs, memory corruption hazards, crash vec
 | **2.3** | `connection_pool::acquire()` hands out new connections after `shutdown()` has begun | **MEDIUM** | Connection Pool | Concurrency | **RESOLVED** (`5af75fa`) |
 | **2.4** | Unsynchronized access to `m_workers`, `m_max_queue_size`, and `m_router` in `wsthreadpool` | **LOW** | `wsthreadpool` | Concurrency / Data Race | **RESOLVED** (`a6e9466`) |
 | **2.5** | `wsthreadpool::start()` does not reset `m_finished`, breaking pool restart | **LOW** | `wsthreadpool` | Concurrency / Logic | **RESOLVED** (`369aa9b`) |
-| **3.1** | `wsworker::m_request` is never cleared after `process()`, leaking keep-alive sockets (`ipcFd`) | **HIGH** | `wsworker` | Resource Leak / Bug | [ ] |
-| **3.2** | `postgres_row::get_blob()` returns raw ASCII hex string (`\x...`) instead of decoded binary bytes | **HIGH** | PostgreSQL Driver | Functional Bug | [ ] |
-| **3.3** | `mysql_statement` SQL parser corrupts `:=`, `::`, and standalone `:` into `NULL` or `?` parameters | **HIGH** | MySQL Driver | Functional Bug | [ ] |
-| **3.4** | `sql_to_json_paginated` never binds query arguments to `count_sql` | **HIGH** | `sql_to_json` | Functional Bug | [ ] |
-| **3.5** | `sqlite_statement::bind` binds SQL `NULL` instead of empty string/blob when `data() == nullptr` | **MEDIUM** | SQLite Driver | Functional Bug | [ ] |
-| **3.6** | `sqlite_statement::execute()` clears bound parameters & leaves VDBE active on step failure | **MEDIUM** | SQLite Driver | Functional Bug | [ ] |
-| **3.7** | `mysql_row::get_int64()` / `get_int32()` fails to decode binary `BIT(n)` columns | **MEDIUM** | MySQL Driver | Functional Bug | [ ] |
-| **3.8** | `postgres_row::get_timestamp()` ignores timezone offsets and reuses dirty `std::tm` buffer | **MEDIUM** | DB Drivers | Functional Bug | [ ] |
-| **3.9** | Truncated HTTP request bodies are silently passed to route handlers when stream closes early | **MEDIUM** | `wsworker` | Functional Bug | [ ] |
-| **3.10**| `route::is_exact` ignores `std::regex_constants::icase` and other syntax flags | **MEDIUM** | `wsroute` | Functional Bug | [ ] |
-| **3.11**| HTTP 200 headers sent before query execution in `sqlite-demo`, corrupting HTTP 500 error responses | **MEDIUM** | `sqlite-demo` | Functional Bug | [ ] |
-| **3.12**| `execute_sql_to_json_paginated_sink` does not validate `query.callback` when called directly | **MEDIUM** | `sql_to_json` | Security / XSS | [ ] |
-| **3.13**| `connection_pool::evict_stale_locked()` never evicts expired `max_lifetime` connections at or below `min_size` | **MEDIUM** | Connection Pool | Functional Bug | [ ] |
-| **3.14**| `mysql_database::connect()` does not set `utf8mb4` character set & `execute()` ignores `mysql_store_result` errors | **MEDIUM** | MySQL Driver | Functional Bug | [ ] |
-| **3.15**| `postgres_statement` and `sqlite_row` truncate strings containing embedded null bytes (`\0`) | **LOW** | DB Drivers | Functional Bug | [ ] |
-| **3.16**| `journal-demo` reads the oldest 100 journal entries instead of the latest logs | **LOW** | `journal-demo` | Functional Bug | [ ] |
-| **3.17**| Missing `SIGPIPE` ignore handling across server & database drivers | **MEDIUM** | Server / Demos | Crash / Stability | [ ] |
-| **4.1** | `connection_pool` closes database connections while holding the global pool mutex `m_mutex` | **HIGH** | Connection Pool | Performance | [ ] |
-| **4.2** | `result_set_to_json` allocates and frees a full `json_object` DOM tree per row | **MEDIUM** | `sql_to_json` | Performance | [ ] |
-| **4.3** | `wsworker::parse_request` & `parse_args` perform excessive `std::map` & temporary `std::string` allocations | **MEDIUM** | `wsworker` | Performance | [ ] |
-| **4.4** | `route` compiles `std::regex` even for exact static routes (`is_exact == true`) | **LOW** | `wsroute` | Performance | [ ] |
-| **4.5** | Single-worker loop in `wsserver::run()` reconstructs `wsworker` on every request | **LOW** | `wsserver` | Performance | [ ] |
-| **4.6** | `wsthreadpool::addWork()` performs blocking 503 I/O on the main accept thread | **LOW** | `wsthreadpool` | Performance | [ ] |
+| **3.1** | `wsworker::m_request` is never cleared after `process()`, leaking keep-alive sockets (`ipcFd`) | **HIGH** | `wsworker` | Resource Leak / Bug | **RESOLVED** (`085ce82`) |
+| **3.2** | `postgres_row::get_blob()` returns raw ASCII hex string (`\x...`) instead of decoded binary bytes | **HIGH** | PostgreSQL Driver | Functional Bug | **RESOLVED** (`e3d035c`) |
+| **3.3** | `mysql_statement` SQL parser corrupts `:=`, `::`, and standalone `:` into `NULL` or `?` parameters | **HIGH** | MySQL Driver | Functional Bug | **RESOLVED** (`945820e`) |
+| **3.4** | `sql_to_json_paginated` never binds query arguments to `count_sql` | **HIGH** | `sql_to_json` | Functional Bug | **RESOLVED** (`650c917`) |
+| **3.5** | `sqlite_statement::bind` binds SQL `NULL` instead of empty string/blob when `data() == nullptr` | **MEDIUM** | SQLite Driver | Functional Bug | **RESOLVED** (`b234b3b`) |
+| **3.6** | `sqlite_statement::execute()` clears bound parameters & leaves VDBE active on step failure | **MEDIUM** | SQLite Driver | Functional Bug | **RESOLVED** (`eb9412f`) |
+| **3.7** | `mysql_row::get_int64()` / `get_int32()` fails to decode binary `BIT(n)` columns | **MEDIUM** | MySQL Driver | Functional Bug | **RESOLVED** (`6633d25`) |
+| **3.8** | `postgres_row::get_timestamp()` ignores timezone offsets and reuses dirty `std::tm` buffer | **MEDIUM** | DB Drivers | Functional Bug | **RESOLVED** (`f54404e`) |
+| **3.9** | Truncated HTTP request bodies are silently passed to route handlers when stream closes early | **MEDIUM** | `wsworker` | Functional Bug | **RESOLVED** (`faa9f31`) |
+| **3.10**| `route::is_exact` ignores `std::regex_constants::icase` and other syntax flags | **MEDIUM** | `wsroute` | Functional Bug | **RESOLVED** (`5b16345`) |
+| **3.11**| HTTP 200 headers sent before query execution in `sqlite-demo`, corrupting HTTP 500 error responses | **MEDIUM** | `sqlite-demo` | Functional Bug | **RESOLVED** (`dbf7513`) |
+| **3.12**| `execute_sql_to_json_paginated_sink` does not validate `query.callback` when called directly | **MEDIUM** | `sql_to_json` | Security / XSS | **RESOLVED** (`0050cb9`) |
+| **3.13**| `connection_pool::evict_stale_locked()` never evicts expired `max_lifetime` connections at or below `min_size` | **MEDIUM** | Connection Pool | Functional Bug | **RESOLVED** (`89e3c35`) |
+| **3.14**| `mysql_database::connect()` does not set `utf8mb4` character set & `execute()` ignores `mysql_store_result` errors | **MEDIUM** | MySQL Driver | Functional Bug | **RESOLVED** (`2149648`) |
+| **3.15**| `postgres_statement` and `sqlite_row` truncate strings containing embedded null bytes (`\0`) | **LOW** | DB Drivers | Functional Bug | **RESOLVED** (`008e8de`) |
+| **3.16**| `journal-demo` reads the oldest 100 journal entries instead of the latest logs | **LOW** | `journal-demo` | Functional Bug | **RESOLVED** (`47dc4c6`) |
+| **3.17**| Missing `SIGPIPE` ignore handling across server & database drivers | **MEDIUM** | Server / Demos | Crash / Stability | **RESOLVED** (`83ea948`) |
+| **4.1** | `connection_pool` closes database connections while holding the global pool mutex `m_mutex` | **HIGH** | Connection Pool | Performance | **RESOLVED** (`2db1263`) |
+| **4.2** | `result_set_to_json` allocates and frees a full `json_object` DOM tree per row | **MEDIUM** | `sql_to_json` | Performance | **RESOLVED** (`bca462a`) |
+| **4.3** | `wsworker::parse_request` & `parse_args` perform excessive `std::map` & temporary `std::string` allocations | **MEDIUM** | `wsworker` | Performance | **RESOLVED** (`8fb90b9`) |
+| **4.4** | `route` compiles `std::regex` even for exact static routes (`is_exact == true`) | **LOW** | `wsroute` | Performance | **RESOLVED** (`2660dd7`) |
+| **4.5** | Single-worker loop in `wsserver::run()` reconstructs `wsworker` on every request | **LOW** | `wsserver` | Performance | **RESOLVED** (`dc733ca`) |
+| **4.6** | `wsthreadpool::addWork()` performs blocking 503 I/O on the main accept thread | **LOW** | `wsthreadpool` | Performance | **RESOLVED** (`74a2620`) |
 
 ---
 
@@ -414,9 +414,10 @@ This document tracks newly discovered bugs, memory corruption hazards, crash vec
 
 ## 4. Performance Bottlenecks
 
-### [ ] 4.1. `connection_pool` Closes Database Connections While Holding the Global Pool Mutex `m_mutex`
+### [x] 4.1. `connection_pool` Closes Database Connections While Holding the Global Pool Mutex `m_mutex`
 * **File:** [src/db/connection_pool.h#L321-L329](file:///home/boris/projects/cpp_ws_backend/src/db/connection_pool.h#L321-L329), [src/db/connection_pool.h#L397-L417](file:///home/boris/projects/cpp_ws_backend/src/db/connection_pool.h#L397-L417)
 * **Severity:** **HIGH (PERFORMANCE)**
+* **Status:** **RESOLVED** (`2db1263`)
 * **Description:**
   `evict_stale_locked()` is called inside `acquire()` while holding `m_mutex`. When idle connections expire, `evict_stale_locked()` calls `conn_disconnect_if_possible()` and destroys the `Connection` object (running `sqlite3_close_v2` + finalizing all cached statements, `PQfinish`, or `mysql_close` network teardown) **while holding `m_mutex`**. This stalls all other worker threads trying to acquire or release database connections.
 * **Fix:**
@@ -424,9 +425,10 @@ This document tracks newly discovered bugs, memory corruption hazards, crash vec
 
 ---
 
-### [ ] 4.2. `result_set_to_json` Allocates and Frees a Full `json_object` DOM Tree Per Row
+### [x] 4.2. `result_set_to_json` Allocates and Frees a Full `json_object` DOM Tree Per Row
 * **File:** [src/db/sql_to_json.cpp#L186-L197](file:///home/boris/projects/cpp_ws_backend/src/db/sql_to_json.cpp#L186-L197)
 * **Severity:** **MEDIUM (PERFORMANCE)**
+* **Status:** **RESOLVED** (`bca462a`)
 * **Description:**
   In `result_set_to_json(stream_sink &sink, result_set &res)`:
   ```cpp
@@ -443,33 +445,37 @@ This document tracks newly discovered bugs, memory corruption hazards, crash vec
 
 ---
 
-### [ ] 4.3. `wsworker::parse_request` & `parse_args` Perform Excessive `std::map` & Temporary `std::string` Allocations
+### [x] 4.3. `wsworker::parse_request` & `parse_args` Perform Excessive `std::map` & Temporary `std::string` Allocations
 * **File:** [src/wsworker.cpp#L20-L51](file:///home/boris/projects/cpp_ws_backend/src/wsworker.cpp#L20-L51), [src/wsworker.cpp#L68-L127](file:///home/boris/projects/cpp_ws_backend/src/wsworker.cpp#L68-L127), [src/wsworker.cpp#L152-L204](file:///home/boris/projects/cpp_ws_backend/src/wsworker.cpp#L152-L204)
 * **Severity:** **MEDIUM (PERFORMANCE)**
+* **Status:** **RESOLVED** (`8fb90b9`)
 * **Description:**
   1. `url_decode(const std::string &src)` takes `const std::string &` instead of `std::string_view`, forcing `parse_args()` to heap-allocate a temporary `std::string(item.substr(...))` for every key and every value before `url_decode` allocates another `std::string`.
   2. `wsworker::process()` performs redundant `std::map` lookups (`header.count("CONTENT_LENGTH")` followed by `header["CONTENT_LENGTH"]`, and `header.count("REQUEST_METHOD")` followed by `header["REQUEST_METHOD"]`), and mutates `header` via `header["SCRIPT_NAME"]`.
 
 ---
 
-### [ ] 4.4. `route` Compiles `std::regex` Even for Exact Static Routes (`is_exact == true`)
+### [x] 4.4. `route` Compiles `std::regex` Even for Exact Static Routes (`is_exact == true`)
 * **File:** [src/wsroute.h#L50-L56](file:///home/boris/projects/cpp_ws_backend/src/wsroute.h#L50-L56)
 * **Severity:** **LOW (PERFORMANCE)**
+* **Status:** **RESOLVED** (`2660dd7`)
 * **Description:**
   In `route::route(std::string_view pattern, ...)`, `uri(pattern.data(), pattern.size(), flags)` is unconditionally compiled even when `is_exact` is `true` and `uri` will never be used during matching.
 
 ---
 
-### [ ] 4.5. Single-Worker Loop in `wsserver::run()` Reconstructs `wsworker` on Every Request
+### [x] 4.5. Single-Worker Loop in `wsserver::run()` Reconstructs `wsworker` on Every Request
 * **File:** [src/wsserver.cpp#L130-L145](file:///home/boris/projects/cpp_ws_backend/src/wsserver.cpp#L130-L145)
 * **Severity:** **LOW (PERFORMANCE)**
+* **Status:** **RESOLVED** (`dc733ca`)
 * **Description:**
   When `m_thread_pool.count() == 0`, `backend::wsworker worker(m_router);` is instantiated inside the `while (1)` loop on every request instead of outside the loop, preventing reuse of `m_body`'s pre-allocated capacity across requests.
 
 ---
 
-### [ ] 4.6. `wsthreadpool::addWork()` Performs Blocking 503 I/O on the Main Accept Thread
+### [x] 4.6. `wsthreadpool::addWork()` Performs Blocking 503 I/O on the Main Accept Thread
 * **File:** [src/wsthreadpool.cpp#L90-L99](file:///home/boris/projects/cpp_ws_backend/src/wsthreadpool.cpp#L90-L99)
 * **Severity:** **LOW (PERFORMANCE)**
+* **Status:** **RESOLVED** (`74a2620`)
 * **Description:**
   When the work queue reaches `m_max_queue_size`, `addWork()` synchronously calls `FCGX_FPrintF` and `FCGX_Finish_r` on the caller thread (the main `wsserver::run()` accept loop). A slow or stalled client socket can block the accept thread during overload.
