@@ -440,12 +440,69 @@ std::chrono::system_clock::time_point sqlite_row::get_timestamp(size_t index) co
     std::string str = get_string(index);
     if (str.empty()) return {};
 
+    const char *formats[] = {
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d"
+    };
+    const char *rest = nullptr;
     std::tm tm_buf{};
-    if (strptime(str.c_str(), "%Y-%m-%d %H:%M:%S", &tm_buf) != nullptr ||
-        strptime(str.c_str(), "%Y-%m-%dT%H:%M:%SZ", &tm_buf) != nullptr) {
-        return std::chrono::system_clock::from_time_t(timegm(&tm_buf));
+    for (const char *fmt : formats) {
+        tm_buf = std::tm{};
+        rest = strptime(str.c_str(), fmt, &tm_buf);
+        if (rest != nullptr) {
+            break;
+        }
     }
-    return {};
+    if (!rest) return {};
+
+    auto tp = std::chrono::system_clock::from_time_t(timegm(&tm_buf));
+
+    if (*rest == '.') {
+        ++rest;
+        int64_t nanos = 0;
+        int64_t scale = 100000000;
+        while (*rest >= '0' && *rest <= '9') {
+            if (scale > 0) {
+                nanos += (*rest - '0') * scale;
+                scale /= 10;
+            }
+            ++rest;
+        }
+        tp += std::chrono::duration_cast<std::chrono::system_clock::duration>(
+            std::chrono::nanoseconds(nanos));
+    }
+
+    while (*rest == ' ') ++rest;
+
+    if (*rest == 'Z' || *rest == 'z') {
+        ++rest;
+    } else if (*rest == '+' || *rest == '-') {
+        int sign = (*rest == '-') ? -1 : 1;
+        ++rest;
+        auto parse_two_digits = [](const char *&p, int &out) -> bool {
+            if (p[0] >= '0' && p[0] <= '9' && p[1] >= '0' && p[1] <= '9') {
+                out = (p[0] - '0') * 10 + (p[1] - '0');
+                p += 2;
+                return true;
+            }
+            return false;
+        };
+        int tz_hours = 0;
+        int tz_mins = 0;
+        int tz_secs = 0;
+        if (parse_two_digits(rest, tz_hours)) {
+            if (*rest == ':') ++rest;
+            if (parse_two_digits(rest, tz_mins)) {
+                if (*rest == ':') ++rest;
+                parse_two_digits(rest, tz_secs);
+            }
+            int total_offset_sec = sign * (tz_hours * 3600 + tz_mins * 60 + tz_secs);
+            tp -= std::chrono::seconds(total_offset_sec);
+        }
+    }
+
+    return tp;
 }
 
 // ==================== sqlite_result_set ====================
