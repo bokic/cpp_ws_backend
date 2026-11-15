@@ -242,9 +242,15 @@ void backend::wsworker::process(std::shared_ptr<FCGX_Request> request)
         return;
 
     } catch (const std::exception &error) {
-        FCGX_FPrintF(request->out, "Status: 500 Internal Server Error\r\n\r\nInternal error: %s", error.what());
+        if (request->err) {
+            FCGX_FPrintF(request->err, "[error] Internal server error: %s\n", error.what());
+        }
+        FCGX_FPrintF(request->out, "Status: 500 Internal Server Error\r\n\r\nInternal Server Error");
     } catch (...) {
-        FCGX_FPrintF(request->out, "Status: 500 Internal Server Error\r\n\r\nUnknown internal error!!!");
+        if (request->err) {
+            FCGX_FPrintF(request->err, "[error] Unknown internal server error\n");
+        }
+        FCGX_FPrintF(request->out, "Status: 500 Internal Server Error\r\n\r\nInternal Server Error");
     }
 
     FCGX_Finish_r(request.get());
