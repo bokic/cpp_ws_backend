@@ -432,6 +432,15 @@ int64_t mysql_row::get_int64(size_t index) const {
     if (is_null(index) || !m_lengths) return 0;
     std::string_view s(m_row_data[index], m_lengths[index]);
     if (s.empty()) return 0;
+    if (m_holder && m_holder->fields && index < m_holder->num_fields &&
+        m_holder->fields[index].type == 16) { // MYSQL_TYPE_BIT
+        uint64_t uval = 0;
+        size_t len = std::min<size_t>(s.size(), 8);
+        for (size_t i = 0; i < len; ++i) {
+            uval = (uval << 8) | static_cast<unsigned char>(s[i]);
+        }
+        return static_cast<int64_t>(uval);
+    }
     int64_t val = 0;
     auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), val);
     if (ec == std::errc()) {
