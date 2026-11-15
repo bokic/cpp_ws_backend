@@ -50,7 +50,7 @@ struct route {
     route(std::string_view pattern, int method, route_handler handler,
           std::regex_constants::syntax_option_type flags = std::regex_constants::ECMAScript)
         : pattern_str(pattern),
-          is_exact(!contains_regex_meta(pattern)),
+          is_exact(!contains_regex_meta(pattern) && (flags & std::regex_constants::icase) == 0),
           uri(pattern.data(), pattern.size(), flags),
           method(method),
           function(std::move(handler)) {}
