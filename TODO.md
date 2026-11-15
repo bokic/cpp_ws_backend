@@ -221,9 +221,10 @@ This document tracks newly discovered bugs, memory corruption hazards, crash vec
 
 ## 3. Functional Defects, Security & Logic Bugs
 
-### [ ] 3.1. `wsworker::m_request` Is Never Cleared After `process()`, Leaking Keep-Alive Sockets (`ipcFd`)
+### [x] 3.1. `wsworker::m_request` Is Never Cleared After `process()`, Leaking Keep-Alive Sockets (`ipcFd`)
 * **File:** [src/wsworker.cpp#L129-L148](file:///home/boris/projects/cpp_ws_backend/src/wsworker.cpp#L129-L148)
 * **Severity:** **HIGH**
+* **Status:** **RESOLVED** (`085ce82`)
 * **Description:**
   At the beginning of `wsworker::process()`, `m_request = request;` stores the `std::shared_ptr<FCGX_Request>` in the worker member variable, and never resets it when `process()` exits.
   Because worker threads in `wsthreadpool` persist across the lifetime of the server, each idle worker retains the `shared_ptr<FCGX_Request>` of its most recent request until a new request is assigned to that specific worker. Consequently:
@@ -234,9 +235,10 @@ This document tracks newly discovered bugs, memory corruption hazards, crash vec
 
 ---
 
-### [ ] 3.2. `postgres_row::get_blob()` Returns Raw ASCII Hex String (`\x...`) Instead of Decoded Binary Bytes
+### [x] 3.2. `postgres_row::get_blob()` Returns Raw ASCII Hex String (`\x...`) Instead of Decoded Binary Bytes
 * **File:** [src/db/postgres_driver.cpp#L259-L266](file:///home/boris/projects/cpp_ws_backend/src/db/postgres_driver.cpp#L259-L266), [src/db/postgres_driver.cpp#L552-L561](file:///home/boris/projects/cpp_ws_backend/src/db/postgres_driver.cpp#L552-L561)
 * **Severity:** **HIGH**
+* **Status:** **RESOLVED** (`e3d035c`)
 * **Description:**
   `postgres_statement::query()` calls `PQexecParams` with `resultFormat = 0` (text format). In text format, PostgreSQL encodes `BYTEA` columns as hex strings prefixed with `\x` (e.g., `"\xdeadbeef"`).
   `postgres_row::get_blob()` directly returns `PQgetvalue` as a `std::span<const uint8_t>` without decoding the hex/escape representation! Reading a 4-byte `BYTEA` value returns the 10-byte ASCII string `"\xdeadbeef"`, and `sql_to_json` base64-encodes the ASCII hex characters instead of the binary payload.
@@ -245,9 +247,10 @@ This document tracks newly discovered bugs, memory corruption hazards, crash vec
 
 ---
 
-### [ ] 3.3. `mysql_statement` SQL Parser Corrupts `:=`, `::`, and Standalone `:` Into `NULL` or `?` Parameters
+### [x] 3.3. `mysql_statement` SQL Parser Corrupts `:=`, `::`, and Standalone `:` Into `NULL` or `?` Parameters
 * **File:** [src/db/mysql_driver.cpp#L575-L605](file:///home/boris/projects/cpp_ws_backend/src/db/mysql_driver.cpp#L575-L605), [src/db/mysql_driver.cpp#L616-L626](file:///home/boris/projects/cpp_ws_backend/src/db/mysql_driver.cpp#L616-L626)
 * **Severity:** **HIGH**
+* **Status:** **RESOLVED** (`945820e`)
 * **Description:**
   In `mysql_statement`'s SQL parser:
   1. When `:` is not followed by `[a-zA-Z0-9_]` (for example, MySQL user variable assignment `SET @n := 0`), `name` is extracted as `""` (empty string). Unlike `postgres_statement`, `mysql_statement` does not check `if (name.empty())`! It strips the `:` from the SQL query and inserts a parameter chunk with `name = ""`.
@@ -258,9 +261,10 @@ This document tracks newly discovered bugs, memory corruption hazards, crash vec
 
 ---
 
-### [ ] 3.4. `sql_to_json_paginated` Never Binds Query Arguments to `count_sql`
+### [x] 3.4. `sql_to_json_paginated` Never Binds Query Arguments to `count_sql`
 * **Files:** [src/db/sql_to_json.h#L216-L242](file:///home/boris/projects/cpp_ws_backend/src/db/sql_to_json.h#L216-L242), [src/db/sql_to_json.cpp#L245-L251](file:///home/boris/projects/cpp_ws_backend/src/db/sql_to_json.cpp#L245-L251), [src/db/sql_to_json.cpp#L295-L301](file:///home/boris/projects/cpp_ws_backend/src/db/sql_to_json.cpp#L295-L301)
 * **Severity:** **HIGH**
+* **Status:** **RESOLVED** (`650c917`)
 * **Description:**
   When `sql_to_json_paginated(sink, db, query, args...)` is called with filter arguments `args...`, the arguments are bound only to `data_stmt` (`query.data_sql`). Inside `execute_sql_to_json_paginated_sink` and `execute_sql_to_json_paginated_c`, `query.count_sql` is prepared and executed with **zero parameters bound**:
   ```cpp
@@ -274,9 +278,10 @@ This document tracks newly discovered bugs, memory corruption hazards, crash vec
 
 ---
 
-### [ ] 3.5. `sqlite_statement::bind` Binds SQL `NULL` Instead of Empty String/Blob When `data() == nullptr`
+### [x] 3.5. `sqlite_statement::bind` Binds SQL `NULL` Instead of Empty String/Blob When `data() == nullptr`
 * **File:** [src/db/sqlite_driver.cpp#L582-L594](file:///home/boris/projects/cpp_ws_backend/src/db/sqlite_driver.cpp#L582-L594)
 * **Severity:** **MEDIUM**
+* **Status:** **RESOLVED** (`b234b3b`)
 * **Description:**
   In SQLite's C API, passing a `nullptr` data pointer to `sqlite3_bind_text` or `sqlite3_bind_blob`—even with `n = 0`—binds a SQL `NULL` rather than an empty string `""` or zero-byte blob `x''`.
   When a caller passes a default-constructed `std::string_view{}` or `std::span<const uint8_t>{}` (`data() == nullptr`, `size() == 0`), `sqlite_statement::bind` passes `val.data()` (`nullptr`) directly to SQLite, silently inserting `NULL` into `NOT NULL` columns.
@@ -285,9 +290,10 @@ This document tracks newly discovered bugs, memory corruption hazards, crash vec
 
 ---
 
-### [ ] 3.6. `sqlite_statement::execute()` Clears Bound Parameters & Leaves VDBE Active on Step Failure
+### [x] 3.6. `sqlite_statement::execute()` Clears Bound Parameters & Leaves VDBE Active on Step Failure
 * **File:** [src/db/sqlite_driver.cpp#L629-L633](file:///home/boris/projects/cpp_ws_backend/src/db/sqlite_driver.cpp#L629-L633), [src/db/sqlite_driver.cpp#L652-L659](file:///home/boris/projects/cpp_ws_backend/src/db/sqlite_driver.cpp#L652-L659)
 * **Severity:** **MEDIUM**
+* **Status:** **RESOLVED** (`eb9412f`)
 * **Description:**
   1. `sqlite_statement::execute()` calls `step_done()` followed by `reset()`. Because `reset()` calls `sqlite3_clear_bindings()`, `execute()` wipes all bound parameters after execution (unlike `postgres_statement::execute()` and `mysql_statement::execute()`, which preserve bindings unless `reset()` is explicitly called).
   2. In `step_done()`, if `sqlite3_step()` returns an error (e.g., `SQLITE_CONSTRAINT`), an exception is thrown without calling `sqlite3_reset(m_holder->stmt)`, leaving the SQLite VDBE cursor open and holding locks until `sqlite_statement` is destroyed.
@@ -296,9 +302,10 @@ This document tracks newly discovered bugs, memory corruption hazards, crash vec
 
 ---
 
-### [ ] 3.7. `mysql_row::get_int64()` / `get_int32()` Fails to Decode Binary `BIT(n)` Columns
+### [x] 3.7. `mysql_row::get_int64()` / `get_int32()` Fails to Decode Binary `BIT(n)` Columns
 * **File:** [src/db/mysql_driver.cpp#L394](file:///home/boris/projects/cpp_ws_backend/src/db/mysql_driver.cpp#L394), [src/db/mysql_driver.cpp#L428-L442](file:///home/boris/projects/cpp_ws_backend/src/db/mysql_driver.cpp#L428-L442)
 * **Severity:** **MEDIUM**
+* **Status:** **RESOLVED** (`6633d25`)
 * **Description:**
   `mysql_row::get_column_type()` maps `MYSQL_TYPE_BIT` (`16`) to `column_type::integer`. However, MySQL transmits `BIT(n)` values as raw big-endian binary bytes (e.g., `"\x01"` for `b'1'`), not ASCII digits. `mysql_row::get_int64()` attempts `std::from_chars` / `std::stoll` on the raw byte buffer, failing and returning `0` for all non-zero `BIT` columns.
 * **Fix:**
@@ -306,26 +313,29 @@ This document tracks newly discovered bugs, memory corruption hazards, crash vec
 
 ---
 
-### [ ] 3.8. `get_timestamp()` Ignores Timezone Offsets and Reuses Dirty `std::tm` Buffers
+### [x] 3.8. `get_timestamp()` Ignores Timezone Offsets and Reuses Dirty `std::tm` Buffers
 * **Files:** [src/db/postgres_driver.cpp#L268-L279](file:///home/boris/projects/cpp_ws_backend/src/db/postgres_driver.cpp#L268-L279), [src/db/sqlite_driver.cpp#L442-L447](file:///home/boris/projects/cpp_ws_backend/src/db/sqlite_driver.cpp#L442-L447), [src/db/mysql_driver.cpp#L475-L481](file:///home/boris/projects/cpp_ws_backend/src/db/mysql_driver.cpp#L475-L481)
 * **Severity:** **MEDIUM**
+* **Status:** **RESOLVED** (`f54404e`)
 * **Description:**
   1. In all three drivers, `std::tm tm_buf{}` is passed to chained `strptime(...) || strptime(...)` calls. A failed `strptime` call partially mutates `tm_buf` before returning `nullptr`, corrupting subsequent fallback `strptime` parses (e.g., `%Y-%m-%d`).
   2. In `postgres_row::get_timestamp()`, PostgreSQL `TIMESTAMPTZ` values include fractional seconds and a timezone offset (e.g., `2026-11-15 15:22:29.123+01`). `strptime("%Y-%m-%d %H:%M:%S", ...)` stops at `.123+01` and ignores the timezone offset, causing `timegm(&tm_buf)` to misinterpret offset timestamps as UTC.
 
 ---
 
-### [ ] 3.9. Truncated HTTP Request Bodies Silently Passed to Route Handlers
+### [x] 3.9. Truncated HTTP Request Bodies Silently Passed to Route Handlers
 * **File:** [src/wsworker.cpp#L179-L189](file:///home/boris/projects/cpp_ws_backend/src/wsworker.cpp#L179-L189)
 * **Severity:** **MEDIUM**
+* **Status:** **RESOLVED** (`faa9f31`)
 * **Description:**
   When reading the request payload of size `contentLen`, if the client connection drops early (`FCGX_GetStr` returns `<= 0` before `total_read == contentLen`), `wsworker::process()` resizes `m_body` to `total_read` and invokes the route handler with an incomplete/truncated body instead of returning `400 Bad Request`.
 
 ---
 
-### [ ] 3.10. `route::is_exact` Ignores `std::regex_constants::icase` and Other Syntax Flags
+### [x] 3.10. `route::is_exact` Ignores `std::regex_constants::icase` and Other Syntax Flags
 * **Files:** [src/wsroute.h#L50-L56](file:///home/boris/projects/cpp_ws_backend/src/wsroute.h#L50-L56), [src/wsworker.cpp#L224-L231](file:///home/boris/projects/cpp_ws_backend/src/wsworker.cpp#L224-L231)
 * **Severity:** **MEDIUM**
+* **Status:** **RESOLVED** (`5b16345`)
 * **Description:**
   `route` sets `is_exact(!contains_regex_meta(pattern))` regardless of the `flags` argument. If a route is registered with `std::regex_constants::icase` (e.g., `route("/api/items", GET, fn, std::regex_constants::icase)`), `wsworker::process()` uses case-sensitive `path == route.pattern_str`, breaking case-insensitive matching.
 * **Fix:**
@@ -333,18 +343,20 @@ This document tracks newly discovered bugs, memory corruption hazards, crash vec
 
 ---
 
-### [ ] 3.11. HTTP 200 Headers Sent Before Query Execution in `sqlite-demo`, Corrupting Error Responses
+### [x] 3.11. HTTP 200 Headers Sent Before Query Execution in `sqlite-demo`, Corrupting Error Responses
 * **File:** [demos/sqlite-demo/main.cpp#L78-L108](file:///home/boris/projects/cpp_ws_backend/demos/sqlite-demo/main.cpp#L78-L108), [demos/sqlite-demo/main.cpp#L113-L144](file:///home/boris/projects/cpp_ws_backend/demos/sqlite-demo/main.cpp#L113-L144), [demos/sqlite-demo/main.cpp#L149-L158](file:///home/boris/projects/cpp_ws_backend/demos/sqlite-demo/main.cpp#L149-L158)
 * **Severity:** **MEDIUM**
+* **Status:** **RESOLVED** (`dbf7513`)
 * **Description:**
   1. `request_ws_jsGrid_customers`, `request_ws_jsGrid_artists`, and `request_ws_jsGrid_artist_song_type` call `send_http_headers(worker->out(), ...)` (emitting `HTTP/1.1 200 OK\r\n\r\n`) **before** calling `sql_to_json_paginated` / `sql_to_json`. If `callback` validation or SQL execution throws an exception, `wsworker::process()` catches it and appends `Status: 500 Internal Server Error\r\n\r\nInternal Server Error` into the body of the already-committed HTTP 200 response.
   2. Client input validation errors (`page_size <= 0`, invalid `sidx`/`sord`, `id <= 0`) throw `std::invalid_argument`, which `wsworker` turns into `500 Internal Server Error` instead of `400 Bad Request`, and `page_size` has no upper limit.
 
 ---
 
-### [ ] 3.12. `execute_sql_to_json_paginated_sink` Does Not Validate `query.callback` When Called Directly
+### [x] 3.12. `execute_sql_to_json_paginated_sink` Does Not Validate `query.callback` When Called Directly
 * **File:** [src/db/sql_to_json.cpp#L232-L243](file:///home/boris/projects/cpp_ws_backend/src/db/sql_to_json.cpp#L232-L243)
 * **Severity:** **MEDIUM (SECURITY)**
+* **Status:** **RESOLVED** (`0050cb9`)
 * **Description:**
   `is_valid_callback(query.callback)` is checked in the template wrapper `sql_to_json_paginated`, but not inside `execute_sql_to_json_paginated_sink` (which is part of the public header API in `sql_to_json.h`). Calling `execute_sql_to_json_paginated_sink` directly with an untrusted `query.callback` allows arbitrary JavaScript injection (XSS via JSONP).
 * **Fix:**
@@ -352,26 +364,29 @@ This document tracks newly discovered bugs, memory corruption hazards, crash vec
 
 ---
 
-### [ ] 3.13. `connection_pool::evict_stale_locked()` Never Evicts Expired `max_lifetime` Connections at or Below `min_size`
+### [x] 3.13. `connection_pool::evict_stale_locked()` Never Evicts Expired `max_lifetime` Connections at or Below `min_size`
 * **File:** [src/db/connection_pool.h#L200-L210](file:///home/boris/projects/cpp_ws_backend/src/db/connection_pool.h#L200-L210), [src/db/connection_pool.h#L397-L417](file:///home/boris/projects/cpp_ws_backend/src/db/connection_pool.h#L397-L417)
 * **Severity:** **MEDIUM**
+* **Status:** **RESOLVED** (`89e3c35`)
 * **Description:**
   `evict_stale_locked()` only evicts connections while `m_total_connections > m_options.min_size`. When `m_total_connections <= m_options.min_size`, idle connections whose `max_lifetime` has expired are never evicted, and `acquire()` pops and returns them from `m_idle.front()` without checking `max_lifetime`.
 
 ---
 
-### [ ] 3.14. `mysql_database::connect()` Does Not Set `utf8mb4` Charset & `execute()` Ignores `mysql_store_result` Errors
+### [x] 3.14. `mysql_database::connect()` Does Not Set `utf8mb4` Charset & `execute()` Ignores `mysql_store_result` Errors
 * **File:** [src/db/mysql_driver.cpp#L926-L936](file:///home/boris/projects/cpp_ws_backend/src/db/mysql_driver.cpp#L926-L936), [src/db/mysql_driver.cpp#L951-L964](file:///home/boris/projects/cpp_ws_backend/src/db/mysql_driver.cpp#L951-L964)
 * **Severity:** **MEDIUM**
+* **Status:** **RESOLVED** (`2149648`)
 * **Description:**
   1. `mysql_database::connect()` does not configure `utf8mb4` on the connection (`mysql_set_character_set(conn, "utf8mb4")`), risking `latin1` default encoding and improper multibyte escaping in `mysql_real_escape_string`.
   2. `mysql_database::execute()` calls `mysql_store_result(m_conn->conn)` to drain any result set, but unlike `mysql_statement::execute()`, it does not check `if (!res && api.mysql_errno(m_conn->conn) != 0)`.
 
 ---
 
-### [ ] 3.15. `postgres_statement` and `sqlite_row` Truncate Strings Containing Embedded Null Bytes (`\0`)
+### [x] 3.15. `postgres_statement` and `sqlite_row` Truncate Strings Containing Embedded Null Bytes (`\0`)
 * **Files:** [src/db/sqlite_driver.cpp#L414-L418](file:///home/boris/projects/cpp_ws_backend/src/db/sqlite_driver.cpp#L414-L418), [src/db/sqlite_driver.cpp#L693-L697](file:///home/boris/projects/cpp_ws_backend/src/db/sqlite_driver.cpp#L693-L697), [src/db/postgres_driver.cpp#L283-L297](file:///home/boris/projects/cpp_ws_backend/src/db/postgres_driver.cpp#L283-L297)
 * **Severity:** **LOW**
+* **Status:** **RESOLVED** (`008e8de`)
 * **Description:**
   1. `sqlite_row::get_string()` and `sqlite_statement::column_str()` construct `std::string(txt)` without using `sqlite3_column_bytes()`, truncating strings at the first embedded `\0` and performing an unnecessary `strlen()` scan.
   2. `postgres_result_set::next()` does not reset `m_row.set_row_index(-1)` when `next()` returns `false` at the end of the result set, leaving `current_row()` pointing to the final row.
@@ -379,17 +394,19 @@ This document tracks newly discovered bugs, memory corruption hazards, crash vec
 
 ---
 
-### [ ] 3.16. `journal-demo` Reads the Oldest 100 Journal Entries Instead of Recent Logs
+### [x] 3.16. `journal-demo` Reads the Oldest 100 Journal Entries Instead of Recent Logs
 * **File:** [demos/journal-demo/main.cpp#L80-L95](file:///home/boris/projects/cpp_ws_backend/demos/journal-demo/main.cpp#L80-L95)
 * **Severity:** **LOW**
+* **Status:** **RESOLVED** (`47dc4c6`)
 * **Description:**
   `sd_journal_open` positions the read cursor at the head (oldest entry) of the systemd journal. Iterating with `sd_journal_next` up to `c == 100` always returns the oldest 100 entries since the journal was created rather than the most recent 100 entries (`sd_journal_seek_tail` + `sd_journal_previous`), and increments `c` even on entries that lack a `MESSAGE` field.
 
 ---
 
-### [ ] 3.17. Missing `SIGPIPE` Ignore Handling Across Server & Database Drivers
+### [x] 3.17. Missing `SIGPIPE` Ignore Handling Across Server & Database Drivers
 * **Files:** [src/wsserver.cpp#L11-L15](file:///home/boris/projects/cpp_ws_backend/src/wsserver.cpp#L11-L15), [demos/sqlite-demo/main.cpp#L167-L172](file:///home/boris/projects/cpp_ws_backend/demos/sqlite-demo/main.cpp#L167-L172), [demos/journal-demo/main.cpp#L114-L119](file:///home/boris/projects/cpp_ws_backend/demos/journal-demo/main.cpp#L114-L119)
 * **Severity:** **MEDIUM**
+* **Status:** **RESOLVED** (`83ea948`)
 * **Description:**
   Neither `wsserver` nor the demo applications ignore or block `SIGPIPE` (`signal(SIGPIPE, SIG_IGN)`). If an upstream FastCGI peer or remote PostgreSQL/MySQL server abruptly closes a socket while the backend writes to it, the kernel delivers `SIGPIPE`, terminating the entire backend process immediately.
 
