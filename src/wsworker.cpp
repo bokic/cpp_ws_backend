@@ -17,7 +17,7 @@
 
 static constexpr int MAX_CONTENT_LENGTH = 10 * 1024 * 1024; // 10 MB limit to prevent DoS via memory exhaustion
 
-static std::string url_decode(const std::string &src)
+static std::string url_decode(std::string_view src)
 {
     std::string ret;
     ret.reserve(src.size());
@@ -50,7 +50,7 @@ static std::string url_decode(const std::string &src)
     return ret;
 }
 
-static int method_from_string(const std::string &method)
+static int method_from_string(std::string_view method)
 {
     if (method == "GET") return backend::GET;
     if (method == "POST") return backend::POST;
@@ -105,15 +105,15 @@ std::map<std::string, std::string> backend::wsworker::parse_args(const std::stri
             auto pos = item.find('=');
             if (pos != std::string_view::npos)
             {
-                std::string key = url_decode(std::string(item.substr(0, pos)));
+                std::string key = url_decode(item.substr(0, pos));
                 if (!key.empty())
                 {
-                    ret.emplace(std::move(key), url_decode(std::string(item.substr(pos + 1))));
+                    ret.emplace(std::move(key), url_decode(item.substr(pos + 1)));
                 }
             }
             else
             {
-                std::string key = url_decode(std::string(item));
+                std::string key = url_decode(item);
                 if (!key.empty())
                 {
                     ret.emplace(std::move(key), "");
@@ -149,13 +149,14 @@ void backend::wsworker::process(std::shared_ptr<FCGX_Request> request)
     } guard{m_body, m_request};
 
     try {
-        std::map<std::string, std::string> header = parse_request(request);
+        const std::map<std::string, std::string> header = parse_request(request);
 
-        if (header.count("CONTENT_LENGTH") > 0)
+        auto cl_it = header.find("CONTENT_LENGTH");
+        if (cl_it != header.end())
         {
             int contentLen = 0;
             try {
-                const std::string &cl_str = header["CONTENT_LENGTH"];
+                const std::string &cl_str = cl_it->second;
                 size_t pos = 0;
                 contentLen = std::stoi(cl_str, &pos);
                 if (pos != cl_str.size()) {
@@ -202,18 +203,19 @@ void backend::wsworker::process(std::shared_ptr<FCGX_Request> request)
             }
         }
 
-        const std::string &path = header["SCRIPT_NAME"];
-        std::cmatch cm;
-
-        if (path.empty())
+        auto script_it = header.find("SCRIPT_NAME");
+        if (script_it == header.end() || script_it->second.empty())
         {
             throw std::runtime_error("System error. SCRIPT_NAME not found!");
         }
+        const std::string &path = script_it->second;
+        std::cmatch cm;
 
         int request_method = 0;
-        if (header.count("REQUEST_METHOD") > 0)
+        auto method_it = header.find("REQUEST_METHOD");
+        if (method_it != header.end())
         {
-            request_method = method_from_string(header["REQUEST_METHOD"]);
+            request_method = method_from_string(method_it->second);
         }
 
         bool uri_matched = false;
