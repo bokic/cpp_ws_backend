@@ -591,7 +591,8 @@ void sqlite_statement::bind(size_t index, std::string_view val) {
     if (val.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
         throw db_exception("Text parameter size exceeds maximum SQLite bind length");
     }
-    if (sqlite3_bind_text(m_holder->stmt, static_cast<int>(index), val.data(), static_cast<int>(val.size()), SQLITE_TRANSIENT) != SQLITE_OK) {
+    const char *ptr = val.data() ? val.data() : "";
+    if (sqlite3_bind_text(m_holder->stmt, static_cast<int>(index), ptr, static_cast<int>(val.size()), SQLITE_TRANSIENT) != SQLITE_OK) {
         throw db_exception("Failed to bind text to column " + std::to_string(index));
     }
 }
@@ -601,7 +602,8 @@ void sqlite_statement::bind(size_t index, std::span<const uint8_t> val) {
     if (val.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
         throw db_exception("Blob parameter size exceeds maximum SQLite bind length");
     }
-    if (sqlite3_bind_blob(m_holder->stmt, static_cast<int>(index), val.data(), static_cast<int>(val.size()), SQLITE_TRANSIENT) != SQLITE_OK) {
+    const void *ptr = val.data() ? static_cast<const void *>(val.data()) : static_cast<const void *>("");
+    if (sqlite3_bind_blob(m_holder->stmt, static_cast<int>(index), ptr, static_cast<int>(val.size()), SQLITE_TRANSIENT) != SQLITE_OK) {
         throw db_exception("Failed to bind blob to column " + std::to_string(index));
     }
 }
