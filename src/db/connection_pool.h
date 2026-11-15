@@ -165,12 +165,13 @@ public:
         // Pre-warm minimum pool capacity
         for (size_t i = 0; i < m_options.min_size; ++i) {
             auto conn = m_factory();
-            if (conn) {
-                auto now = clock_type::now();
-                m_live_connections.insert(conn.get());
-                m_idle.push_back(idle_entry{std::move(conn), now, now});
-                ++m_total_connections;
+            if (!conn) {
+                throw db_exception("Database connection factory returned null");
             }
+            auto now = clock_type::now();
+            m_live_connections.insert(conn.get());
+            m_idle.push_back(idle_entry{std::move(conn), now, now});
+            ++m_total_connections;
         }
     }
 
@@ -186,6 +187,11 @@ public:
     }
 
     pooled_connection<Connection> acquire(std::chrono::milliseconds timeout) {
+        auto self = this->weak_from_this().lock();
+        if (!self) {
+            throw db_exception("connection_pool must be managed by std::shared_ptr");
+        }
+
         auto deadline = clock_type::now() + timeout;
         std::unique_ptr<Connection> conn;
         time_point created_at{};
@@ -231,7 +237,17 @@ public:
                         throw;
                     }
                     lock.lock();
-                    m_live_connections.insert(conn.get());
+                    try {
+                        m_live_connections.insert(conn.get());
+                    } catch (...) {
+                        --m_total_connections;
+                        --m_active_leases;
+                        if (m_active_leases == 0 && m_shutdown) {
+                            m_shutdown_cv.notify_all();
+                        }
+                        m_cv.notify_one();
+                        throw;
+                    }
                     break;
                 }
 
@@ -255,8 +271,8 @@ public:
                 conn_reset_if_possible(replacement.get());
                 {
                     std::lock_guard<std::mutex> lock(m_mutex);
-                    retire_connection_locked(conn.get());
                     m_live_connections.insert(replacement.get());
+                    retire_connection_locked(conn.get());
                 }
                 conn = std::move(replacement);
                 created_at = clock_type::now();
@@ -276,7 +292,7 @@ public:
         }
 
         m_total_acquisitions.fetch_add(1, std::memory_order_relaxed);
-        return pooled_connection<Connection>(this->shared_from_this(), std::move(conn), created_at);
+        return pooled_connection<Connection>(std::move(self), std::move(conn), created_at);
     }
 
     void release(std::unique_ptr<Connection> conn, time_point created_at) noexcept {
