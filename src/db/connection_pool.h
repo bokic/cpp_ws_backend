@@ -101,9 +101,16 @@ public:
     explicit operator bool() const noexcept { return m_conn != nullptr && static_cast<bool>(*m_conn); }
 
     // Direct forwarding helpers for ergonomic dot-syntax (`conn.prepare(...)`, `conn.exec(...)`)
-    decltype(auto) prepare(const auto &sql) const { return m_conn->prepare(sql); }
-    void execute(std::string_view sql) const { m_conn->execute(sql); }
+    decltype(auto) prepare(const auto &sql) const {
+        if (!m_conn) throw db_exception("Pooled connection is empty");
+        return m_conn->prepare(sql);
+    }
+    void execute(std::string_view sql) const {
+        if (!m_conn) throw db_exception("Pooled connection is empty");
+        m_conn->execute(sql);
+    }
     void exec(const std::string &sql) const {
+        if (!m_conn) throw db_exception("Pooled connection is empty");
         if constexpr (requires { m_conn->exec(sql); }) {
             m_conn->exec(sql);
         } else {
@@ -111,28 +118,32 @@ public:
         }
     }
     int64_t last_insert_rowid() const noexcept {
+        if (!m_conn) return 0;
         if constexpr (requires { m_conn->last_insert_rowid(); }) {
             return m_conn->last_insert_rowid();
         }
         return 0;
     }
     int changes() const noexcept {
+        if (!m_conn) return 0;
         if constexpr (requires { m_conn->changes(); }) {
             return m_conn->changes();
         }
         return 0;
     }
     const char *errmsg() const noexcept {
+        if (!m_conn) return "Connection is empty";
         if constexpr (requires { m_conn->errmsg(); }) {
             return m_conn->errmsg();
         }
         return "";
     }
     const std::string &path() const noexcept {
+        static const std::string empty;
+        if (!m_conn) return empty;
         if constexpr (requires { m_conn->path(); }) {
             return m_conn->path();
         }
-        static const std::string empty;
         return empty;
     }
     bool ping() const noexcept { return m_conn && m_conn->ping(); }
