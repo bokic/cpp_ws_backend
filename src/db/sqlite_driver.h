@@ -262,7 +262,7 @@ public:
 
     // Ergonomic direct statement creation
     sqlite_statement prepare_stmt(std::string_view sql) const;
-    std::shared_ptr<statement_cache> get_cache() const noexcept { return m_cache; }
+    std::shared_ptr<statement_cache> get_cache() const noexcept;
 
     // Prepared statement cache metrics
     size_t cached_statement_count() const noexcept;
@@ -275,6 +275,7 @@ private:
     std::string m_path;
     int m_flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX;
     size_t m_stmt_cache_capacity = 128;
+    mutable std::mutex m_cache_mutex;
     std::shared_ptr<statement_cache> m_cache;
 };
 

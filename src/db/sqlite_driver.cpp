@@ -817,8 +817,9 @@ sqlite_database::sqlite_database(sqlite_database &&other) noexcept
     : m_db(other.m_db),
       m_path(std::move(other.m_path)),
       m_flags(other.m_flags),
-      m_stmt_cache_capacity(other.m_stmt_cache_capacity),
-      m_cache(std::move(other.m_cache)) {
+      m_stmt_cache_capacity(other.m_stmt_cache_capacity) {
+    std::lock_guard<std::mutex> lock(other.m_cache_mutex);
+    m_cache = std::move(other.m_cache);
     other.m_db = nullptr;
 }
 
@@ -829,7 +830,10 @@ sqlite_database &sqlite_database::operator=(sqlite_database &&other) noexcept {
         m_path = std::move(other.m_path);
         m_flags = other.m_flags;
         m_stmt_cache_capacity = other.m_stmt_cache_capacity;
-        m_cache = std::move(other.m_cache);
+        {
+            std::scoped_lock lock(m_cache_mutex, other.m_cache_mutex);
+            m_cache = std::move(other.m_cache);
+        }
         other.m_db = nullptr;
     }
     return *this;
@@ -872,12 +876,22 @@ void sqlite_database::execute(std::string_view sql) {
 
 std::unique_ptr<statement> sqlite_database::prepare(std::string_view sql) {
     if (!m_db) throw db_exception("Database connection is closed");
-    return std::make_unique<sqlite_statement>(m_db, sql, m_cache);
+    std::shared_ptr<statement_cache> cache;
+    {
+        std::lock_guard<std::mutex> lock(m_cache_mutex);
+        cache = m_cache;
+    }
+    return std::make_unique<sqlite_statement>(m_db, sql, std::move(cache));
 }
 
 sqlite_statement sqlite_database::prepare_stmt(std::string_view sql) const {
     if (!m_db) throw db_exception("Database connection is closed");
-    return sqlite_statement(m_db, sql, m_cache);
+    std::shared_ptr<statement_cache> cache;
+    {
+        std::lock_guard<std::mutex> lock(m_cache_mutex);
+        cache = m_cache;
+    }
+    return sqlite_statement(m_db, sql, std::move(cache));
 }
 
 std::unique_ptr<transaction> sqlite_database::begin_transaction() {
@@ -909,13 +923,20 @@ void sqlite_database::open(const std::string &path, int flags) {
     execute("PRAGMA mmap_size = 268435456;");
     execute("PRAGMA cache_size = -16000;");
 
-    m_cache = std::make_shared<statement_cache>(m_stmt_cache_capacity);
+    {
+        std::lock_guard<std::mutex> lock(m_cache_mutex);
+        m_cache = std::make_shared<statement_cache>(m_stmt_cache_capacity);
+    }
 }
 
 void sqlite_database::close() noexcept {
-    if (m_cache) {
-        m_cache->close();
-        m_cache.reset();
+    std::shared_ptr<statement_cache> cache;
+    {
+        std::lock_guard<std::mutex> lock(m_cache_mutex);
+        cache = std::move(m_cache);
+    }
+    if (cache) {
+        cache->close();
     }
     if (m_db) {
         if (sqlite_api::instance().sqlite3_close_v2) {
@@ -961,21 +982,46 @@ const char *sqlite_database::errmsg() const noexcept {
     return (m_db && sqlite_api::instance().sqlite3_errmsg) ? sqlite3_errmsg(m_db) : "Database not open";
 }
 
+std::shared_ptr<statement_cache> sqlite_database::get_cache() const noexcept {
+    std::lock_guard<std::mutex> lock(m_cache_mutex);
+    return m_cache;
+}
+
 size_t sqlite_database::cached_statement_count() const noexcept {
-    return m_cache ? m_cache->size() : 0;
+    std::shared_ptr<statement_cache> cache;
+    {
+        std::lock_guard<std::mutex> lock(m_cache_mutex);
+        cache = m_cache;
+    }
+    return cache ? cache->size() : 0;
 }
 
 uint64_t sqlite_database::cache_hits() const noexcept {
-    return m_cache ? m_cache->hits() : 0;
+    std::shared_ptr<statement_cache> cache;
+    {
+        std::lock_guard<std::mutex> lock(m_cache_mutex);
+        cache = m_cache;
+    }
+    return cache ? cache->hits() : 0;
 }
 
 uint64_t sqlite_database::cache_misses() const noexcept {
-    return m_cache ? m_cache->misses() : 0;
+    std::shared_ptr<statement_cache> cache;
+    {
+        std::lock_guard<std::mutex> lock(m_cache_mutex);
+        cache = m_cache;
+    }
+    return cache ? cache->misses() : 0;
 }
 
 void sqlite_database::clear_statement_cache() noexcept {
-    if (m_cache) {
-        m_cache->clear();
+    std::shared_ptr<statement_cache> cache;
+    {
+        std::lock_guard<std::mutex> lock(m_cache_mutex);
+        cache = m_cache;
+    }
+    if (cache) {
+        cache->clear();
     }
 }
 
