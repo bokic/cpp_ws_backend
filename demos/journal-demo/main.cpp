@@ -46,7 +46,7 @@ static void request_ws_system_logs(backend::wsworker *worker, const std::map<std
         if (r == 0 && msg != nullptr) {
             // "MESSAGE=" prefix is 8 chars
             if (len >= 8) {
-                json_object_array_add(json_data, json_object_new_string(reinterpret_cast<const char *>(msg + 8)));
+                json_object_array_add(json_data, json_object_new_string_len(reinterpret_cast<const char *>(msg + 8), static_cast<int>(len - 8)));
             } else {
                 json_object_array_add(json_data, json_object_new_string(""));
             }
