@@ -2,6 +2,9 @@
 
 #include <sstream>
 #include <string>
+#include <string_view>
+#include <cstring>
+#include <tuple>
 #include <regex>
 #include <list>
 #include <map>
@@ -65,18 +68,18 @@ backend::wsworker::wsworker(std::shared_ptr<const router> router)
 std::map<std::string, std::string> backend::wsworker::parse_request(std::shared_ptr<FCGX_Request> request)
 {
     std::map<std::string, std::string> ret;
+    if (!request || !request->envp)
+        return ret;
 
-    for(char **envp = request->envp; *envp; envp++)
+    for (char **envp = request->envp; *envp; ++envp)
     {
-        std::string item(*envp);
-
-        auto i = item.find('=');
-        if (i > 0)
+        const char *s = *envp;
+        const char *eq = std::strchr(s, '=');
+        if (eq && eq != s)
         {
-            std::string key = item.substr(0, i);
-            std::string val = item.substr(i + 1);
-
-            ret.insert(std::make_pair(key, val));
+            ret.emplace(std::piecewise_construct,
+                        std::forward_as_tuple(s, eq - s),
+                        std::forward_as_tuple(eq + 1));
         }
     }
 
@@ -86,32 +89,38 @@ std::map<std::string, std::string> backend::wsworker::parse_request(std::shared_
 std::map<std::string, std::string> backend::wsworker::parse_args(const std::string &params)
 {
     std::map<std::string, std::string> ret;
+    if (params.empty())
+        return ret;
 
-    std::istringstream f(params);
-    std::string item;
-    while (std::getline(f, item, '&')) {
-        if (item.empty())
-            continue;
+    size_t start = 0;
+    while (start < params.size())
+    {
+        size_t end = params.find('&', start);
+        if (end == std::string::npos)
+            end = params.size();
 
-        auto pos = item.find('=');
-        std::string key;
-        std::string val;
-
-        if (pos != std::string::npos)
+        if (end > start)
         {
-            key = url_decode(item.substr(0, pos));
-            val = url_decode(item.substr(pos + 1));
+            std::string_view item(params.data() + start, end - start);
+            auto pos = item.find('=');
+            if (pos != std::string_view::npos)
+            {
+                std::string key = url_decode(std::string(item.substr(0, pos)));
+                if (!key.empty())
+                {
+                    ret.emplace(std::move(key), url_decode(std::string(item.substr(pos + 1))));
+                }
+            }
+            else
+            {
+                std::string key = url_decode(std::string(item));
+                if (!key.empty())
+                {
+                    ret.emplace(std::move(key), "");
+                }
+            }
         }
-        else
-        {
-            key = url_decode(item);
-            val = "";
-        }
-
-        if (!key.empty())
-        {
-            ret[key] = val;
-        }
+        start = end + 1;
     }
 
     return ret;
@@ -123,9 +132,7 @@ void backend::wsworker::process(std::shared_ptr<FCGX_Request> request)
     m_body.clear();
 
     try {
-        std::map<std::string, std::string> header;
-
-        header = parse_request(request);
+        std::map<std::string, std::string> header = parse_request(request);
 
         if (header.count("CONTENT_LENGTH") > 0)
         {
