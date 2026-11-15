@@ -21,9 +21,9 @@ backend::wsserver::~wsserver()
 
 void backend::wsserver::init(const char *socket_name, int backlog, int workers)
 {
-    if (socket_name)
     {
-        m_socket_path = socket_name;
+        std::lock_guard<std::mutex> lock(m_hooks_mutex);
+        m_socket_path = socket_name ? socket_name : "";
     }
     int fd = FCGX_OpenSocket(socket_name, backlog);
     if (fd < 0)
@@ -44,13 +44,18 @@ void backend::wsserver::shutdown()
         close(fd);
     }
 
-    if (!m_socket_path.empty())
+    std::string socket_path;
     {
-        if (m_socket_path.find('/') != std::string::npos || m_socket_path.find(':') == std::string::npos)
-        {
-            unlink(m_socket_path.c_str());
-        }
+        std::lock_guard<std::mutex> lock(m_hooks_mutex);
+        socket_path = std::move(m_socket_path);
         m_socket_path.clear();
+    }
+    if (!socket_path.empty())
+    {
+        if (socket_path.find('/') != std::string::npos || socket_path.find(':') == std::string::npos)
+        {
+            unlink(socket_path.c_str());
+        }
     }
 
     m_thread_pool.stop();
