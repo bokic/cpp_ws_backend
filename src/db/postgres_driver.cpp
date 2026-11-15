@@ -331,6 +331,7 @@ postgres_statement::postgres_statement(std::shared_ptr<pg_conn_holder> conn, std
         char c = sql[i];
         if (c == '?') {
             m_translated_sql += "$" + std::to_string(param_num++);
+            m_param_names.push_back("");
             m_params.push_back({true, ""});
             ++i;
         } else if (c == ':' && (i == 0 || (!std::isalnum(static_cast<unsigned char>(sql[i - 1])) && sql[i - 1] != ':'))) {
@@ -339,9 +340,20 @@ postgres_statement::postgres_statement(std::shared_ptr<pg_conn_holder> conn, std
                 ++i;
             }
             std::string name(sql.substr(start, i - start));
-            m_translated_sql += "$" + std::to_string(param_num++);
-            m_param_names.push_back(name);
-            m_params.push_back({true, ""});
+            int existing_num = -1;
+            for (size_t k = 0; k < m_param_names.size(); ++k) {
+                if (!m_param_names[k].empty() && m_param_names[k] == name) {
+                    existing_num = static_cast<int>(k + 1);
+                    break;
+                }
+            }
+            if (existing_num != -1) {
+                m_translated_sql += "$" + std::to_string(existing_num);
+            } else {
+                m_translated_sql += "$" + std::to_string(param_num++);
+                m_param_names.push_back(name);
+                m_params.push_back({true, ""});
+            }
         } else {
             m_translated_sql.push_back(c);
             ++i;
@@ -354,7 +366,7 @@ int postgres_statement::get_param_index(std::string_view name) {
         name.remove_prefix(1);
     }
     for (size_t i = 0; i < m_param_names.size(); ++i) {
-        if (m_param_names[i] == name) {
+        if (!m_param_names[i].empty() && m_param_names[i] == name) {
             return static_cast<int>(i + 1);
         }
     }
