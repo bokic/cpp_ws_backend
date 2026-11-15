@@ -351,8 +351,11 @@ int postgres_statement::get_param_index(std::string_view name) {
 }
 
 void postgres_statement::bind(size_t index, std::nullptr_t) {
-    if (index == 0 || index > m_params.size()) {
-        m_params.resize(std::max(m_params.size(), index), {true, ""});
+    if (index == 0) {
+        throw db_exception("PostgreSQL parameter index is 1-based (received 0)");
+    }
+    if (index > m_params.size()) {
+        m_params.resize(index, {true, ""});
     }
     m_params[index - 1] = {true, ""};
 }
@@ -362,15 +365,21 @@ void postgres_statement::bind(size_t index, int32_t val) {
 }
 
 void postgres_statement::bind(size_t index, int64_t val) {
-    if (index == 0 || index > m_params.size()) {
-        m_params.resize(std::max(m_params.size(), index), {true, ""});
+    if (index == 0) {
+        throw db_exception("PostgreSQL parameter index is 1-based (received 0)");
+    }
+    if (index > m_params.size()) {
+        m_params.resize(index, {true, ""});
     }
     m_params[index - 1] = {false, std::to_string(val)};
 }
 
 void postgres_statement::bind(size_t index, double val) {
-    if (index == 0 || index > m_params.size()) {
-        m_params.resize(std::max(m_params.size(), index), {true, ""});
+    if (index == 0) {
+        throw db_exception("PostgreSQL parameter index is 1-based (received 0)");
+    }
+    if (index > m_params.size()) {
+        m_params.resize(index, {true, ""});
     }
     char buf[64];
     auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), val);
@@ -378,8 +387,11 @@ void postgres_statement::bind(size_t index, double val) {
 }
 
 void postgres_statement::bind(size_t index, std::string_view val) {
-    if (index == 0 || index > m_params.size()) {
-        m_params.resize(std::max(m_params.size(), index), {true, ""});
+    if (index == 0) {
+        throw db_exception("PostgreSQL parameter index is 1-based (received 0)");
+    }
+    if (index > m_params.size()) {
+        m_params.resize(index, {true, ""});
     }
     m_params[index - 1] = {false, std::string(val)};
 }
