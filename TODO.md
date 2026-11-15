@@ -15,11 +15,11 @@ This document tracks newly discovered bugs, memory corruption hazards, crash vec
 | **1.5** | `connection_pool::acquire()` leaks active lease & leaves dangling pointer in `m_live_connections` if `shared_from_this()` throws | **HIGH** | Connection Pool | Use-After-Free / Leak | **RESOLVED** (`f9d3319`) |
 | **1.6** | Null pointer dereference in `pooled_connection` forwarding methods when empty/moved-from | **MEDIUM** | Connection Pool | Crash | **RESOLVED** (`eb0e9ca`) |
 | **1.7** | Closed `sqlite3*` handle dereferenced by outliving `sqlite_result_set` / `sqlite_statement` | **MEDIUM** | SQLite Driver | Use-After-Free | **RESOLVED** (`2ccbdf5`) |
-| **2.1** | Data race on `wsserver::m_socket_path` during concurrent `shutdown()` | **HIGH** | `wsserver` | Concurrency / Data Race | [ ] |
-| **2.2** | Premature pool/hook teardown & unsafe `close(fd)` while `FCGX_Accept_r` is blocked in `wsserver::shutdown()` | **HIGH** | `wsserver` | Concurrency / Race | [ ] |
-| **2.3** | `connection_pool::acquire()` hands out new connections after `shutdown()` has begun | **MEDIUM** | Connection Pool | Concurrency | [ ] |
-| **2.4** | Unsynchronized access to `m_workers`, `m_max_queue_size`, and `m_router` in `wsthreadpool` | **LOW** | `wsthreadpool` | Concurrency / Data Race | [ ] |
-| **2.5** | `wsthreadpool::start()` does not reset `m_finished`, breaking pool restart | **LOW** | `wsthreadpool` | Concurrency / Logic | [ ] |
+| **2.1** | Data race on `wsserver::m_socket_path` during concurrent `shutdown()` | **HIGH** | `wsserver` | Concurrency / Data Race | **RESOLVED** (`251bf60`) |
+| **2.2** | Premature pool/hook teardown & unsafe `close(fd)` while `FCGX_Accept_r` is blocked in `wsserver::shutdown()` | **HIGH** | `wsserver` | Concurrency / Race | **RESOLVED** (`f28b99d`) |
+| **2.3** | `connection_pool::acquire()` hands out new connections after `shutdown()` has begun | **MEDIUM** | Connection Pool | Concurrency | **RESOLVED** (`5af75fa`) |
+| **2.4** | Unsynchronized access to `m_workers`, `m_max_queue_size`, and `m_router` in `wsthreadpool` | **LOW** | `wsthreadpool` | Concurrency / Data Race | **RESOLVED** (`a6e9466`) |
+| **2.5** | `wsthreadpool::start()` does not reset `m_finished`, breaking pool restart | **LOW** | `wsthreadpool` | Concurrency / Logic | **RESOLVED** (`369aa9b`) |
 | **3.1** | `wsworker::m_request` is never cleared after `process()`, leaking keep-alive sockets (`ipcFd`) | **HIGH** | `wsworker` | Resource Leak / Bug | [ ] |
 | **3.2** | `postgres_row::get_blob()` returns raw ASCII hex string (`\x...`) instead of decoded binary bytes | **HIGH** | PostgreSQL Driver | Functional Bug | [ ] |
 | **3.3** | `mysql_statement` SQL parser corrupts `:=`, `::`, and standalone `:` into `NULL` or `?` parameters | **HIGH** | MySQL Driver | Functional Bug | [ ] |
@@ -170,9 +170,10 @@ This document tracks newly discovered bugs, memory corruption hazards, crash vec
 
 ## 2. Concurrency, Race Conditions & Thread Safety
 
-### [ ] 2.1. Data Race on `wsserver::m_socket_path` During Concurrent `shutdown()`
+### [x] 2.1. Data Race on `wsserver::m_socket_path` During Concurrent `shutdown()`
 * **Files:** [src/wsserver.h#L57](file:///home/boris/projects/cpp_ws_backend/src/wsserver.h#L57), [src/wsserver.cpp#L47-L54](file:///home/boris/projects/cpp_ws_backend/src/wsserver.cpp#L47-L54)
 * **Severity:** **HIGH**
+* **Status:** **RESOLVED** (`251bf60`)
 * **Description:**
   `wsserver::shutdown()` reads and modifies `m_socket_path` (`m_socket_path.clear()`) without holding any mutex. Because `shutdown()` is invoked both from the signal handler thread and from `wsserver::~wsserver()`, concurrent execution of `shutdown()` causes a data race on `std::string m_socket_path`.
 * **Fix:**
@@ -180,9 +181,10 @@ This document tracks newly discovered bugs, memory corruption hazards, crash vec
 
 ---
 
-### [ ] 2.2. Premature Pool/Hook Teardown & Unsafe `close(fd)` While `FCGX_Accept_r` Is Blocked
+### [x] 2.2. Premature Pool/Hook Teardown & Unsafe `close(fd)` While `FCGX_Accept_r` Is Blocked
 * **File:** [src/wsserver.cpp#L38-L76](file:///home/boris/projects/cpp_ws_backend/src/wsserver.cpp#L38-L76), [src/wsserver.cpp#L122-L169](file:///home/boris/projects/cpp_ws_backend/src/wsserver.cpp#L122-L169)
 * **Severity:** **HIGH**
+* **Status:** **RESOLVED** (`f28b99d`)
 * **Description:**
   1. `wsserver::m_sock_fd` initializes to `0` instead of `-1`. If `init()` is not called, `m_sock_fd` defaults to file descriptor `0` (`stdin`).
   2. In `wsserver::shutdown()`, calling `close(fd)` while the main thread is blocked inside `FCGX_Accept_r()` (`accept(fd, ...)`) is unsafe on Linux: `close(fd)` does not reliably wake a thread blocked in `accept()`, and frees the file descriptor number `fd` for immediate reuse by other threads while `accept()` is still using it. Calling `::shutdown(fd, SHUT_RDWR)` before closing is required to wake `accept()`.
@@ -190,25 +192,28 @@ This document tracks newly discovered bugs, memory corruption hazards, crash vec
 
 ---
 
-### [ ] 2.3. `connection_pool::acquire()` Hands Out Connections After `shutdown()` Has Begun
+### [x] 2.3. `connection_pool::acquire()` Hands Out Connections After `shutdown()` Has Begun
 * **File:** [src/db/connection_pool.h#L216-L236](file:///home/boris/projects/cpp_ws_backend/src/db/connection_pool.h#L216-L236), [src/db/connection_pool.h#L247-L279](file:///home/boris/projects/cpp_ws_backend/src/db/connection_pool.h#L247-L279)
 * **Severity:** **MEDIUM**
+* **Status:** **RESOLVED** (`5af75fa`)
 * **Description:**
   In `connection_pool::acquire()`, the mutex `m_mutex` is unlocked while calling `m_factory()`, `conn_reset_if_possible()`, and `conn->ping()`. If `pool->shutdown()` is called during this window, `acquire()` does not re-check `m_shutdown` after re-locking and returns an active lease to the caller after the pool has shut down.
 
 ---
 
-### [ ] 2.4. Unsynchronized Access to `m_workers`, `m_max_queue_size`, and `m_router` in `wsthreadpool`
+### [x] 2.4. Unsynchronized Access to `m_workers`, `m_max_queue_size`, and `m_router` in `wsthreadpool`
 * **Files:** [src/wsthreadpool.h#L29-L47](file:///home/boris/projects/cpp_ws_backend/src/wsthreadpool.h#L29-L47), [src/wsthreadpool.cpp#L40-L75](file:///home/boris/projects/cpp_ws_backend/src/wsthreadpool.cpp#L40-L75)
 * **Severity:** **LOW**
+* **Status:** **RESOLVED** (`a6e9466`)
 * **Description:**
   `m_max_queue_size` is read inside `addWork()` under `m_lock`, but `setMaxQueueSize()` and `maxQueueSize()` read/write it without `m_lock` or `std::atomic`. Similarly, `m_workers` and `m_router` are accessed without synchronization.
 
 ---
 
-### [ ] 2.5. `wsthreadpool::start()` Does Not Reset `m_finished`
+### [x] 2.5. `wsthreadpool::start()` Does Not Reset `m_finished`
 * **File:** [src/wsthreadpool.cpp#L54-L70](file:///home/boris/projects/cpp_ws_backend/src/wsthreadpool.cpp#L54-L70)
 * **Severity:** **LOW**
+* **Status:** **RESOLVED** (`369aa9b`)
 * **Description:**
   `wsthreadpool::stop()` sets `m_finished = true`, but `wsthreadpool::start()` never resets `m_finished = false`. If a thread pool is stopped and started again, all spawned worker threads immediately exit their loop, and `addWork()` drops all incoming requests.
 
