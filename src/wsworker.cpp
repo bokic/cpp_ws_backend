@@ -155,7 +155,12 @@ void backend::wsworker::process(std::shared_ptr<FCGX_Request> request)
         {
             int contentLen = 0;
             try {
-                contentLen = std::stoi(header["CONTENT_LENGTH"]);
+                const std::string &cl_str = header["CONTENT_LENGTH"];
+                size_t pos = 0;
+                contentLen = std::stoi(cl_str, &pos);
+                if (pos != cl_str.size()) {
+                    throw std::invalid_argument("Trailing characters in Content-Length");
+                }
             } catch (...) {
                 FCGX_FPrintF(request->out, "Status: 400 Bad Request\r\n\r\nInvalid Content-Length");
                 FCGX_Finish_r(request.get());
@@ -187,7 +192,13 @@ void backend::wsworker::process(std::shared_ptr<FCGX_Request> request)
                         break;
                     total_read += n;
                 }
-                m_body.resize(static_cast<unsigned int>(total_read));
+                if (total_read < contentLen)
+                {
+                    m_body.clear();
+                    FCGX_FPrintF(request->out, "Status: 400 Bad Request\r\n\r\nIncomplete Request Body");
+                    FCGX_Finish_r(request.get());
+                    return;
+                }
             }
         }
 
