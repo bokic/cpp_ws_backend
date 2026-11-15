@@ -4,6 +4,8 @@
 #include <fcgio.h>
 
 #include <unistd.h>
+#include <system_error>
+#include <cerrno>
 
 
 backend::wsserver::wsserver()
@@ -23,7 +25,13 @@ void backend::wsserver::init(const char *socket_name, int backlog, int workers)
     {
         m_socket_path = socket_name;
     }
-    m_sock_fd = FCGX_OpenSocket(socket_name, backlog);
+    int fd = FCGX_OpenSocket(socket_name, backlog);
+    if (fd < 0)
+    {
+        throw std::system_error(errno, std::generic_category(),
+            std::string("Failed to open FastCGI socket: ") + (socket_name ? socket_name : "(null)"));
+    }
+    m_sock_fd = fd;
     m_thread_pool.setWorkers(workers);
 }
 
