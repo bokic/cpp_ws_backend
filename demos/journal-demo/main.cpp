@@ -9,6 +9,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <stdexcept>
+#include <cctype>
 #include <unistd.h>
 #include <csignal>
 #include <atomic>
@@ -23,6 +24,23 @@ static const std::string &get_header(const std::map<std::string, std::string> &h
     static const std::string empty_str;
     auto it = header.find(key);
     return it != header.end() ? it->second : empty_str;
+}
+
+static bool is_valid_http_protocol(const std::string &proto)
+{
+    if (proto == "HTTP/1.1" || proto == "HTTP/1.0" || proto == "HTTP/2" || proto == "HTTP/2.0") {
+        return true;
+    }
+    if (proto.rfind("HTTP/", 0) == 0 && proto.size() <= 10) {
+        for (size_t i = 5; i < proto.size(); ++i) {
+            char c = proto[i];
+            if (c != '.' && !std::isdigit(static_cast<unsigned char>(c))) {
+                return false;
+            }
+        }
+        return true;
+    }
+    return false;
 }
 
 static void request_ws_system_logs(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const std::list<std::string> &uri_params)
@@ -78,7 +96,7 @@ static void request_ws_system_logs(backend::wsworker *worker, const std::map<std
 
     const char *json_str = json_object_get_string(json.get());
     std::string proto = get_header(header, "SERVER_PROTOCOL");
-    const char *server_protocol = proto.empty() ? "HTTP/1.1" : proto.c_str();
+    const char *server_protocol = is_valid_http_protocol(proto) ? proto.c_str() : "HTTP/1.1";
 
     FCGX_FPrintF(worker->out(), "%s 200 OK\r\nContent-type: application/json\r\nX-Content-Type-Options: nosniff\r\nContent-Length: %d\r\n\r\n%s",
                  server_protocol, static_cast<int>(std::strlen(json_str)), json_str);

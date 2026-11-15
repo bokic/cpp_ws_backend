@@ -12,6 +12,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <stdexcept>
+#include <cctype>
 #include <unistd.h>
 #include <fcgio.h>
 #include <csignal>
@@ -27,10 +28,28 @@ static const std::string &get_header(const std::map<std::string, std::string> &h
     return it != header.end() ? it->second : empty_str;
 }
 
+static bool is_valid_http_protocol(const std::string &proto)
+{
+    if (proto == "HTTP/1.1" || proto == "HTTP/1.0" || proto == "HTTP/2" || proto == "HTTP/2.0") {
+        return true;
+    }
+    if (proto.rfind("HTTP/", 0) == 0 && proto.size() <= 10) {
+        for (size_t i = 5; i < proto.size(); ++i) {
+            char c = proto[i];
+            if (c != '.' && !std::isdigit(static_cast<unsigned char>(c))) {
+                return false;
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
 static void send_json_response(FCGX_Stream *out, const std::string &protocol, const std::string &body)
 {
+    const char *proto = is_valid_http_protocol(protocol) ? protocol.c_str() : "HTTP/1.1";
     FCGX_FPrintF(out, "%s 200 OK\r\nContent-type: application/json\r\nX-Content-Type-Options: nosniff\r\nContent-Length: %d\r\n\r\n%s",
-                 protocol.c_str(), static_cast<int>(body.length()), body.c_str());
+                 proto, static_cast<int>(body.length()), body.c_str());
 }
 
 static void request_ws_db_tables(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const std::list<std::string> &uri_params)
