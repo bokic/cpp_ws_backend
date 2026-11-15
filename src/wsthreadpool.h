@@ -26,6 +26,9 @@ public:
     wsthreadpool &operator=(wsthreadpool &&) = delete;
     void setWorkers(int workers);
     void setRouter(std::shared_ptr<const router> router);
+    void setMaxQueueSize(size_t max_size) { m_max_queue_size = max_size; }
+    size_t maxQueueSize() const { return m_max_queue_size; }
+    size_t queueSize() const;
     void start();
     void stop();
     void addWork(std::shared_ptr<FCGX_Request> request);
@@ -39,6 +42,7 @@ private:
     std::condition_variable m_data_condition;
     std::atomic<bool> m_finished{false};
     std::mutex m_lock;
+    size_t m_max_queue_size = 1024;
     unsigned int m_workers = 0;
     bool m_started = false;
 };

@@ -23,6 +23,7 @@ public:
     wsserver(wsserver &&) = delete;
     wsserver &operator=(wsserver &&) = delete;
     void init(const char *socket_name, int backlog, int workers);
+    void set_max_queue_size(size_t max_size) { m_thread_pool.setMaxQueueSize(max_size); }
     void shutdown();
     int run();
 

@@ -74,12 +74,30 @@ void backend::wsthreadpool::setRouter(std::shared_ptr<const router> router)
     m_router = std::move(router);
 }
 
+size_t backend::wsthreadpool::queueSize() const
+{
+    std::unique_lock<std::mutex> lock(const_cast<std::mutex&>(m_lock));
+    return m_work_queue.size();
+}
+
 void backend::wsthreadpool::addWork(std::shared_ptr<FCGX_Request> request)
 {
     {
         std::unique_lock<std::mutex> lock(m_lock);
         if (m_finished)
             return;
+
+        if (m_max_queue_size > 0 && m_work_queue.size() >= m_max_queue_size)
+        {
+            lock.unlock();
+            if (request && request->out)
+            {
+                FCGX_FPrintF(request->out, "Status: 503 Service Unavailable\r\nRetry-After: 1\r\n\r\nServer Busy");
+                FCGX_Finish_r(request.get());
+            }
+            return;
+        }
+
         m_work_queue.push(request);
     }
 
