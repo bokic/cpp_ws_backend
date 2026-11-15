@@ -25,7 +25,9 @@ static std::string url_decode(const std::string &src)
         {
             ret += ' ';
         }
-        else if (src[i] == '%' && i + 2 < src.size() && isxdigit(src[i + 1]) && isxdigit(src[i + 2]))
+        else if (src[i] == '%' && i + 2 < src.size() &&
+                 isxdigit(static_cast<unsigned char>(src[i + 1])) &&
+                 isxdigit(static_cast<unsigned char>(src[i + 2])))
         {
             auto hex_to_int = [](char c) -> int {
                 if (c >= '0' && c <= '9') return c - '0';
