@@ -301,7 +301,7 @@ void statement_cache::clear() noexcept {
 
 void statement_cache::close() noexcept {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_closed = true;
+    m_closed.store(true, std::memory_order_release);
     for (auto &entry : m_lru) {
         if (entry.second && sqlite_api::instance().sqlite3_finalize) {
             sqlite3_finalize(entry.second);
@@ -328,7 +328,7 @@ uint64_t statement_cache::misses() const noexcept {
 
 sqlite_stmt_holder::sqlite_stmt_holder(
     sqlite3 *d, sqlite3_stmt *s, std::string q, std::weak_ptr<statement_cache> c
-) : db(d), stmt(s), sql(std::move(q)), cache(std::move(c)) {}
+) : db(d), stmt(s), sql(std::move(q)), cache(std::move(c)), has_cache(!cache.expired()) {}
 
 sqlite_stmt_holder::~sqlite_stmt_holder() {
     if (stmt) {
@@ -461,6 +461,10 @@ sqlite_result_set::~sqlite_result_set() {
 
 bool sqlite_result_set::next() {
     if (!m_holder || !m_holder->stmt) return false;
+    sqlite3 *db = m_holder->active_db();
+    if (!db) {
+        throw db_exception("Cannot step statement: SQLite database connection is closed");
+    }
     int rc = sqlite3_step(m_holder->stmt);
     if (rc == SQLITE_ROW) {
         return true;
@@ -468,7 +472,7 @@ bool sqlite_result_set::next() {
     if (rc == SQLITE_DONE) {
         return false;
     }
-    std::string err = m_holder->db ? sqlite3_errmsg(m_holder->db) : "Unknown SQLite step error";
+    std::string err = sqlite3_errmsg(db);
     throw db_exception("SQLite step error: " + err);
 }
 
@@ -489,8 +493,10 @@ size_t sqlite_result_set::column_index(std::string_view name) const {
 }
 
 uint64_t sqlite_result_set::affected_rows() const noexcept {
-    if (!m_holder || !m_holder->db) return 0;
-    return static_cast<uint64_t>(sqlite3_changes(m_holder->db));
+    if (!m_holder) return 0;
+    sqlite3 *db = m_holder->active_db();
+    if (!db) return 0;
+    return static_cast<uint64_t>(sqlite3_changes(db));
 }
 
 // ==================== sqlite_statement ====================
@@ -653,14 +659,17 @@ void sqlite_statement::reset() {
 
 int sqlite_statement::step() {
     if (!m_holder || !m_holder->stmt) throw db_exception("Statement not initialized");
+    if (!m_holder->active_db()) throw db_exception("Cannot step statement: SQLite database connection is closed");
     return sqlite3_step(m_holder->stmt);
 }
 
 void sqlite_statement::step_done() {
     if (!m_holder || !m_holder->stmt) throw db_exception("Statement not initialized");
+    sqlite3 *db = m_holder->active_db();
+    if (!db) throw db_exception("Cannot step statement: SQLite database connection is closed");
     int rc = sqlite3_step(m_holder->stmt);
     if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
-        std::string err = m_holder->db ? sqlite3_errmsg(m_holder->db) : "Unknown SQLite step error";
+        std::string err = sqlite3_errmsg(db);
         throw db_exception("SQLite step error: " + err);
     }
 }

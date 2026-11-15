@@ -55,6 +55,7 @@ public:
     void checkin(const std::string &sql, sqlite3_stmt *stmt) noexcept;
     void clear() noexcept;
     void close() noexcept;
+    bool is_closed() const noexcept { return m_closed.load(std::memory_order_acquire); }
     size_t size() const noexcept;
     uint64_t hits() const noexcept;
     uint64_t misses() const noexcept;
@@ -63,7 +64,7 @@ private:
     using lru_list_t = std::list<std::pair<std::string, sqlite3_stmt *>>;
     mutable std::mutex m_mutex;
     size_t m_max_capacity = 128;
-    bool m_closed = false;
+    std::atomic<bool> m_closed{false};
     lru_list_t m_lru;
     std::unordered_map<std::string, lru_list_t::iterator> m_map;
     std::atomic<uint64_t> m_hits{0};
@@ -75,9 +76,19 @@ struct sqlite_stmt_holder {
     sqlite3_stmt *stmt = nullptr;
     std::string sql;
     std::weak_ptr<statement_cache> cache;
+    bool has_cache = false;
 
     sqlite_stmt_holder(sqlite3 *d, sqlite3_stmt *s, std::string q, std::weak_ptr<statement_cache> c);
     ~sqlite_stmt_holder();
+
+    sqlite3 *active_db() const noexcept {
+        if (!db) return nullptr;
+        if (has_cache) {
+            auto c = cache.lock();
+            if (!c || c->is_closed()) return nullptr;
+        }
+        return db;
+    }
 
     sqlite_stmt_holder(const sqlite_stmt_holder &) = delete;
     sqlite_stmt_holder &operator=(const sqlite_stmt_holder &) = delete;
