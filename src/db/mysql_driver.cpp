@@ -179,19 +179,20 @@ struct mysql_result_holder {
 
 static std::string escape_sql_string(void *conn, std::string_view val) {
     auto &api = mysql_api::instance();
-    std::string out = "'";
+    std::string out;
     if (val.empty()) {
-        out += "'";
-        return out;
+        return "''";
     }
     if (conn && api.mysql_real_escape_string) {
-        std::string escaped;
-        escaped.resize(val.size() * 2 + 1);
-        unsigned long len = api.mysql_real_escape_string(conn, escaped.data(), val.data(),
+        out.resize(1 + val.size() * 2 + 1);
+        out[0] = '\'';
+        unsigned long len = api.mysql_real_escape_string(conn, out.data() + 1, val.data(),
                                                          static_cast<unsigned long>(val.size()));
-        escaped.resize(len);
-        out += escaped;
+        out.resize(1 + len);
+        out.push_back('\'');
     } else {
+        out.reserve(val.size() + 2);
+        out.push_back('\'');
         for (char c : val) {
             switch (c) {
                 case '\'': out += "\\'"; break;
@@ -204,8 +205,8 @@ static std::string escape_sql_string(void *conn, std::string_view val) {
                 default: out += c; break;
             }
         }
+        out.push_back('\'');
     }
-    out += "'";
     return out;
 }
 
@@ -708,7 +709,21 @@ void mysql_statement::bind(std::string_view name, std::chrono::system_clock::tim
 }
 
 std::string mysql_statement::build_final_sql() {
+    size_t total_size = 0;
+    for (const auto &chunk : m_chunks) {
+        if (chunk.param_idx < 0) {
+            total_size += chunk.text.size();
+        } else {
+            size_t idx = static_cast<size_t>(chunk.param_idx);
+            if (idx < m_bound.size() && !m_bound[idx].is_null) {
+                total_size += m_bound[idx].escaped_literal.size();
+            } else {
+                total_size += 4; // "NULL"
+            }
+        }
+    }
     std::string sql;
+    sql.reserve(total_size);
     for (const auto &chunk : m_chunks) {
         if (chunk.param_idx < 0) {
             sql += chunk.text;
@@ -725,7 +740,24 @@ std::string mysql_statement::build_final_sql() {
 }
 
 void mysql_statement::execute() {
-    query();
+    if (!m_conn || !m_conn->conn) {
+        throw db_exception("MySQL connection is not open");
+    }
+    auto &api = mysql_api::instance();
+    api.ensure_loaded();
+
+    std::string sql = build_final_sql();
+    int rc = api.mysql_real_query(m_conn->conn, sql.data(), static_cast<unsigned long>(sql.size()));
+    if (rc != 0) {
+        throw db_exception("MySQL query execution failed: " + std::string(api.mysql_error(m_conn->conn)));
+    }
+
+    void *res = api.mysql_store_result(m_conn->conn);
+    if (res) {
+        api.mysql_free_result(res);
+    } else if (api.mysql_errno(m_conn->conn) != 0) {
+        throw db_exception("MySQL store result failed: " + std::string(api.mysql_error(m_conn->conn)));
+    }
 }
 
 std::unique_ptr<result_set> mysql_statement::query() {
