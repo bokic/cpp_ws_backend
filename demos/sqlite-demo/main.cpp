@@ -53,6 +53,42 @@ static void send_http_headers(FCGX_Stream *out, const std::string &protocol)
     FCGX_FPrintF(out, "%s 200 OK\r\nStatus: 200 OK\r\nContent-type: application/json\r\nX-Content-Type-Options: nosniff\r\n\r\n", proto);
 }
 
+static void send_bad_request(FCGX_Stream *out, const std::string &protocol, const char *message)
+{
+    const char *proto = is_valid_http_protocol(protocol) ? protocol.c_str() : "HTTP/1.1";
+    FCGX_FPrintF(out, "%s 400 Bad Request\r\nStatus: 400 Bad Request\r\nContent-type: text/plain\r\nX-Content-Type-Options: nosniff\r\n\r\n%s",
+                 proto, message);
+}
+
+class deferred_http_sink final : public backend::db::stream_sink {
+public:
+    deferred_http_sink(FCGX_Stream *out, std::string protocol)
+        : m_sink(out), m_out(out), m_protocol(std::move(protocol)) {}
+
+    void write(std::string_view sv) override {
+        ensure_headers();
+        m_sink.write(sv);
+    }
+
+    void put(char c) override {
+        ensure_headers();
+        m_sink.put(c);
+    }
+
+private:
+    void ensure_headers() {
+        if (!m_headers_sent) {
+            m_headers_sent = true;
+            send_http_headers(m_out, m_protocol);
+        }
+    }
+
+    backend::db::fcgx_sink m_sink;
+    FCGX_Stream *m_out;
+    std::string m_protocol;
+    bool m_headers_sent = false;
+};
+
 static void send_json_response(FCGX_Stream *out, const std::string &protocol, const std::string &body)
 {
     const char *proto = is_valid_http_protocol(protocol) ? protocol.c_str() : "HTTP/1.1";
@@ -72,12 +108,22 @@ static void request_ws_db_tables(backend::wsworker *worker, const std::map<std::
     send_json_response(worker->out(), get_header(header, "SERVER_PROTOCOL"), json.to_string());
 }
 
+static constexpr int MAX_PAGE_SIZE = 1000;
+
 static void request_ws_jsGrid_customers(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const std::list<std::string> &uri_params)
 {
+    std::string proto = get_header(header, "SERVER_PROTOCOL");
     auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
     int current_page = std::atoi(args["page"].data());
     int page_size = std::atoi(args["rows"].data());
-    if (page_size <= 0) throw std::invalid_argument("page_size contains invalid value!");
+    if (page_size <= 0 || page_size > MAX_PAGE_SIZE) {
+        send_bad_request(worker->out(), proto, "page_size contains invalid value!");
+        return;
+    }
+    if (!args["callback"].empty() && !backend::db::is_valid_callback(args["callback"])) {
+        send_bad_request(worker->out(), proto, "Invalid callback parameter!");
+        return;
+    }
 
     std::string sql;
     if (args["sidx"].empty()) {
@@ -89,8 +135,10 @@ static void request_ws_jsGrid_customers(backend::wsworker *worker, const std::ma
         std::string order = args["sidx"];
         std::string order_dir = args["sord"];
 
-        if (!std::regex_search(order, rgx_order)) throw std::invalid_argument("Invalid parameter!");
-        if (!std::regex_search(order_dir, rgx_order_dir)) throw std::invalid_argument("Invalid parameter!");
+        if (!std::regex_search(order, rgx_order) || !std::regex_search(order_dir, rgx_order_dir)) {
+            send_bad_request(worker->out(), proto, "Invalid parameter!");
+            return;
+        }
 
         sql = "SELECT * FROM customers ORDER BY " + order + " " + order_dir +  " LIMIT ? OFFSET ?";
     }
@@ -104,16 +152,24 @@ static void request_ws_jsGrid_customers(backend::wsworker *worker, const std::ma
         .callback = args["callback"]
     };
 
-    send_http_headers(worker->out(), get_header(header, "SERVER_PROTOCOL"));
-    backend::db::sql_to_json_paginated(worker->out(), *conn, q);
+    deferred_http_sink sink(worker->out(), std::move(proto));
+    backend::db::sql_to_json_paginated(sink, *conn, q);
 }
 
 static void request_ws_jsGrid_artists(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const std::list<std::string> &uri_params)
 {
+    std::string proto = get_header(header, "SERVER_PROTOCOL");
     auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
     int current_page = std::atoi(args["page"].data());
     int page_size = std::atoi(args["rows"].data());
-    if (page_size <= 0) throw std::invalid_argument("page_size contains invalid value!");
+    if (page_size <= 0 || page_size > MAX_PAGE_SIZE) {
+        send_bad_request(worker->out(), proto, "page_size contains invalid value!");
+        return;
+    }
+    if (!args["callback"].empty() && !backend::db::is_valid_callback(args["callback"])) {
+        send_bad_request(worker->out(), proto, "Invalid callback parameter!");
+        return;
+    }
 
     std::string sql;
     if (args["sidx"].empty()) {
@@ -125,8 +181,10 @@ static void request_ws_jsGrid_artists(backend::wsworker *worker, const std::map<
         std::string order = args["sidx"];
         std::string order_dir = args["sord"];
 
-        if (!std::regex_search(order, rgx_order)) throw std::invalid_argument("Invalid parameter!");
-        if (!std::regex_search(order_dir, rgx_order_dir)) throw std::invalid_argument("Invalid parameter!");
+        if (!std::regex_search(order, rgx_order) || !std::regex_search(order_dir, rgx_order_dir)) {
+            send_bad_request(worker->out(), proto, "Invalid parameter!");
+            return;
+        }
 
         sql = "SELECT artists.ArtistId as 'id', artists.Name as 'Artist', count(DISTINCT albums.AlbumId) as 'Albums', count(DISTINCT tracks.TrackId) as 'Tracks' FROM artists LEFT JOIN albums ON(albums.ArtistId = artists.ArtistId) LEFT JOIN tracks ON(tracks.AlbumId = albums.AlbumId) GROUP BY artists.Name ORDER BY " + order + " " + order_dir + " LIMIT ? OFFSET ?";
     }
@@ -140,21 +198,25 @@ static void request_ws_jsGrid_artists(backend::wsworker *worker, const std::map<
         .callback = args["callback"]
     };
 
-    send_http_headers(worker->out(), get_header(header, "SERVER_PROTOCOL"));
-    backend::db::sql_to_json_paginated(worker->out(), *conn, q);
+    deferred_http_sink sink(worker->out(), std::move(proto));
+    backend::db::sql_to_json_paginated(sink, *conn, q);
 }
 
 static void request_ws_jsGrid_artist_song_type(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const std::list<std::string> &uri_params)
 {
+    std::string proto = get_header(header, "SERVER_PROTOCOL");
     auto args = worker->parse_args(get_header(header, "QUERY_STRING"));
     int id = std::atoi(args["id"].data());
-    if (id <= 0) throw std::invalid_argument("Invalid id.");
+    if (id <= 0) {
+        send_bad_request(worker->out(), proto, "Invalid id.");
+        return;
+    }
 
     auto conn = g_db_pool->acquire();
     std::string sql = "SELECT genres.Name as 'name', count(DISTINCT tracks.TrackId) as 'hvalue' FROM genres INNER JOIN tracks ON(tracks.GenreId = genres.GenreId) INNER JOIN albums ON(albums.AlbumId = tracks.AlbumId) WHERE albums.ArtistId = ? GROUP BY genres.Name ORDER BY `hvalue` DESC";
 
-    send_http_headers(worker->out(), get_header(header, "SERVER_PROTOCOL"));
-    backend::db::sql_to_json(worker->out(), *conn, sql, id);
+    deferred_http_sink sink(worker->out(), std::move(proto));
+    backend::db::sql_to_json(sink, *conn, sql, id);
 }
 
 static constexpr auto DEFAULT_SOCKET_NAME = ":9000";
