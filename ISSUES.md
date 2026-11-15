@@ -71,12 +71,12 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 | **3.10**| Leaked `sd_journal` and JSON on exception | **LOW** | `journal-demo` | **RESOLVED** (`939fd10`) | Resource Leak |
 | **4.1** | Exception message disclosure in HTTP 500 | **MEDIUM** | Worker | **RESOLVED** (`132e9e1`) | Security |
 | **4.2** | CRLF injection via `SERVER_PROTOCOL` | **MEDIUM** | Demos | **RESOLVED** (`03b2ea0`) | Security |
-| **5.1** | 100+ heap allocations per request in header parsing | **HIGH** | Worker | Performance |
-| **5.2** | Indefinite 10MB memory retention in worker threads | **MEDIUM** | Worker | Performance |
-| **5.3** | Linear regex matching on all routes | **MEDIUM** | Worker | Performance |
-| **5.4** | Demo buffers JSON instead of streaming | **MEDIUM** | Demos | Performance |
-| **5.5** | Client-side query formatting in MySQL | **MEDIUM** | MySQL Driver | Performance |
-| **5.6** | Unbounded thread pool queue | **LOW** | Thread Pool | Performance |
+| **5.1** | 100+ heap allocations per request in header parsing | **HIGH** | Worker | **RESOLVED** (`de586b8`) | Performance |
+| **5.2** | Indefinite 10MB memory retention in worker threads | **MEDIUM** | Worker | **RESOLVED** (`f9513b5`) | Performance |
+| **5.3** | Linear regex matching on all routes | **MEDIUM** | Worker | **RESOLVED** (`23744eb`) | Performance |
+| **5.4** | Demo buffers JSON instead of streaming | **MEDIUM** | Demos | **RESOLVED** (`69c8b40`) | Performance |
+| **5.5** | Client-side query formatting in MySQL | **MEDIUM** | MySQL Driver | **RESOLVED** (`0c70365`) | Performance |
+| **5.6** | Unbounded thread pool queue | **LOW** | Thread Pool | **RESOLVED** (`692029c`) | Performance |
 
 ---
 
@@ -470,6 +470,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 5.1. Heap Allocation Storm in FastCGI Header Parsing (`parse_request`)
 * **File:** [src/wsworker.cpp#L63-L82](file:///home/boris/projects/cpp_ws_backend/src/wsworker.cpp#L63-L82)
 * **Severity:** **HIGH (PERFORMANCE)**
+* **Status:** **RESOLVED** (`de586b8`)
 * **Description:**
   On every single incoming HTTP request, `parse_request` reads all environment strings from `request->envp` and inserts them into a `std::map<std::string, std::string>`.
   For a typical FastCGI environment of 40 variables, this executes ~120 dynamic heap allocations and copies per request, causing massive allocator contention across worker threads.
@@ -481,6 +482,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 5.2. Permanent Memory Accumulation in Worker Threads (`m_body`)
 * **File:** [src/wsworker.cpp#L121](file:///home/boris/projects/cpp_ws_backend/src/wsworker.cpp#L121), [src/wsworker.cpp#L155](file:///home/boris/projects/cpp_ws_backend/src/wsworker.cpp#L155)
 * **Severity:** **MEDIUM (PERFORMANCE)**
+* **Status:** **RESOLVED** (`f9513b5`)
 * **Description:**
   Each worker thread holds a long-lived `wsworker` instance. If a client posts a 10MB payload, `m_body.resize(10000000)` allocates 10MB.
   On subsequent requests, `m_body.clear()` sets `size = 0`, but does not reduce capacity. In a thread pool with 64 workers, 640MB of memory remains allocated in idle worker string capacities indefinitely.
@@ -499,6 +501,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 5.3. Linear Regex Evaluation on Every Request
 * **File:** [src/wsworker.cpp#L187-L191](file:///home/boris/projects/cpp_ws_backend/src/wsworker.cpp#L187-L191)
 * **Severity:** **MEDIUM (PERFORMANCE)**
+* **Status:** **RESOLVED** (`23744eb`)
 * **Description:**
   `wsworker::process` iterates sequentially through all configured routes and runs `std::regex_match(path.c_str(), cm, route.uri)`.
   In `libstdc++`, `std::regex` is notoriously slow and allocates DFA/NFA match states on every execution. As route count increases, routing overhead scales linearly with high CPU overhead.
@@ -510,6 +513,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 5.4. Bypassing Stream Sinks in `sqlite-demo`
 * **File:** [demos/sqlite-demo/main.cpp#L79-L80](file:///home/boris/projects/cpp_ws_backend/demos/sqlite-demo/main.cpp#L79-L80)
 * **Severity:** **MEDIUM (PERFORMANCE)**
+* **Status:** **RESOLVED** (`69c8b40`)
 * **Description:**
   `request_ws_jsGrid_customers` and other handlers call `sql_to_json_paginated_string`, which allocates and builds an entire multi-megabyte JSON payload in a `std::string`, before formatting it into `FCGX_FPrintF`.
   `sql_to_json.h` already provides `fcgx_sink` to stream row-by-row directly into FastCGI output without buffering.
@@ -521,6 +525,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 5.5. Client-Side Query Formatting and Escaping in MySQL Driver
 * **File:** [src/db/mysql_driver.cpp#L699-L731](file:///home/boris/projects/cpp_ws_backend/src/db/mysql_driver.cpp#L699-L731)
 * **Severity:** **MEDIUM (PERFORMANCE)**
+* **Status:** **RESOLVED** (`0c70365`)
 * **Description:**
   `mysql_statement` does not use the MySQL C API prepared statement interface (`mysql_stmt_init`, `mysql_stmt_prepare`, `mysql_stmt_execute`). Instead, it synthesizes SQL via string concatenation and manual escaping, forcing the MySQL server to re-parse and compile the SQL query on every execution.
 * **Fix:**
@@ -531,6 +536,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 5.6. Unbounded Request Queue in `wsthreadpool`
 * **File:** [src/wsthreadpool.h#L37](file:///home/boris/projects/cpp_ws_backend/src/wsthreadpool.h#L37), [src/wsthreadpool.cpp#L74](file:///home/boris/projects/cpp_ws_backend/src/wsthreadpool.cpp#L74)
 * **Severity:** **LOW (PERFORMANCE / STABILITY)**
+* **Status:** **RESOLVED** (`692029c`)
 * **Description:**
   `wsthreadpool::addWork` pushes requests to `std::queue<std::shared_ptr<FCGX_Request>> m_work_queue` without any bounds. If incoming request rate exceeds worker processing throughput, memory consumption grows indefinitely until OOM.
 * **Fix:**
