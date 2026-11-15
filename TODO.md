@@ -8,13 +8,13 @@ This document tracks newly discovered bugs, memory corruption hazards, crash vec
 
 | ID | Title | Severity | Component | Category | Status |
 | :--- | :--- | :---: | :--- | :--- | :---: |
-| **1.1** | Data race & double-join crash in `wsthreadpool::stop()` | **CRITICAL** | `wsthreadpool` | Concurrency / Crash | [ ] |
-| **1.2** | Detached `sig_thread` holds dangling stack reference to `wsserver` | **CRITICAL** | Demos | Use-After-Free / Crash | [ ] |
-| **1.3** | `mysql_real_escape_string` error return `(unsigned long)-1` causes integer wrap & heap corruption | **CRITICAL** | MySQL Driver | Memory Corruption | [ ] |
-| **1.4** | Signed `int` overflow on large `string_view`/`span` in `sqlite_statement::bind` causes buffer over-read | **HIGH** | SQLite Driver | Memory Corruption / UB | [ ] |
-| **1.5** | `connection_pool::acquire()` leaks active lease & leaves dangling pointer in `m_live_connections` if `shared_from_this()` throws | **HIGH** | Connection Pool | Use-After-Free / Leak | [ ] |
-| **1.6** | Null pointer dereference in `pooled_connection` forwarding methods when empty/moved-from | **MEDIUM** | Connection Pool | Crash | [ ] |
-| **1.7** | Closed `sqlite3*` handle dereferenced by outliving `sqlite_result_set` / `sqlite_statement` | **MEDIUM** | SQLite Driver | Use-After-Free | [ ] |
+| **1.1** | Data race & double-join crash in `wsthreadpool::stop()` | **CRITICAL** | `wsthreadpool` | Concurrency / Crash | **RESOLVED** (`f4b6a1f`) |
+| **1.2** | Detached `sig_thread` holds dangling stack reference to `wsserver` | **CRITICAL** | Demos | Use-After-Free / Crash | **RESOLVED** (`e41fb92`) |
+| **1.3** | `mysql_real_escape_string` error return `(unsigned long)-1` causes integer wrap & heap corruption | **CRITICAL** | MySQL Driver | Memory Corruption | **RESOLVED** (`9409046`) |
+| **1.4** | Signed `int` overflow on large `string_view`/`span` in `sqlite_statement::bind` causes buffer over-read | **HIGH** | SQLite Driver | Memory Corruption / UB | **RESOLVED** (`88ac488`) |
+| **1.5** | `connection_pool::acquire()` leaks active lease & leaves dangling pointer in `m_live_connections` if `shared_from_this()` throws | **HIGH** | Connection Pool | Use-After-Free / Leak | **RESOLVED** (`f9d3319`) |
+| **1.6** | Null pointer dereference in `pooled_connection` forwarding methods when empty/moved-from | **MEDIUM** | Connection Pool | Crash | **RESOLVED** (`eb0e9ca`) |
+| **1.7** | Closed `sqlite3*` handle dereferenced by outliving `sqlite_result_set` / `sqlite_statement` | **MEDIUM** | SQLite Driver | Use-After-Free | **RESOLVED** (`2ccbdf5`) |
 | **2.1** | Data race on `wsserver::m_socket_path` during concurrent `shutdown()` | **HIGH** | `wsserver` | Concurrency / Data Race | [ ] |
 | **2.2** | Premature pool/hook teardown & unsafe `close(fd)` while `FCGX_Accept_r` is blocked in `wsserver::shutdown()` | **HIGH** | `wsserver` | Concurrency / Race | [ ] |
 | **2.3** | `connection_pool::acquire()` hands out new connections after `shutdown()` has begun | **MEDIUM** | Connection Pool | Concurrency | [ ] |
@@ -48,9 +48,10 @@ This document tracks newly discovered bugs, memory corruption hazards, crash vec
 
 ## 1. Memory Corruption, Crashes & Undefined Behavior
 
-### [ ] 1.1. Data Race & Double-Join Crash in `wsthreadpool::stop()`
+### [x] 1.1. Data Race & Double-Join Crash in `wsthreadpool::stop()`
 * **Files:** [src/wsthreadpool.cpp#L12-L33](file:///home/boris/projects/cpp_ws_backend/src/wsthreadpool.cpp#L12-L33), [src/wsthreadpool.h#L47](file:///home/boris/projects/cpp_ws_backend/src/wsthreadpool.h#L47)
 * **Severity:** **CRITICAL**
+* **Status:** **RESOLVED** (`f4b6a1f`)
 * **Description:**
   `wsthreadpool::stop()` checks `if (m_started)` without holding `m_lock`, then briefly locks `m_lock` only to set `m_finished = true`, and then iterates over `m_thread_pool`, calls `t.join()`, `m_thread_pool.clear()`, and sets `m_started = false` completely outside `m_lock`:
   ```cpp
@@ -77,9 +78,10 @@ This document tracks newly discovered bugs, memory corruption hazards, crash vec
 
 ---
 
-### [ ] 1.2. Detached `sig_thread` Holds Dangling Stack Reference to `wsserver`
+### [x] 1.2. Detached `sig_thread` Holds Dangling Stack Reference to `wsserver`
 * **Files:** [demos/sqlite-demo/main.cpp#L165-L179](file:///home/boris/projects/cpp_ws_backend/demos/sqlite-demo/main.cpp#L165-L179), [demos/journal-demo/main.cpp#L112-L126](file:///home/boris/projects/cpp_ws_backend/demos/journal-demo/main.cpp#L112-L126)
 * **Severity:** **CRITICAL**
+* **Status:** **RESOLVED** (`e41fb92`)
 * **Description:**
   Both demos spawn and `detach()` a signal thread at the start of `main()` capturing `&server` by reference:
   ```cpp
@@ -96,9 +98,10 @@ This document tracks newly discovered bugs, memory corruption hazards, crash vec
 
 ---
 
-### [ ] 1.3. `mysql_real_escape_string` Error Return `(unsigned long)-1` Causes Integer Wrap & Heap Corruption
+### [x] 1.3. `mysql_real_escape_string` Error Return `(unsigned long)-1` Causes Integer Wrap & Heap Corruption
 * **File:** [src/db/mysql_driver.cpp#L186-L193](file:///home/boris/projects/cpp_ws_backend/src/db/mysql_driver.cpp#L186-L193)
 * **Severity:** **CRITICAL**
+* **Status:** **RESOLVED** (`9409046`)
 * **Description:**
   In `escape_sql_string`:
   ```cpp
@@ -115,9 +118,10 @@ This document tracks newly discovered bugs, memory corruption hazards, crash vec
 
 ---
 
-### [ ] 1.4. Signed `int` Overflow on Large `string_view`/`span` in `sqlite_statement::bind` Causes Buffer Over-Read
+### [x] 1.4. Signed `int` Overflow on Large `string_view`/`span` in `sqlite_statement::bind` Causes Buffer Over-Read
 * **File:** [src/db/sqlite_driver.cpp#L582-L594](file:///home/boris/projects/cpp_ws_backend/src/db/sqlite_driver.cpp#L582-L594)
 * **Severity:** **HIGH**
+* **Status:** **RESOLVED** (`88ac488`)
 * **Description:**
   `sqlite_statement::bind` casts `val.size()` to `int`:
   ```cpp
@@ -127,9 +131,10 @@ This document tracks newly discovered bugs, memory corruption hazards, crash vec
 
 ---
 
-### [ ] 1.5. `connection_pool::acquire()` Leaks Active Lease & Leaves Dangling Pointer in `m_live_connections` if `shared_from_this()` Throws
+### [x] 1.5. `connection_pool::acquire()` Leaks Active Lease & Leaves Dangling Pointer in `m_live_connections` if `shared_from_this()` Throws
 * **File:** [src/db/connection_pool.h#L153-L175](file:///home/boris/projects/cpp_ws_backend/src/db/connection_pool.h#L153-L175), [src/db/connection_pool.h#L279](file:///home/boris/projects/cpp_ws_backend/src/db/connection_pool.h#L279)
 * **Severity:** **HIGH**
+* **Status:** **RESOLVED** (`f9d3319`)
 * **Description:**
   `connection_pool` has a public constructor, allowing stack or `unique_ptr` instantiation. At the end of `acquire()` (outside the `try/catch` block):
   ```cpp
@@ -141,9 +146,10 @@ This document tracks newly discovered bugs, memory corruption hazards, crash vec
 
 ---
 
-### [ ] 1.6. Null Pointer Dereference in `pooled_connection` Forwarding Methods
+### [x] 1.6. Null Pointer Dereference in `pooled_connection` Forwarding Methods
 * **File:** [src/db/connection_pool.h#L89-L138](file:///home/boris/projects/cpp_ws_backend/src/db/connection_pool.h#L89-L138)
 * **Severity:** **MEDIUM**
+* **Status:** **RESOLVED** (`eb0e9ca`)
 * **Description:**
   A default-constructed or moved-from `pooled_connection` (or one after `.release()` is called) has `m_conn == nullptr`. Calling `prepare()`, `execute()`, `exec()`, `last_insert_rowid()`, `changes()`, `errmsg()`, or `path()` directly dereferences `m_conn` without a null check, crashing with `SIGSEGV`.
 * **Fix:**
@@ -151,9 +157,10 @@ This document tracks newly discovered bugs, memory corruption hazards, crash vec
 
 ---
 
-### [ ] 1.7. Closed `sqlite3*` Handle Dereferenced by Outliving `sqlite_result_set` / `sqlite_statement`
+### [x] 1.7. Closed `sqlite3*` Handle Dereferenced by Outliving `sqlite_result_set` / `sqlite_statement`
 * **Files:** [src/db/sqlite_driver.h#L73-L84](file:///home/boris/projects/cpp_ws_backend/src/db/sqlite_driver.h#L73-L84), [src/db/sqlite_driver.cpp#L470](file:///home/boris/projects/cpp_ws_backend/src/db/sqlite_driver.cpp#L470), [src/db/sqlite_driver.cpp#L490-L493](file:///home/boris/projects/cpp_ws_backend/src/db/sqlite_driver.cpp#L490-L493)
 * **Severity:** **MEDIUM**
+* **Status:** **RESOLVED** (`2ccbdf5`)
 * **Description:**
   Unlike `postgres_database` (`std::shared_ptr<pg_conn_holder>`) and `mysql_database` (`std::shared_ptr<mysql_conn_holder>`), `sqlite_stmt_holder` stores a raw `sqlite3 *db` pointer. If `sqlite_database::close()` is called while a `sqlite_result_set` or `sqlite_statement` is still in scope, subsequent calls to `affected_rows()` (`sqlite3_changes(m_holder->db)`) or `next()` (`sqlite3_errmsg(m_holder->db)`) access a closed `sqlite3*` connection handle.
 * **Fix:**
