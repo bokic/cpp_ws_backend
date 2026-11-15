@@ -155,7 +155,15 @@ void backend::wsworker::process(std::shared_ptr<FCGX_Request> request)
             if (contentLen > 0)
             {
                 m_body.resize(static_cast<unsigned int>(contentLen));
-                FCGX_GetStr(&m_body.at(0), contentLen, request->in);
+                int total_read = 0;
+                while (total_read < contentLen)
+                {
+                    int n = FCGX_GetStr(&m_body[total_read], contentLen - total_read, request->in);
+                    if (n <= 0)
+                        break;
+                    total_read += n;
+                }
+                m_body.resize(static_cast<unsigned int>(total_read));
             }
         }
 
