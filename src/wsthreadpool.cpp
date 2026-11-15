@@ -53,6 +53,7 @@ void backend::wsthreadpool::setWorkers(int workers)
 
 void backend::wsthreadpool::start()
 {
+    std::unique_lock<std::mutex> lock(m_lock);
     if (m_started)
         return;
 
@@ -63,6 +64,7 @@ void backend::wsthreadpool::start()
         m_workers.store(workers, std::memory_order_relaxed);
     }
 
+    m_finished = false;
     m_started = true;
 
     for (unsigned int i = 0; i < workers; i++)
