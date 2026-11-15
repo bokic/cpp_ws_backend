@@ -109,26 +109,6 @@ static constexpr auto DEFAULT_BACKLOG = 100;
 
 int main(int argc, char *argv[])
 {
-    backend::wsserver server;
-
-    sigset_t sig_mask;
-    sigemptyset(&sig_mask);
-    sigaddset(&sig_mask, SIGINT);
-    sigaddset(&sig_mask, SIGTERM);
-    sigaddset(&sig_mask, SIGUSR1);
-    pthread_sigmask(SIG_BLOCK, &sig_mask, nullptr);
-
-    std::thread sig_thread([&server, sig_mask]() {
-        int sig = 0;
-        sigwait(&sig_mask, &sig);
-        server.shutdown();
-    });
-    sig_thread.detach();
-
-    server.add_routes({
-        {"/ws/system/logs", backend::GET | backend::POST, request_ws_system_logs},
-    });
-
     std::string socket_name = DEFAULT_SOCKET_NAME;
     int backlog = DEFAULT_BACKLOG;
     int worker_num = 0;
@@ -156,7 +136,40 @@ int main(int argc, char *argv[])
         }
     }
 
+    sigset_t sig_mask;
+    sigemptyset(&sig_mask);
+    sigaddset(&sig_mask, SIGINT);
+    sigaddset(&sig_mask, SIGTERM);
+    sigaddset(&sig_mask, SIGUSR1);
+    pthread_sigmask(SIG_BLOCK, &sig_mask, nullptr);
+
+    backend::wsserver server;
+
+    server.add_routes({
+        {"/ws/system/logs", backend::GET | backend::POST, request_ws_system_logs},
+    });
+
     server.init(socket_name.c_str(), backlog, worker_num);
+
+    std::atomic<bool> stopping{false};
+    std::thread sig_thread([&server, &stopping, sig_mask]() {
+        int sig = 0;
+        if (sigwait(&sig_mask, &sig) == 0 && !stopping.load(std::memory_order_acquire)) {
+            server.shutdown();
+        }
+    });
+
+    struct sig_thread_guard {
+        std::thread &t;
+        std::atomic<bool> &stopping;
+        ~sig_thread_guard() {
+            if (t.joinable()) {
+                stopping.store(true, std::memory_order_release);
+                pthread_kill(t.native_handle(), SIGUSR1);
+                t.join();
+            }
+        }
+    } sig_guard{sig_thread, stopping};
 
     int ret = server.run();
     return ret;
