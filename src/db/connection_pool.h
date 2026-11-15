@@ -216,6 +216,9 @@ public:
                     lock.unlock();
                     try {
                         conn = m_factory();
+                        if (!conn) {
+                            throw db_exception("Database connection factory returned null");
+                        }
                         created_at = clock_type::now();
                     } catch (...) {
                         lock.lock();
@@ -246,6 +249,9 @@ public:
             if (m_options.ping_on_acquire && !conn->ping()) {
                 m_total_health_failures.fetch_add(1, std::memory_order_relaxed);
                 auto replacement = m_factory();
+                if (!replacement) {
+                    throw db_exception("Database connection factory returned null on replacement");
+                }
                 conn_reset_if_possible(replacement.get());
                 {
                     std::lock_guard<std::mutex> lock(m_mutex);
