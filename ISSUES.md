@@ -46,14 +46,14 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 
 ## Summary of Findings
 
-| ID | Title | Severity | Component | Category |
-| :--- | :--- | :---: | :--- | :--- |
-| **1.1** | `sd_journal_get_data` buffer over-read | **CRITICAL** | `journal-demo` | Memory Corruption |
-| **1.2** | Out-of-bounds memory write on `bind(0)` | **CRITICAL** | PostgreSQL Driver | Memory Corruption |
-| **1.3** | Use-after-free on copied `mysql_row` | **HIGH** | MySQL Driver | Memory Corruption |
-| **1.4** | Null pointer in `string_view` constructor | **HIGH** | Database Core | Crash / UB |
-| **1.5** | Null dereference in `acquire()` | **MEDIUM** | Connection Pool | Crash |
-| **1.6** | Signed char in `isxdigit` in `url_decode` | **LOW** | Worker | Undefined Behavior |
+| ID | Title | Severity | Component | Status | Category |
+| :--- | :--- | :---: | :--- | :---: | :--- |
+| **1.1** | `sd_journal_get_data` buffer over-read | **CRITICAL** | `journal-demo` | **RESOLVED** (`7ac2db5`) | Memory Corruption |
+| **1.2** | Out-of-bounds memory write on `bind(0)` | **CRITICAL** | PostgreSQL Driver | **RESOLVED** (`fc73154`) | Memory Corruption |
+| **1.3** | Use-after-free on copied `mysql_row` | **HIGH** | MySQL Driver | **RESOLVED** (`7ef3f73`) | Memory Corruption |
+| **1.4** | Null pointer in `string_view` constructor | **HIGH** | Database Core | **RESOLVED** (`490b3c5`) | Crash / UB |
+| **1.5** | Null dereference in `acquire()` | **MEDIUM** | Connection Pool | **RESOLVED** (`ecb2727`) | Crash |
+| **1.6** | Signed char in `isxdigit` in `url_decode` | **LOW** | Worker | **RESOLVED** (`471864e`) | Undefined Behavior |
 | **2.1** | Non-async-signal-safe shutdown in signal handlers | **CRITICAL** | Demos | Concurrency / Deadlock |
 | **2.2** | Data race in dynamic library loaders | **HIGH** | DB Drivers | Concurrency / Data Race |
 | **2.3** | Data race in `connection_pool::stats()` | **HIGH** | Connection Pool | Concurrency / Data Race |
