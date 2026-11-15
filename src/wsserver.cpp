@@ -176,10 +176,10 @@ int backend::wsserver::run()
 
     if (m_thread_pool.count() == 0)
     {
+        backend::wsworker worker(m_router);
         while (!m_shutdown_requested.load(std::memory_order_acquire))
         {
             auto request = make_fcgx_request();
-            backend::wsworker worker(m_router);
 
             if (FCGX_InitRequest(request.get(), sock_fd, FCGI_FAIL_ACCEPT_ON_INTR))
             {
