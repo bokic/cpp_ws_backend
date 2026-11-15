@@ -473,6 +473,9 @@ bool sqlite_result_set::next() {
         return false;
     }
     std::string err = sqlite3_errmsg(db);
+    if (sqlite_api::instance().sqlite3_reset) {
+        sqlite3_reset(m_holder->stmt);
+    }
     throw db_exception("SQLite step error: " + err);
 }
 
@@ -644,11 +647,16 @@ void sqlite_statement::bind(std::string_view name, std::chrono::system_clock::ti
 void sqlite_statement::execute() {
     if (!m_holder || !m_holder->stmt) throw db_exception("Statement not initialized");
     step_done();
-    reset();
+    if (sqlite_api::instance().sqlite3_reset) {
+        sqlite3_reset(m_holder->stmt);
+    }
 }
 
 std::unique_ptr<result_set> sqlite_statement::query() {
     if (!m_holder || !m_holder->stmt) throw db_exception("Statement not initialized");
+    if (sqlite_api::instance().sqlite3_reset) {
+        sqlite3_reset(m_holder->stmt);
+    }
     return std::make_unique<sqlite_result_set>(m_holder);
 }
 
@@ -672,6 +680,9 @@ void sqlite_statement::step_done() {
     int rc = sqlite3_step(m_holder->stmt);
     if (rc != SQLITE_DONE && rc != SQLITE_ROW) {
         std::string err = sqlite3_errmsg(db);
+        if (sqlite_api::instance().sqlite3_reset) {
+            sqlite3_reset(m_holder->stmt);
+        }
         throw db_exception("SQLite step error: " + err);
     }
 }
