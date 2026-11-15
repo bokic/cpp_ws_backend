@@ -88,6 +88,16 @@ std::shared_ptr<const backend::router> backend::wsserver::get_router() const
     return m_router;
 }
 
+static std::shared_ptr<FCGX_Request> make_fcgx_request()
+{
+    return std::shared_ptr<FCGX_Request>(new FCGX_Request{}, [](FCGX_Request *r) {
+        if (r) {
+            FCGX_Free(r, 1);
+            delete r;
+        }
+    });
+}
+
 int backend::wsserver::run()
 {
     int ret = 0;
@@ -98,7 +108,7 @@ int backend::wsserver::run()
     {
         while(1)
         {
-            auto request = std::make_shared<FCGX_Request>();
+            auto request = make_fcgx_request();
             backend::wsworker worker(m_router);
 
             if (FCGX_InitRequest(request.get(), m_sock_fd, 0))
@@ -119,7 +129,7 @@ int backend::wsserver::run()
 
         while(1)
         {
-            auto request = std::make_shared<FCGX_Request>();
+            auto request = make_fcgx_request();
 
             if (FCGX_InitRequest(request.get(), m_sock_fd, 0))
             {
