@@ -45,6 +45,12 @@ static bool is_valid_http_protocol(const std::string &proto)
     return false;
 }
 
+static void send_http_headers(FCGX_Stream *out, const std::string &protocol)
+{
+    const char *proto = is_valid_http_protocol(protocol) ? protocol.c_str() : "HTTP/1.1";
+    FCGX_FPrintF(out, "%s 200 OK\r\nContent-type: application/json\r\nX-Content-Type-Options: nosniff\r\n\r\n", proto);
+}
+
 static void send_json_response(FCGX_Stream *out, const std::string &protocol, const std::string &body)
 {
     const char *proto = is_valid_http_protocol(protocol) ? protocol.c_str() : "HTTP/1.1";
@@ -96,8 +102,8 @@ static void request_ws_jsGrid_customers(backend::wsworker *worker, const std::ma
         .callback = args["callback"]
     };
 
-    std::string body = backend::db::sql_to_json_paginated_string(*conn, q);
-    send_json_response(worker->out(), get_header(header, "SERVER_PROTOCOL"), body);
+    send_http_headers(worker->out(), get_header(header, "SERVER_PROTOCOL"));
+    backend::db::sql_to_json_paginated(worker->out(), *conn, q);
 }
 
 static void request_ws_jsGrid_artists(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const std::list<std::string> &uri_params)
@@ -132,8 +138,8 @@ static void request_ws_jsGrid_artists(backend::wsworker *worker, const std::map<
         .callback = args["callback"]
     };
 
-    std::string body = backend::db::sql_to_json_paginated_string(*conn, q);
-    send_json_response(worker->out(), get_header(header, "SERVER_PROTOCOL"), body);
+    send_http_headers(worker->out(), get_header(header, "SERVER_PROTOCOL"));
+    backend::db::sql_to_json_paginated(worker->out(), *conn, q);
 }
 
 static void request_ws_jsGrid_artist_song_type(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const std::list<std::string> &uri_params)
@@ -145,8 +151,8 @@ static void request_ws_jsGrid_artist_song_type(backend::wsworker *worker, const 
     auto conn = g_db_pool->acquire();
     std::string sql = "SELECT genres.Name as 'name', count(DISTINCT tracks.TrackId) as 'hvalue' FROM genres INNER JOIN tracks ON(tracks.GenreId = genres.GenreId) INNER JOIN albums ON(albums.AlbumId = tracks.AlbumId) WHERE albums.ArtistId = ? GROUP BY genres.Name ORDER BY `hvalue` DESC";
 
-    std::string body = backend::db::sql_to_json_string(*conn, sql, id);
-    send_json_response(worker->out(), get_header(header, "SERVER_PROTOCOL"), body);
+    send_http_headers(worker->out(), get_header(header, "SERVER_PROTOCOL"));
+    backend::db::sql_to_json(worker->out(), *conn, sql, id);
 }
 
 static constexpr auto DEFAULT_SOCKET_NAME = ":9000";
