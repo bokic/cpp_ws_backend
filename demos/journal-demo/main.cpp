@@ -27,23 +27,40 @@ static const std::string &get_header(const std::map<std::string, std::string> &h
 
 static void request_ws_system_logs(backend::wsworker *worker, const std::map<std::string, std::string> &header, __attribute__((unused)) const std::list<std::string> &uri_params)
 {
-    sd_journal *journal = nullptr;
-    const char *msg = nullptr;
-    size_t len = 0;
+    struct journal_deleter {
+        void operator()(sd_journal *j) const noexcept {
+            if (j) sd_journal_close(j);
+        }
+    };
+    struct json_deleter {
+        void operator()(json_object *j) const noexcept {
+            if (j) json_object_put(j);
+        }
+    };
 
-    int r = sd_journal_open(&journal, SD_JOURNAL_CURRENT_USER);
-    if (r < 0 || journal == nullptr) {
+    sd_journal *raw_journal = nullptr;
+    int r = sd_journal_open(&raw_journal, SD_JOURNAL_CURRENT_USER);
+    if (r < 0 || raw_journal == nullptr) {
         throw std::runtime_error("Can't open journal!");
     }
+    std::unique_ptr<sd_journal, journal_deleter> journal(raw_journal);
 
-    auto json = json_object_new_object();
+    std::unique_ptr<json_object, json_deleter> json(json_object_new_object());
+    if (!json) {
+        throw std::runtime_error("Failed to allocate JSON object");
+    }
     auto json_data = json_object_new_array();
-    json_object_object_add(json, "data", json_data);
+    if (!json_data) {
+        throw std::runtime_error("Failed to allocate JSON array");
+    }
+    json_object_object_add(json.get(), "data", json_data);
 
+    const char *msg = nullptr;
+    size_t len = 0;
     int c = 1;
-    while (sd_journal_next(journal) > 0)
+    while (sd_journal_next(journal.get()) > 0)
     {
-        r = sd_journal_get_data(journal, "MESSAGE", reinterpret_cast<const void **>(&msg), &len);
+        r = sd_journal_get_data(journal.get(), "MESSAGE", reinterpret_cast<const void **>(&msg), &len);
         if (r == 0 && msg != nullptr) {
             // "MESSAGE=" prefix is 8 chars
             if (len >= 8) {
@@ -57,17 +74,14 @@ static void request_ws_system_logs(backend::wsworker *worker, const std::map<std
         c++;
     }
 
-    sd_journal_close(journal);
-    journal = nullptr;
+    journal.reset();
 
-    const char *json_str = json_object_get_string(json);
-    const std::string &proto = get_header(header, "SERVER_PROTOCOL");
+    const char *json_str = json_object_get_string(json.get());
+    std::string proto = get_header(header, "SERVER_PROTOCOL");
     const char *server_protocol = proto.empty() ? "HTTP/1.1" : proto.c_str();
 
     FCGX_FPrintF(worker->out(), "%s 200 OK\r\nContent-type: application/json\r\nX-Content-Type-Options: nosniff\r\nContent-Length: %d\r\n\r\n%s",
                  server_protocol, static_cast<int>(std::strlen(json_str)), json_str);
-
-    json_object_put(json);
 }
 
 static constexpr auto DEFAULT_SOCKET_NAME = ":9001";
