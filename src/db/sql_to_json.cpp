@@ -3,6 +3,7 @@
 #include <ctime>
 #include <cmath>
 #include <cstring>
+#include <charconv>
 
 namespace backend::db {
 
@@ -172,15 +173,139 @@ json_object *result_set_to_json_c(result_set &res) {
 
 // ==================== Result Set Serialization ====================
 
+namespace {
+
+void write_json_escaped(stream_sink &sink, std::string_view sv) {
+    sink.put('"');
+    size_t chunk_start = 0;
+    for (size_t i = 0; i < sv.size(); ++i) {
+        unsigned char c = static_cast<unsigned char>(sv[i]);
+        const char *esc = nullptr;
+        char hex_buf[7];
+        switch (c) {
+            case '"':  esc = "\\\""; break;
+            case '\\': esc = "\\\\"; break;
+            case '\b': esc = "\\b";  break;
+            case '\f': esc = "\\f";  break;
+            case '\n': esc = "\\n";  break;
+            case '\r': esc = "\\r";  break;
+            case '\t': esc = "\\t";  break;
+            default:
+                if (c < 0x20) {
+                    static constexpr char hex_digits[] = "0123456789abcdef";
+                    hex_buf[0] = '\\';
+                    hex_buf[1] = 'u';
+                    hex_buf[2] = '0';
+                    hex_buf[3] = '0';
+                    hex_buf[4] = hex_digits[(c >> 4) & 0x0F];
+                    hex_buf[5] = hex_digits[c & 0x0F];
+                    hex_buf[6] = '\0';
+                    esc = hex_buf;
+                }
+                break;
+        }
+        if (esc) {
+            if (i > chunk_start) {
+                sink.write(sv.substr(chunk_start, i - chunk_start));
+            }
+            sink.write(esc);
+            chunk_start = i + 1;
+        }
+    }
+    if (chunk_start < sv.size()) {
+        sink.write(sv.substr(chunk_start));
+    }
+    sink.put('"');
+}
+
+void write_column_value(stream_sink &sink, const row &r, size_t col_idx) {
+    if (r.is_null(col_idx)) {
+        sink.write("null");
+        return;
+    }
+
+    switch (r.get_column_type(col_idx)) {
+        case column_type::null_value:
+            sink.write("null");
+            break;
+
+        case column_type::integer: {
+            char buf[32];
+            int64_t val = r.get_int64(col_idx);
+            auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), val);
+            if (ec == std::errc()) {
+                sink.write(std::string_view(buf, static_cast<size_t>(ptr - buf)));
+            } else {
+                sink.write("0");
+            }
+            break;
+        }
+
+        case column_type::floating_point: {
+            double d = r.get_double(col_idx);
+            if (std::isnan(d) || std::isinf(d)) {
+                sink.write("null");
+            } else {
+                char buf[64];
+                auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), d);
+                if (ec == std::errc()) {
+                    sink.write(std::string_view(buf, static_cast<size_t>(ptr - buf)));
+                } else {
+                    sink.write("0");
+                }
+            }
+            break;
+        }
+
+        case column_type::blob: {
+            std::string b64 = to_base64(r.get_blob(col_idx));
+            sink.put('"');
+            sink.write(b64);
+            sink.put('"');
+            break;
+        }
+
+        case column_type::timestamp: {
+            auto time_t_val = std::chrono::system_clock::to_time_t(r.get_timestamp(col_idx));
+            std::tm tm_buf{};
+            gmtime_r(&time_t_val, &tm_buf);
+            char buf[32];
+            size_t n = std::strftime(buf, sizeof(buf), "\"%Y-%m-%dT%H:%M:%SZ\"", &tm_buf);
+            if (n > 0) {
+                sink.write(std::string_view(buf, n));
+            } else {
+                sink.write("\"\"");
+            }
+            break;
+        }
+
+        case column_type::text:
+        default: {
+            std::string s = r.get_string(col_idx);
+            write_json_escaped(sink, s);
+            break;
+        }
+    }
+}
+
+} // namespace
+
 void result_set_to_json(stream_sink &sink, result_set &res) {
     sink.put('[');
     bool first_row = true;
     size_t col_count = res.column_count();
 
-    std::vector<std::string> col_names;
-    col_names.reserve(col_count);
+    std::vector<std::string> col_prefixes;
+    col_prefixes.reserve(col_count);
     for (size_t c = 0; c < col_count; ++c) {
-        col_names.emplace_back(res.column_name(c));
+        std::string prefix;
+        string_sink prefix_sink(prefix);
+        if (c > 0) {
+            prefix_sink.put(',');
+        }
+        write_json_escaped(prefix_sink, res.column_name(c));
+        prefix_sink.put(':');
+        col_prefixes.push_back(std::move(prefix));
     }
 
     while (res.next()) {
@@ -189,11 +314,13 @@ void result_set_to_json(stream_sink &sink, result_set &res) {
         }
         first_row = false;
 
-        json_object_guard row_obj(row_to_json_c(res.current_row(), col_names));
-        const char *json_str = row_obj.to_string();
-        if (json_str) {
-            sink.write(json_str);
+        const row &r = res.current_row();
+        sink.put('{');
+        for (size_t c = 0; c < col_count; ++c) {
+            sink.write(col_prefixes[c]);
+            write_column_value(sink, r, c);
         }
+        sink.put('}');
     }
 
     sink.put(']');
@@ -275,10 +402,10 @@ void execute_sql_to_json_paginated_sink(
     json_object_object_add(meta.get(), "total", json_object_new_int64(total_pages));
     json_object_object_add(meta.get(), "records", json_object_new_int64(total_records));
 
-    std::string meta_str = meta.to_string();
-    if (!meta_str.empty() && meta_str.back() == '}') {
-        meta_str.pop_back(); // Remove trailing '}'
-        sink.write(meta_str);
+    std::string_view meta_sv = meta.to_string_view();
+    if (!meta_sv.empty() && meta_sv.back() == '}') {
+        meta_sv.remove_suffix(1); // Remove trailing '}'
+        sink.write(meta_sv);
         sink.write(",\"rows\":");
     } else {
         sink.write("{\"rows\":");

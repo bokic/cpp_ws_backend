@@ -59,6 +59,13 @@ public:
         return m_obj ? json_object_to_json_string_ext(m_obj, flags) : "";
     }
 
+    std::string_view to_string_view(int flags = JSON_C_TO_STRING_PLAIN) const noexcept {
+        if (!m_obj) return {};
+        size_t len = 0;
+        const char *str = json_object_to_json_string_length(m_obj, flags, &len);
+        return str ? std::string_view(str, len) : std::string_view{};
+    }
+
 private:
     json_object *m_obj = nullptr;
 };
