@@ -32,6 +32,8 @@ void backend::wsserver::shutdown()
         close(fd);
     }
 
+    m_thread_pool.stop();
+
     std::vector<std::function<void()>> hooks;
     {
         std::lock_guard<std::mutex> lock(m_hooks_mutex);

@@ -27,6 +27,7 @@ public:
     void setWorkers(int workers);
     void setRouter(std::shared_ptr<const router> router);
     void start();
+    void stop();
     void addWork(std::shared_ptr<FCGX_Request> request);
     unsigned int count() const;
 

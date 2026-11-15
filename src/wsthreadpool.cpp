@@ -9,7 +9,7 @@
 
 const int MAX_WORKERS = 512;
 
-backend::wsthreadpool::~wsthreadpool()
+void backend::wsthreadpool::stop()
 {
     if (m_started)
     {
@@ -27,7 +27,14 @@ backend::wsthreadpool::~wsthreadpool()
                 t.join();
             }
         }
+        m_thread_pool.clear();
+        m_started = false;
     }
+}
+
+backend::wsthreadpool::~wsthreadpool()
+{
+    stop();
 }
 
 void backend::wsthreadpool::setWorkers(int workers)
@@ -71,6 +78,8 @@ void backend::wsthreadpool::addWork(std::shared_ptr<FCGX_Request> request)
 {
     {
         std::unique_lock<std::mutex> lock(m_lock);
+        if (m_finished)
+            return;
         m_work_queue.push(request);
     }
 
