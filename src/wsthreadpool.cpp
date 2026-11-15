@@ -48,7 +48,7 @@ void backend::wsthreadpool::setWorkers(int workers)
         workers = MAX_WORKERS;
     }
 
-    m_workers = static_cast<unsigned int>(workers);
+    m_workers.store(static_cast<unsigned int>(workers), std::memory_order_relaxed);
 }
 
 void backend::wsthreadpool::start()
@@ -56,14 +56,16 @@ void backend::wsthreadpool::start()
     if (m_started)
         return;
 
-    if (m_workers > MAX_WORKERS)
+    unsigned int workers = m_workers.load(std::memory_order_relaxed);
+    if (workers > MAX_WORKERS)
     {
-        m_workers = MAX_WORKERS;
+        workers = MAX_WORKERS;
+        m_workers.store(workers, std::memory_order_relaxed);
     }
 
     m_started = true;
 
-    for (unsigned int i = 0; i < m_workers; i++)
+    for (unsigned int i = 0; i < workers; i++)
     {
         m_thread_pool.push_back(std::thread(&wsthreadpool::worker, this));
     }
@@ -71,12 +73,13 @@ void backend::wsthreadpool::start()
 
 void backend::wsthreadpool::setRouter(std::shared_ptr<const router> router)
 {
+    std::unique_lock<std::mutex> lock(m_lock);
     m_router = std::move(router);
 }
 
 size_t backend::wsthreadpool::queueSize() const
 {
-    std::unique_lock<std::mutex> lock(const_cast<std::mutex&>(m_lock));
+    std::unique_lock<std::mutex> lock(m_lock);
     return m_work_queue.size();
 }
 
@@ -87,7 +90,8 @@ void backend::wsthreadpool::addWork(std::shared_ptr<FCGX_Request> request)
         if (m_finished)
             return;
 
-        if (m_max_queue_size > 0 && m_work_queue.size() >= m_max_queue_size)
+        size_t max_q = m_max_queue_size.load(std::memory_order_relaxed);
+        if (max_q > 0 && m_work_queue.size() >= max_q)
         {
             lock.unlock();
             if (request && request->out)
@@ -106,7 +110,12 @@ void backend::wsthreadpool::addWork(std::shared_ptr<FCGX_Request> request)
 
 void backend::wsthreadpool::worker()
 {
-    backend::wsworker worker(m_router);
+    std::shared_ptr<const router> router_ref;
+    {
+        std::unique_lock<std::mutex> lock(m_lock);
+        router_ref = m_router;
+    }
+    backend::wsworker worker(std::move(router_ref));
 
     while (true)
     {
@@ -131,5 +140,5 @@ void backend::wsthreadpool::worker()
 
 unsigned int backend::wsthreadpool::count() const
 {
-    return m_workers;
+    return m_workers.load(std::memory_order_relaxed);
 }
