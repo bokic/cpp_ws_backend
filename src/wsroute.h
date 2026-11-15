@@ -9,6 +9,8 @@
 #include <initializer_list>
 #include <cstddef>
 #include <utility>
+#include <shared_mutex>
+#include <mutex>
 
 
 namespace backend {
@@ -48,17 +50,49 @@ class router {
 public:
     router() = default;
     ~router() = default;
-    router(const router &) = default;
-    router &operator=(const router &) = default;
-    router(router &&) noexcept = default;
-    router &operator=(router &&) noexcept = default;
+
+    router(const router &other) {
+        std::shared_lock<std::shared_mutex> lock(other.m_mutex);
+        m_routes = other.m_routes;
+        m_middlewares = other.m_middlewares;
+    }
+
+    router &operator=(const router &other) {
+        if (this != &other) {
+            std::unique_lock<std::shared_mutex> lock_this(m_mutex, std::defer_lock);
+            std::shared_lock<std::shared_mutex> lock_other(other.m_mutex, std::defer_lock);
+            std::lock(lock_this, lock_other);
+            m_routes = other.m_routes;
+            m_middlewares = other.m_middlewares;
+        }
+        return *this;
+    }
+
+    router(router &&other) noexcept {
+        std::unique_lock<std::shared_mutex> lock(other.m_mutex);
+        m_routes = std::move(other.m_routes);
+        m_middlewares = std::move(other.m_middlewares);
+    }
+
+    router &operator=(router &&other) noexcept {
+        if (this != &other) {
+            std::unique_lock<std::shared_mutex> lock_this(m_mutex, std::defer_lock);
+            std::unique_lock<std::shared_mutex> lock_other(other.m_mutex, std::defer_lock);
+            std::lock(lock_this, lock_other);
+            m_routes = std::move(other.m_routes);
+            m_middlewares = std::move(other.m_middlewares);
+        }
+        return *this;
+    }
 
     void add_route(route r) {
+        std::unique_lock<std::shared_mutex> lock(m_mutex);
         m_routes.push_back(std::move(r));
     }
 
     void add_routes(const route *routes, size_t count) {
         if (routes && count > 0) {
+            std::unique_lock<std::shared_mutex> lock(m_mutex);
             m_routes.insert(m_routes.end(), routes, routes + count);
         }
     }
@@ -69,6 +103,7 @@ public:
     }
 
     void add_routes(std::initializer_list<route> routes) {
+        std::unique_lock<std::shared_mutex> lock(m_mutex);
         m_routes.insert(m_routes.end(), routes.begin(), routes.end());
     }
 
@@ -78,6 +113,7 @@ public:
 
     void use(middleware_handler mw) {
         if (mw) {
+            std::unique_lock<std::shared_mutex> lock(m_mutex);
             m_middlewares.push_back(std::move(mw));
         }
     }
@@ -86,7 +122,12 @@ public:
         return m_middlewares;
     }
 
+    std::shared_lock<std::shared_mutex> lock_shared() const {
+        return std::shared_lock<std::shared_mutex>(m_mutex);
+    }
+
 private:
+    mutable std::shared_mutex m_mutex;
     std::vector<route> m_routes;
     std::vector<middleware_handler> m_middlewares;
 };

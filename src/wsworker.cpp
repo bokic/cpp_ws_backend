@@ -177,6 +177,8 @@ void backend::wsworker::process(std::shared_ptr<FCGX_Request> request)
 
         if (m_router)
         {
+            auto router_lock = m_router->lock_shared();
+
             for (const auto &mw : m_router->middlewares())
             {
                 if (!mw(this, header))
@@ -208,6 +210,8 @@ void backend::wsworker::process(std::shared_ptr<FCGX_Request> request)
                     for (unsigned i=1; i < cm.size(); ++i) {
                         uri_params.push_back(cm[i]);
                     }
+
+                    router_lock.unlock();
 
                     work(this, header, uri_params);
 
