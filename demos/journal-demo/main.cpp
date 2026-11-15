@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <csignal>
 #include <atomic>
+#include <thread>
 
 #include <fcgio.h>
 #include <json-c/json.h>
@@ -72,30 +73,23 @@ static void request_ws_system_logs(backend::wsworker *worker, const std::map<std
 static constexpr auto DEFAULT_SOCKET_NAME = ":9001";
 static constexpr auto DEFAULT_BACKLOG = 100;
 
-static std::atomic<backend::wsserver*> g_server{nullptr};
-
-static void signal_handler(int sig)
-{
-    (void)sig;
-    backend::wsserver *server = g_server.load();
-    if (server)
-    {
-        server->shutdown();
-    }
-}
-
 int main(int argc, char *argv[])
 {
     backend::wsserver server;
-    g_server.store(&server);
 
-    struct sigaction sa;
-    std::memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = signal_handler;
-    sigemptyset(&sa.sa_mask);
-    sigaction(SIGINT, &sa, nullptr);
-    sigaction(SIGTERM, &sa, nullptr);
-    sigaction(SIGUSR1, &sa, nullptr);
+    sigset_t sig_mask;
+    sigemptyset(&sig_mask);
+    sigaddset(&sig_mask, SIGINT);
+    sigaddset(&sig_mask, SIGTERM);
+    sigaddset(&sig_mask, SIGUSR1);
+    pthread_sigmask(SIG_BLOCK, &sig_mask, nullptr);
+
+    std::thread sig_thread([&server, sig_mask]() {
+        int sig = 0;
+        sigwait(&sig_mask, &sig);
+        server.shutdown();
+    });
+    sig_thread.detach();
 
     server.add_routes({
         {"/ws/system/logs", backend::GET | backend::POST, request_ws_system_logs},
@@ -131,6 +125,5 @@ int main(int argc, char *argv[])
     server.init(socket_name.c_str(), backlog, worker_num);
 
     int ret = server.run();
-    g_server.store(nullptr);
     return ret;
 }
