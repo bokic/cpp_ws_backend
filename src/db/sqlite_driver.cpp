@@ -916,9 +916,11 @@ void sqlite_database::open(const std::string &path, int flags) {
     }
 
     sqlite3_busy_timeout(m_db, 5000);
-    execute("PRAGMA foreign_keys = ON;");
-    execute("PRAGMA journal_mode = WAL;");
-    execute("PRAGMA synchronous = NORMAL;");
+    if (!(flags & SQLITE_OPEN_READONLY)) {
+        execute("PRAGMA foreign_keys = ON;");
+        execute("PRAGMA journal_mode = WAL;");
+        execute("PRAGMA synchronous = NORMAL;");
+    }
     execute("PRAGMA temp_store = MEMORY;");
     execute("PRAGMA mmap_size = 268435456;");
     execute("PRAGMA cache_size = -16000;");
