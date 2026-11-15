@@ -28,7 +28,9 @@ static const std::string &get_header(const std::map<std::string, std::string> &h
 
 static bool is_valid_http_protocol(const std::string &proto)
 {
-    if (proto == "HTTP/1.1" || proto == "HTTP/1.0" || proto == "HTTP/2" || proto == "HTTP/2.0") {
+    if (proto == "HTTP/1.1" || proto == "HTTP/1.0" ||
+        proto == "HTTP/2" || proto == "HTTP/2.0" ||
+        proto == "HTTP/3" || proto == "HTTP/3.0") {
         return true;
     }
     if (proto.rfind("HTTP/", 0) == 0 && proto.size() <= 10) {
@@ -98,7 +100,7 @@ static void request_ws_system_logs(backend::wsworker *worker, const std::map<std
     std::string proto = get_header(header, "SERVER_PROTOCOL");
     const char *server_protocol = is_valid_http_protocol(proto) ? proto.c_str() : "HTTP/1.1";
 
-    FCGX_FPrintF(worker->out(), "%s 200 OK\r\nContent-type: application/json\r\nX-Content-Type-Options: nosniff\r\nContent-Length: %d\r\n\r\n%s",
+    FCGX_FPrintF(worker->out(), "%s 200 OK\r\nStatus: 200 OK\r\nContent-type: application/json\r\nX-Content-Type-Options: nosniff\r\nContent-Length: %d\r\n\r\n%s",
                  server_protocol, static_cast<int>(std::strlen(json_str)), json_str);
 }
 

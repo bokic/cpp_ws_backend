@@ -7,6 +7,14 @@ server {
 	listen 80;
 	listen [::]:80;
 
+	# For HTTP/3 (QUIC) support in Nginx 1.25+:
+	# listen 443 quic reuseport;
+	# listen 443 ssl;
+	# ssl_certificate /path/to/cert.pem;
+	# ssl_certificate_key /path/to/key.pem;
+	# http3 on;
+	# add_header Alt-Svc 'h3=":443"; ma=86400';
+
 	server_name sqlite-demo.com;
 
 	root /srv/sqlite-demo-fe;

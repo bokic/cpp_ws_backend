@@ -30,7 +30,9 @@ static const std::string &get_header(const std::map<std::string, std::string> &h
 
 static bool is_valid_http_protocol(const std::string &proto)
 {
-    if (proto == "HTTP/1.1" || proto == "HTTP/1.0" || proto == "HTTP/2" || proto == "HTTP/2.0") {
+    if (proto == "HTTP/1.1" || proto == "HTTP/1.0" ||
+        proto == "HTTP/2" || proto == "HTTP/2.0" ||
+        proto == "HTTP/3" || proto == "HTTP/3.0") {
         return true;
     }
     if (proto.rfind("HTTP/", 0) == 0 && proto.size() <= 10) {
@@ -48,13 +50,13 @@ static bool is_valid_http_protocol(const std::string &proto)
 static void send_http_headers(FCGX_Stream *out, const std::string &protocol)
 {
     const char *proto = is_valid_http_protocol(protocol) ? protocol.c_str() : "HTTP/1.1";
-    FCGX_FPrintF(out, "%s 200 OK\r\nContent-type: application/json\r\nX-Content-Type-Options: nosniff\r\n\r\n", proto);
+    FCGX_FPrintF(out, "%s 200 OK\r\nStatus: 200 OK\r\nContent-type: application/json\r\nX-Content-Type-Options: nosniff\r\n\r\n", proto);
 }
 
 static void send_json_response(FCGX_Stream *out, const std::string &protocol, const std::string &body)
 {
     const char *proto = is_valid_http_protocol(protocol) ? protocol.c_str() : "HTTP/1.1";
-    FCGX_FPrintF(out, "%s 200 OK\r\nContent-type: application/json\r\nX-Content-Type-Options: nosniff\r\nContent-Length: %d\r\n\r\n%s",
+    FCGX_FPrintF(out, "%s 200 OK\r\nStatus: 200 OK\r\nContent-type: application/json\r\nX-Content-Type-Options: nosniff\r\nContent-Length: %d\r\n\r\n%s",
                  proto, static_cast<int>(body.length()), body.c_str());
 }
 
