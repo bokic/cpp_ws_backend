@@ -821,11 +821,12 @@ void mysql_transaction::commit() {
         throw db_exception("MySQL connection is closed");
     }
     auto &api = mysql_api::instance();
-    if (api.mysql_commit(m_conn->conn) != 0) {
-        throw db_exception("Failed to commit transaction: " + std::string(api.mysql_error(m_conn->conn)));
-    }
+    int rc = api.mysql_commit(m_conn->conn);
     api.mysql_autocommit(m_conn->conn, 1);
     m_active = false;
+    if (rc != 0) {
+        throw db_exception("Failed to commit transaction: " + std::string(api.mysql_error(m_conn->conn)));
+    }
 }
 
 void mysql_transaction::rollback() {
@@ -836,11 +837,12 @@ void mysql_transaction::rollback() {
         throw db_exception("MySQL connection is closed");
     }
     auto &api = mysql_api::instance();
-    if (api.mysql_rollback(m_conn->conn) != 0) {
-        throw db_exception("Failed to rollback transaction: " + std::string(api.mysql_error(m_conn->conn)));
-    }
+    int rc = api.mysql_rollback(m_conn->conn);
     api.mysql_autocommit(m_conn->conn, 1);
     m_active = false;
+    if (rc != 0) {
+        throw db_exception("Failed to rollback transaction: " + std::string(api.mysql_error(m_conn->conn)));
+    }
 }
 
 bool mysql_transaction::is_active() const noexcept {
