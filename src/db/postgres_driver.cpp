@@ -195,7 +195,7 @@ size_t postgres_row::column_index(std::string_view name) const {
 }
 
 bool postgres_row::is_null(size_t index) const {
-    if (!m_holder || !m_holder->res || m_row_idx < 0) return true;
+    if (!m_holder || !m_holder->res || m_row_idx < 0 || index >= column_count()) return true;
     return pq_api::instance().PQgetisnull(m_holder->res, m_row_idx, static_cast<int>(index)) != 0;
 }
 
@@ -403,6 +403,7 @@ bool postgres_result_set::next() {
         m_row.set_row_index(m_current_tuple);
         return true;
     }
+    m_row.set_row_index(-1);
     return false;
 }
 

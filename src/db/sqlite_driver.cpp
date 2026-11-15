@@ -380,12 +380,12 @@ size_t sqlite_row::column_index(std::string_view name) const {
 }
 
 bool sqlite_row::is_null(size_t index) const {
-    if (!m_holder || !m_holder->stmt) return true;
+    if (!m_holder || !m_holder->stmt || index >= column_count()) return true;
     return sqlite3_column_type(m_holder->stmt, static_cast<int>(index)) == SQLITE_NULL;
 }
 
 column_type sqlite_row::get_column_type(size_t index) const {
-    if (!m_holder || !m_holder->stmt) return column_type::null_value;
+    if (!m_holder || !m_holder->stmt || index >= column_count()) return column_type::null_value;
     int type = sqlite3_column_type(m_holder->stmt, static_cast<int>(index));
     switch (type) {
         case SQLITE_INTEGER: return column_type::integer;
@@ -398,28 +398,29 @@ column_type sqlite_row::get_column_type(size_t index) const {
 }
 
 int32_t sqlite_row::get_int32(size_t index) const {
-    if (!m_holder || !m_holder->stmt) return 0;
+    if (!m_holder || !m_holder->stmt || index >= column_count()) return 0;
     return sqlite3_column_int(m_holder->stmt, static_cast<int>(index));
 }
 
 int64_t sqlite_row::get_int64(size_t index) const {
-    if (!m_holder || !m_holder->stmt) return 0;
+    if (!m_holder || !m_holder->stmt || index >= column_count()) return 0;
     return sqlite3_column_int64(m_holder->stmt, static_cast<int>(index));
 }
 
 double sqlite_row::get_double(size_t index) const {
-    if (!m_holder || !m_holder->stmt) return 0.0;
+    if (!m_holder || !m_holder->stmt || index >= column_count()) return 0.0;
     return sqlite3_column_double(m_holder->stmt, static_cast<int>(index));
 }
 
 std::string sqlite_row::get_string(size_t index) const {
-    if (!m_holder || !m_holder->stmt) return {};
+    if (!m_holder || !m_holder->stmt || index >= column_count()) return {};
     const auto *txt = reinterpret_cast<const char *>(sqlite3_column_text(m_holder->stmt, static_cast<int>(index)));
-    return txt ? std::string(txt) : std::string();
+    int bytes = sqlite3_column_bytes(m_holder->stmt, static_cast<int>(index));
+    return (txt && bytes > 0) ? std::string(txt, static_cast<size_t>(bytes)) : std::string();
 }
 
 std::span<const uint8_t> sqlite_row::get_blob(size_t index) const {
-    if (!m_holder || !m_holder->stmt) return {};
+    if (!m_holder || !m_holder->stmt || index >= column_count()) return {};
     const void *b = sqlite3_column_blob(m_holder->stmt, static_cast<int>(index));
     int bytes = sqlite3_column_bytes(m_holder->stmt, static_cast<int>(index));
     if (!b || bytes <= 0) return {};
@@ -779,7 +780,8 @@ int sqlite_statement::column_type(int col) const noexcept {
 std::string sqlite_statement::column_str(int col) const {
     if (!m_holder || !m_holder->stmt) return {};
     const auto *txt = reinterpret_cast<const char *>(sqlite3_column_text(m_holder->stmt, col));
-    return txt ? std::string(txt) : std::string();
+    int bytes = sqlite3_column_bytes(m_holder->stmt, col);
+    return (txt && bytes > 0) ? std::string(txt, static_cast<size_t>(bytes)) : std::string();
 }
 
 const char *sqlite_statement::column_text(int col) const noexcept {

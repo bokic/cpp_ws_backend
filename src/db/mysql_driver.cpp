@@ -362,7 +362,7 @@ void mysql_row::ensure_column_names() const {
 
 std::string_view mysql_row::column_name(size_t index) const {
     if (!m_holder || index >= m_holder->num_fields || !m_holder->fields) {
-        throw db_exception("Column index out of range: " + std::to_string(index));
+        return {};
     }
     return m_holder->fields[index].name ? m_holder->fields[index].name : "";
 }
