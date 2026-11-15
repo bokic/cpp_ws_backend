@@ -59,16 +59,16 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 | **2.3** | Data race in `connection_pool::stats()` | **HIGH** | Connection Pool | **RESOLVED** (`a125ab8`) | Concurrency / Data Race |
 | **2.4** | Inverted shutdown sequence drops active requests | **MEDIUM** | Server Core | **RESOLVED** (`982c42d`) | Concurrency |
 | **2.5** | Dynamic route modification not thread-safe | **LOW** | Server Core | **RESOLVED** (`a072966`) | Concurrency |
-| **3.1** | FastCGI internal buffers leaked every request | **HIGH** | Server Core | Resource Leak |
-| **3.2** | Partial HTTP body read over stream | **HIGH** | Worker | Functional Bug |
-| **3.3** | Duplicate named parameters dropped in Postgres | **HIGH** | PostgreSQL Driver | Functional Bug |
-| **3.4** | SQL string literals corrupted by Postgres parser | **MEDIUM** | PostgreSQL Driver | Functional Bug |
-| **3.5** | Cannot open read-only SQLite database | **MEDIUM** | SQLite Driver | Functional Bug |
-| **3.6** | Transaction leak in pooled Postgres & MySQL | **MEDIUM** | Connection Pool | Functional Bug |
-| **3.7** | Failed MySQL rollback leaves autocommit off | **MEDIUM** | MySQL Driver | Functional Bug |
-| **3.8** | Stale Unix domain socket file blocks restart | **LOW** | Server Core | Operational Bug |
-| **3.9** | Silent server exit on bind/socket error | **LOW** | Server Core | Operational Bug |
-| **3.10**| Leaked `sd_journal` and JSON on exception | **LOW** | `journal-demo` | Resource Leak |
+| **3.1** | FastCGI internal buffers leaked every request | **HIGH** | Server Core | **RESOLVED** (`95adf0d`) | Resource Leak |
+| **3.2** | Partial HTTP body read over stream | **HIGH** | Worker | **RESOLVED** (`5a3a5ba`) | Functional Bug |
+| **3.3** | Duplicate named parameters dropped in Postgres | **HIGH** | PostgreSQL Driver | **RESOLVED** (`16e1060`) | Functional Bug |
+| **3.4** | SQL string literals corrupted by Postgres parser | **MEDIUM** | PostgreSQL Driver | **RESOLVED** (`91e45d7`) | Functional Bug |
+| **3.5** | Cannot open read-only SQLite database | **MEDIUM** | SQLite Driver | **RESOLVED** (`20b58a0`) | Functional Bug |
+| **3.6** | Transaction leak in pooled Postgres & MySQL | **MEDIUM** | Connection Pool | **RESOLVED** (`a2c5ee0`) | Functional Bug |
+| **3.7** | Failed MySQL rollback leaves autocommit off | **MEDIUM** | MySQL Driver | **RESOLVED** (`71afebb`) | Functional Bug |
+| **3.8** | Stale Unix domain socket file blocks restart | **LOW** | Server Core | **RESOLVED** (`09194d6`) | Operational Bug |
+| **3.9** | Silent server exit on bind/socket error | **LOW** | Server Core | **RESOLVED** (`f04a272`) | Operational Bug |
+| **3.10**| Leaked `sd_journal` and JSON on exception | **LOW** | `journal-demo` | **RESOLVED** (`939fd10`) | Resource Leak |
 | **4.1** | Exception message disclosure in HTTP 500 | **MEDIUM** | Worker | Security |
 | **4.2** | CRLF injection via `SERVER_PROTOCOL` | **MEDIUM** | Demos | Security |
 | **5.1** | 100+ heap allocations per request in header parsing | **HIGH** | Worker | Performance |
@@ -295,6 +295,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 3.1. FastCGI Memory Leak on Every HTTP Request (`FCGX_Free` Omitted)
 * **File:** [src/wsserver.cpp#L99-L132](file:///home/boris/projects/cpp_ws_backend/src/wsserver.cpp#L99-L132)
 * **Severity:** **HIGH**
+* **Status:** **RESOLVED** (`95adf0d`)
 * **Description:**
   `wsserver::run()` instantiates requests via `std::make_shared<FCGX_Request>()`.
   `FCGX_InitRequest` and `FCGX_Accept_r` allocate C-level structures (`paramsPtr`, stream buffers, environment tables). `FCGX_Finish_r` flushes streams and closes the connection, but libfcgi requires `FCGX_Free(req, 1)` to release the allocated buffers.
@@ -315,6 +316,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 3.2. Partial HTTP Body Reads for Chunked/Large Payloads
 * **File:** [src/wsworker.cpp#L155-L157](file:///home/boris/projects/cpp_ws_backend/src/wsworker.cpp#L155-L157)
 * **Severity:** **HIGH**
+* **Status:** **RESOLVED** (`5a3a5ba`)
 * **Description:**
   `wsworker::process()` reads the request body via:
   ```cpp
@@ -339,6 +341,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 3.3. Duplicate Named Parameters Ignored in PostgreSQL Driver
 * **File:** [src/db/postgres_driver.cpp#L325-L351](file:///home/boris/projects/cpp_ws_backend/src/db/postgres_driver.cpp#L325-L351)
 * **Severity:** **HIGH**
+* **Status:** **RESOLVED** (`16e1060`)
 * **Description:**
   When translating `:name` into `$1, $2, ...`, if a query reuses a parameter (e.g. `WHERE start_date >= :dt AND end_date <= :dt`), the parser emits `$1` and `$2` and appends `"dt"` to `m_param_names` twice.
   However, `get_param_index("dt")` searches linearly from index 0 and returns the first index (`$1`). The second placeholder `$2` is never bound and defaults to NULL.
@@ -350,6 +353,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 3.4. SQL Literals Corrupted by PostgreSQL Parameter Parser
 * **File:** [src/db/postgres_driver.cpp#L319-L338](file:///home/boris/projects/cpp_ws_backend/src/db/postgres_driver.cpp#L319-L338)
 * **Severity:** **MEDIUM**
+* **Status:** **RESOLVED** (`91e45d7`)
 * **Description:**
   The tokenizer in `postgres_statement` does not track string literals or comments. A query containing `?` or `:name` inside quotes (e.g. `SELECT * FROM logs WHERE note = 'What?'`) has the literal altered to `'What$1'`, breaking valid queries.
 * **Fix:**
@@ -360,6 +364,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 3.5. Read-Only SQLite Databases Cannot Be Opened
 * **File:** [src/db/sqlite_driver.cpp#L894-L899](file:///home/boris/projects/cpp_ws_backend/src/db/sqlite_driver.cpp#L894-L899)
 * **Severity:** **MEDIUM**
+* **Status:** **RESOLVED** (`20b58a0`)
 * **Description:**
   `sqlite_database::open()` unconditionally executes `PRAGMA journal_mode = WAL;`. When opening a database with `SQLITE_OPEN_READONLY` or on a read-only filesystem, SQLite returns `SQLITE_READONLY` (error 8). `open()` catches this as an error and throws, making it impossible to open read-only databases.
 * **Fix:**
@@ -370,6 +375,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 3.6. Dirty Transaction State Leaked across Pooled Connections (Postgres & MySQL)
 * **File:** [src/db/connection_pool.h#L360-L365](file:///home/boris/projects/cpp_ws_backend/src/db/connection_pool.h#L360-L365)
 * **Severity:** **MEDIUM**
+* **Status:** **RESOLVED** (`a2c5ee0`)
 * **Description:**
   `connection_pool` calls `c->reset_for_request()` upon connection acquire and release.
   `sqlite_database` implements this by rolling back open transactions. Neither `postgres_database` nor `mysql_database` implements `reset_for_request()`. If an exception occurs mid-transaction on a PostgreSQL or MySQL connection, the connection is returned to the pool with an active transaction, corrupting subsequent requests.
@@ -381,6 +387,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 3.7. Failed MySQL Rollback Leaves Autocommit Permanently Disabled
 * **File:** [src/db/mysql_driver.cpp#L828-L832](file:///home/boris/projects/cpp_ws_backend/src/db/mysql_driver.cpp#L828-L832)
 * **Severity:** **MEDIUM**
+* **Status:** **RESOLVED** (`71afebb`)
 * **Description:**
   In `mysql_transaction::rollback()`:
   ```cpp
@@ -399,6 +406,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 3.8. Unix Domain Sockets Left on Filesystem upon Server Shutdown
 * **File:** [src/wsserver.cpp#L29-L33](file:///home/boris/projects/cpp_ws_backend/src/wsserver.cpp#L29-L33)
 * **Severity:** **LOW**
+* **Status:** **RESOLVED** (`09194d6`)
 * **Description:**
   When configuring a Unix domain socket path (e.g. `/tmp/app.sock`), `close(fd)` does not delete the socket file. On process restart, `FCGX_OpenSocket` fails with `EADDRINUSE`.
 * **Fix:**
@@ -409,6 +417,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 3.9. Silent Server Exit on `FCGX_OpenSocket` Failure
 * **File:** [src/wsserver.cpp#L22](file:///home/boris/projects/cpp_ws_backend/src/wsserver.cpp#L22), [src/wsserver.cpp#L102](file:///home/boris/projects/cpp_ws_backend/src/wsserver.cpp#L102)
 * **Severity:** **LOW**
+* **Status:** **RESOLVED** (`f04a272`)
 * **Description:**
   If `FCGX_OpenSocket` fails (e.g. port already bound), it returns `-1`. `wsserver::init` stores `-1` into `m_sock_fd` without validation. `wsserver::run()` then immediately fails and returns without logging any error message or throwing an exception.
 * **Fix:**
@@ -419,6 +428,7 @@ This document catalogs identified bugs, potential memory corruption vulnerabilit
 ### 3.10. Resource Leak on Error in `journal-demo`
 * **File:** [demos/journal-demo/main.cpp#L33-L70](file:///home/boris/projects/cpp_ws_backend/demos/journal-demo/main.cpp#L33-L70)
 * **Severity:** **LOW**
+* **Status:** **RESOLVED** (`939fd10`)
 * **Description:**
   `sd_journal *journal` and `json_object *json` are managed manually without RAII. If an exception is thrown during message parsing, `sd_journal_close(journal)` and `json_object_put(json)` are skipped, leaking descriptors and memory.
 * **Fix:**
