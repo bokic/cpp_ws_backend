@@ -233,7 +233,8 @@ void execute_sql_to_json_paginated_sink(
     stream_sink &sink,
     database &db,
     const sql_query &query,
-    statement &data_stmt
+    statement &data_stmt,
+    statement *count_stmt
 ) {
     bool has_callback = !query.callback.empty();
     if (has_callback) {
@@ -242,9 +243,14 @@ void execute_sql_to_json_paginated_sink(
     }
 
     int64_t total_records = 0;
-    if (!query.count_sql.empty()) {
-        auto count_stmt = db.prepare(query.count_sql);
+    if (count_stmt) {
         auto count_res = count_stmt->query();
+        if (count_res && count_res->next()) {
+            total_records = count_res->current_row().get<int64_t>(0);
+        }
+    } else if (!query.count_sql.empty()) {
+        auto prepared_count = db.prepare(query.count_sql);
+        auto count_res = prepared_count->query();
         if (count_res && count_res->next()) {
             total_records = count_res->current_row().get<int64_t>(0);
         }
@@ -289,12 +295,18 @@ void execute_sql_to_json_paginated_sink(
 json_object *execute_sql_to_json_paginated_c(
     database &db,
     const sql_query &query,
-    statement &data_stmt
+    statement &data_stmt,
+    statement *count_stmt
 ) {
     int64_t total_records = 0;
-    if (!query.count_sql.empty()) {
-        auto count_stmt = db.prepare(query.count_sql);
+    if (count_stmt) {
         auto count_res = count_stmt->query();
+        if (count_res && count_res->next()) {
+            total_records = count_res->current_row().get<int64_t>(0);
+        }
+    } else if (!query.count_sql.empty()) {
+        auto prepared_count = db.prepare(query.count_sql);
+        auto count_res = prepared_count->query();
         if (count_res && count_res->next()) {
             total_records = count_res->current_row().get<int64_t>(0);
         }

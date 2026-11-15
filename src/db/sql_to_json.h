@@ -204,19 +204,34 @@ void execute_sql_to_json_paginated_sink(
     stream_sink &sink,
     database &db,
     const sql_query &query,
-    statement &data_stmt
+    statement &data_stmt,
+    statement *count_stmt = nullptr
 );
 
 json_object *execute_sql_to_json_paginated_c(
     database &db,
     const sql_query &query,
-    statement &data_stmt
+    statement &data_stmt,
+    statement *count_stmt = nullptr
 );
 
 template <typename... Args>
 void sql_to_json_paginated(stream_sink &sink, database &db, const sql_query &query, Args&&... args) {
     if (!query.callback.empty() && !is_valid_callback(query.callback)) {
         throw db_exception("Invalid callback parameter");
+    }
+
+    std::unique_ptr<statement> count_stmt;
+    if (!query.count_sql.empty()) {
+        count_stmt = db.prepare(query.count_sql);
+        if constexpr (sizeof...(Args) > 0) {
+            if (query.count_sql.find_first_of("?:$") != std::string::npos) {
+                try {
+                    count_stmt->bind_all(args...);
+                } catch (...) {
+                }
+            }
+        }
     }
 
     auto data_stmt = db.prepare(query.data_sql);
@@ -238,7 +253,7 @@ void sql_to_json_paginated(stream_sink &sink, database &db, const sql_query &que
         }
     }
 
-    execute_sql_to_json_paginated_sink(sink, db, query, *data_stmt);
+    execute_sql_to_json_paginated_sink(sink, db, query, *data_stmt, count_stmt.get());
 }
 
 template <typename... Args>
@@ -263,6 +278,19 @@ std::string sql_to_json_paginated_string(database &db, const sql_query &query, A
 
 template <typename... Args>
 json_object *sql_to_json_paginated_object(database &db, const sql_query &query, Args&&... args) {
+    std::unique_ptr<statement> count_stmt;
+    if (!query.count_sql.empty()) {
+        count_stmt = db.prepare(query.count_sql);
+        if constexpr (sizeof...(Args) > 0) {
+            if (query.count_sql.find_first_of("?:$") != std::string::npos) {
+                try {
+                    count_stmt->bind_all(args...);
+                } catch (...) {
+                }
+            }
+        }
+    }
+
     auto data_stmt = db.prepare(query.data_sql);
     if constexpr (sizeof...(Args) > 0) {
         if (query.auto_bind_pagination) {
@@ -282,7 +310,7 @@ json_object *sql_to_json_paginated_object(database &db, const sql_query &query, 
         }
     }
 
-    return execute_sql_to_json_paginated_c(db, query, *data_stmt);
+    return execute_sql_to_json_paginated_c(db, query, *data_stmt, count_stmt.get());
 }
 
 } // namespace backend::db
