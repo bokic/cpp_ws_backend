@@ -3,6 +3,7 @@
 #include <ctime>
 #include <cstring>
 #include <algorithm>
+#include <limits>
 #include <mutex>
 
 namespace backend::db {
@@ -581,6 +582,9 @@ void sqlite_statement::bind(size_t index, double val) {
 
 void sqlite_statement::bind(size_t index, std::string_view val) {
     if (!m_holder || !m_holder->stmt) throw db_exception("Statement not initialized");
+    if (val.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+        throw db_exception("Text parameter size exceeds maximum SQLite bind length");
+    }
     if (sqlite3_bind_text(m_holder->stmt, static_cast<int>(index), val.data(), static_cast<int>(val.size()), SQLITE_TRANSIENT) != SQLITE_OK) {
         throw db_exception("Failed to bind text to column " + std::to_string(index));
     }
@@ -588,6 +592,9 @@ void sqlite_statement::bind(size_t index, std::string_view val) {
 
 void sqlite_statement::bind(size_t index, std::span<const uint8_t> val) {
     if (!m_holder || !m_holder->stmt) throw db_exception("Statement not initialized");
+    if (val.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+        throw db_exception("Blob parameter size exceeds maximum SQLite bind length");
+    }
     if (sqlite3_bind_blob(m_holder->stmt, static_cast<int>(index), val.data(), static_cast<int>(val.size()), SQLITE_TRANSIENT) != SQLITE_OK) {
         throw db_exception("Failed to bind blob to column " + std::to_string(index));
     }
