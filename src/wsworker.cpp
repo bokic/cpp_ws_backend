@@ -220,7 +220,17 @@ void backend::wsworker::process(std::shared_ptr<FCGX_Request> request)
 
             for(const auto &route: m_router->routes())
             {
-                if (std::regex_match(path.c_str(), cm, route.uri))
+                bool matched = false;
+                if (route.is_exact)
+                {
+                    matched = (path == route.pattern_str);
+                }
+                else
+                {
+                    matched = std::regex_match(path.c_str(), cm, route.uri);
+                }
+
+                if (matched)
                 {
                     uri_matched = true;
 
@@ -237,8 +247,11 @@ void backend::wsworker::process(std::shared_ptr<FCGX_Request> request)
                         throw std::runtime_error("Route function is nullptr");
                     }
 
-                    for (unsigned i=1; i < cm.size(); ++i) {
-                        uri_params.push_back(cm[i]);
+                    if (!route.is_exact)
+                    {
+                        for (unsigned i=1; i < cm.size(); ++i) {
+                            uri_params.push_back(cm[i]);
+                        }
                     }
 
                     router_lock.unlock();

@@ -28,16 +28,39 @@ using route_handler = std::function<void(wsworker *worker, const std::map<std::s
 using middleware_handler = std::function<bool(wsworker *worker, const std::map<std::string, std::string> &header)>;
 
 struct route {
+    std::string pattern_str;
+    bool is_exact = false;
     std::regex uri;
     int method;
     route_handler function;
 
+    static bool contains_regex_meta(std::string_view s) noexcept {
+        for (char c : s) {
+            switch (c) {
+                case '^': case '$': case '\\': case '.':
+                case '*': case '+': case '?':
+                case '(': case ')': case '[': case ']':
+                case '{': case '}': case '|':
+                    return true;
+            }
+        }
+        return false;
+    }
+
     route(std::string_view pattern, int method, route_handler handler,
           std::regex_constants::syntax_option_type flags = std::regex_constants::ECMAScript)
-        : uri(pattern.data(), pattern.size(), flags), method(method), function(std::move(handler)) {}
+        : pattern_str(pattern),
+          is_exact(!contains_regex_meta(pattern)),
+          uri(pattern.data(), pattern.size(), flags),
+          method(method),
+          function(std::move(handler)) {}
 
     route(std::regex uri, int method, route_handler handler)
-        : uri(std::move(uri)), method(method), function(std::move(handler)) {}
+        : pattern_str(""),
+          is_exact(false),
+          uri(std::move(uri)),
+          method(method),
+          function(std::move(handler)) {}
 
     ~route() = default;
     route(const route &) = default;
