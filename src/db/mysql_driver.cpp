@@ -188,6 +188,9 @@ static std::string escape_sql_string(void *conn, std::string_view val) {
         out[0] = '\'';
         unsigned long len = api.mysql_real_escape_string(conn, out.data() + 1, val.data(),
                                                          static_cast<unsigned long>(val.size()));
+        if (len == static_cast<unsigned long>(-1)) {
+            throw db_exception("MySQL string escaping failed");
+        }
         out.resize(1 + len);
         out.push_back('\'');
     } else {
