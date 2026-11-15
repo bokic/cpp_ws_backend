@@ -129,7 +129,22 @@ std::map<std::string, std::string> backend::wsworker::parse_args(const std::stri
 void backend::wsworker::process(std::shared_ptr<FCGX_Request> request)
 {
     m_request = request;
-    m_body.clear();
+    if (m_body.capacity() > 65536) {
+        std::string().swap(m_body);
+    } else {
+        m_body.clear();
+    }
+
+    struct body_guard {
+        std::string &b;
+        ~body_guard() {
+            if (b.capacity() > 65536) {
+                std::string().swap(b);
+            } else {
+                b.clear();
+            }
+        }
+    } guard{m_body};
 
     try {
         std::map<std::string, std::string> header = parse_request(request);
