@@ -448,21 +448,33 @@ private:
         if (m_options.idle_timeout.count() <= 0 && m_options.max_lifetime.count() <= 0) {
             return;
         }
-        while (m_total_connections > m_options.min_size && !m_idle.empty()) {
-            const auto &oldest = m_idle.back();
-            bool idle_expired = (m_options.idle_timeout.count() > 0) &&
-                                ((now - oldest.last_used) >= m_options.idle_timeout);
-            bool life_expired = (m_options.max_lifetime.count() > 0) &&
-                                ((now - oldest.created_at) >= m_options.max_lifetime);
-            if (!idle_expired && !life_expired) {
-                break;
+        if (m_options.max_lifetime.count() > 0) {
+            for (auto it = m_idle.begin(); it != m_idle.end(); ) {
+                if ((now - it->created_at) >= m_options.max_lifetime) {
+                    if (it->conn) {
+                        retire_connection_locked(it->conn.get());
+                        conn_disconnect_if_possible(it->conn.get());
+                    }
+                    it = m_idle.erase(it);
+                    --m_total_connections;
+                } else {
+                    ++it;
+                }
             }
-            if (oldest.conn) {
-                retire_connection_locked(oldest.conn.get());
-                conn_disconnect_if_possible(oldest.conn.get());
+        }
+        if (m_options.idle_timeout.count() > 0) {
+            while (m_total_connections > m_options.min_size && !m_idle.empty()) {
+                const auto &oldest = m_idle.back();
+                if ((now - oldest.last_used) < m_options.idle_timeout) {
+                    break;
+                }
+                if (oldest.conn) {
+                    retire_connection_locked(oldest.conn.get());
+                    conn_disconnect_if_possible(oldest.conn.get());
+                }
+                m_idle.pop_back();
+                --m_total_connections;
             }
-            m_idle.pop_back();
-            --m_total_connections;
         }
     }
 
