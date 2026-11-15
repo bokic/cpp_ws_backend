@@ -62,6 +62,7 @@ struct mysql_api {
     typedef int (*mysql_autocommit_t)(void *mysql, int mode);
     typedef int (*mysql_commit_t)(void *mysql);
     typedef int (*mysql_rollback_t)(void *mysql);
+    typedef int (*mysql_set_character_set_t)(void *mysql, const char *csname);
 
     mysql_init_t mysql_init = nullptr;
     mysql_real_connect_t mysql_real_connect = nullptr;
@@ -81,6 +82,7 @@ struct mysql_api {
     mysql_autocommit_t mysql_autocommit = nullptr;
     mysql_commit_t mysql_commit = nullptr;
     mysql_rollback_t mysql_rollback = nullptr;
+    mysql_set_character_set_t mysql_set_character_set = nullptr;
 
     static mysql_api &instance() {
         static mysql_api api;
@@ -125,6 +127,7 @@ struct mysql_api {
         LOAD_SYM(mysql_autocommit);
         LOAD_SYM(mysql_commit);
         LOAD_SYM(mysql_rollback);
+        LOAD_SYM(mysql_set_character_set);
         #undef LOAD_SYM
 
         return true;
@@ -1008,6 +1011,12 @@ void mysql_database::connect(const std::string &conn_str) {
         throw db_exception("Failed to connect to MySQL database: " + err);
     }
 
+    if (api.mysql_set_character_set && api.mysql_set_character_set(conn, "utf8mb4") != 0) {
+        std::string err = api.mysql_error(conn);
+        api.mysql_close(conn);
+        throw db_exception("Failed to set MySQL character set to utf8mb4: " + err);
+    }
+
     m_conn = std::make_shared<mysql_conn_holder>();
     m_conn->conn = conn;
 }
@@ -1037,6 +1046,8 @@ void mysql_database::execute(std::string_view sql) {
     void *res = api.mysql_store_result(m_conn->conn);
     if (res) {
         api.mysql_free_result(res);
+    } else if (api.mysql_errno(m_conn->conn) != 0) {
+        throw db_exception("MySQL store result failed: " + std::string(api.mysql_error(m_conn->conn)));
     }
 }
 
